@@ -40,7 +40,7 @@ export function SttmFork({
       </figcaption>
       <div className="flex flex-col items-center">
         <Link
-          href={`/runs/${runId}/modeling?tab=transformations`}
+          href={`/os/build/runs/${runId}/modeling?tab=transformations`}
           className={cn("w-full max-w-xs rounded-lg border px-4 py-3 text-center", tone(unlocked ? "done" : "active"))}
         >
           <p className="text-sm font-semibold">Data Mapping</p>
@@ -54,7 +54,7 @@ export function SttmFork({
 
         <div className="grid w-full max-w-2xl grid-cols-2 gap-4">
           <Link
-            href={`/runs/${runId}/soda`}
+            href={`/os/build/runs/${runId}/soda`}
             className={cn("rounded-lg border px-3 py-3 text-center", tone(kind(unlocked, dqActive, dqDone)))}
           >
             <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Flow A</p>
@@ -62,7 +62,7 @@ export function SttmFork({
             <p className="mt-1 text-xs text-muted-foreground">Data Mapping columns → SodaCL checks → pack review</p>
           </Link>
           <Link
-            href={`/runs/${runId}/dbt`}
+            href={`/os/build/runs/${runId}/dbt`}
             className={cn("rounded-lg border px-3 py-3 text-center", tone(kind(unlocked, dbtActive, dbtDone)))}
           >
             <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Flow B</p>

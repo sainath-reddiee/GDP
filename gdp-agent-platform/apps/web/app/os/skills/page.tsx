@@ -42,12 +42,12 @@ export default async function SkillStudio({ searchParams }: { searchParams: { sk
       <PageHeader eyebrow={`${persona.label} / Skills and tooling`} title={<>Improve skill{name ? <span className="os-muted"> · {name.toLowerCase()}</span> : null}</>}
                   subtitle="Versioned, tested engineering skills the agents load at each stage. A fix becomes a reviewed skill version, then the affected steps rerun without redoing discovery."
                   actions={<>
-                    <Btn href="/skills/proposed">Proposed skills</Btn>
-                    {name && <Action access={access} id="editSkill" label="Edit and version in the registry" href={`/skills/${encodeURIComponent(name)}`} variant="primary" icon={<Sparkles className="h-3.5 w-3.5" />} />}
+                    <Btn href="/os/skills/registry/proposed">Proposed skills</Btn>
+                    {name && <Action access={access} id="editSkill" label="Edit and version in the registry" href={`/os/skills/registry/${encodeURIComponent(name)}`} variant="primary" icon={<Sparkles className="h-3.5 w-3.5" />} />}
                   </>} />
       <SourceError what="Skills registry" error={skills.error ?? detail?.error ?? null} />
       {after?.labels.includes("candidate") && (
-        <Banner tone="amber" icon={Lightbulb} action={name ? <Action access={access} id="releaseSkill" href={`/skills/${encodeURIComponent(name)}`} variant="warn" /> : undefined}>
+        <Banner tone="amber" icon={Lightbulb} action={name ? <Action access={access} id="releaseSkill" href={`/os/skills/registry/${encodeURIComponent(name)}`} variant="warn" /> : undefined}>
           <b>Candidate v{after.version} (rev {after.revision}) is waiting for review</b> against production v{prod?.version}. It is promoted only after its tests pass and an owner approves.
         </Banner>
       )}
@@ -107,7 +107,7 @@ export default async function SkillStudio({ searchParams }: { searchParams: { sk
         </div>
 
         <div className="flex min-w-0 flex-col gap-4">
-          <Card title="Skill test bench" subtitle="The candidate against the baseline on the skill's evaluation set" action={name ? <Action access={access} id="editSkill" label="Run tests" href={`/skills/${encodeURIComponent(name)}`} /> : undefined}>
+          <Card title="Skill test bench" subtitle="The candidate against the baseline on the skill's evaluation set" action={name ? <Action access={access} id="editSkill" label="Run tests" href={`/os/skills/registry/${encodeURIComponent(name)}`} /> : undefined}>
             {testRun ? (
               <>
                 {[["Baseline", rate(testRun.baseline_rate), testRun.baseline_passed], ["Candidate", rate(testRun.candidate_rate), testRun.candidate_passed]].map(([l, r, p]) => (
@@ -160,7 +160,7 @@ export default async function SkillStudio({ searchParams }: { searchParams: { sk
             {failing.length ? (
               <div className="os-divide">
                 {failing.map((r) => {
-                  const href = r.current_state === "VALIDATION_FAILED" ? `/runs/${r.run_id}/validation` : `/os/build?run=${r.run_id}`;
+                  const href = r.current_state === "VALIDATION_FAILED" ? `/os/review?run=${r.run_id}` : `/os/build?run=${r.run_id}`;
                   return (
                     <Link key={r.run_id} href={href} className="flex items-center justify-between gap-2 py-2 hover:underline">
                       <span className="min-w-0 truncate text-[12px] font-semibold">{r.run_name}</span>

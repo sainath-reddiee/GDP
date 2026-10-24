@@ -17,7 +17,7 @@ export default async function ProposedSkillsPage() {
   ]);
   return (
     <div className="space-y-5">
-      <p className="eyebrow"><Link href="/skills" className="hover:underline">Agent Skills</Link></p>
+      <p className="eyebrow"><Link href="/os/skills/registry" className="hover:underline">Agent Skills</Link></p>
       <PageHeader eyebrow="Enterprise Memory" title="Proposed agent skills"
                   description="The skill scout watches for approved knowledge that keeps being used, turns each theme into a playbook any client can use (names become placeholders), and tests it before proposing it. Nothing loads a proposal until a person promotes it." />
       {!r.ok ? <p role="alert" className="rounded-xl border border-dashed p-6 text-sm text-muted-foreground">{r.error}</p>

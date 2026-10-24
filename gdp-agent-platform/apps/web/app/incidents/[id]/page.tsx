@@ -16,7 +16,7 @@ async function load<T>(fn: () => Promise<T>): Promise<{ data: T; error: null; st
 }
 
 function Crumb() {
-  return <p className="eyebrow"><Link href="/incidents" className="hover:underline">Incidents</Link></p>;
+  return <p className="eyebrow"><Link href="/os/run/incidents" className="hover:underline">Incidents</Link></p>;
 }
 
 /** One incident. `?ack=1` (the acknowledge link) asks to acknowledge; it never acknowledges on load. */

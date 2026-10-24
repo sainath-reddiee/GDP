@@ -36,16 +36,16 @@ export async function GET(req: Request) {
   ]);
   const words = (s: string) => s.toLowerCase().replace(/_/g, " ");
   const hits: SearchHit[] = [
-    ...jira.slice(0, 5).map((i) => ({ kind: "jira" as const, title: `${i.key} ${i.summary}`, detail: `Jira${i.type ? ` · ${i.type}` : ""}${i.status ? ` · ${i.status}` : ""}${i.assignee ? ` · ${i.assignee}` : ""}`, href: `/tickets?tab=ticket&key=${encodeURIComponent(i.key)}` })),
-    ...cases.map((c) => ({ kind: "case" as const, title: `${c.number} ${c.title}`, detail: `Case · ${c.severity} · ${words(c.status)}${c.domain_name ? ` · ${c.domain_name}` : ""}`, href: `/qa/cases/${c.case_id}` })),
-    ...runs.map((r) => ({ kind: "run" as const, title: r.run_name, detail: `Run · ${words(r.current_state)}${r.source_system_name ? ` · ${r.source_system_name}` : ""}`, href: `/runs/${r.run_id}` })),
-    ...profiles.map((p) => ({ kind: "table" as const, title: p.table_fqn, detail: `Profiled table · ${p.column_count ?? "?"} columns${p.domain_name ? ` · ${p.domain_name}` : ""}`, href: `/dashboard/profiling?table=${encodeURIComponent(p.table_name)}` })),
-    ...sttm.map((m) => ({ kind: "sttm" as const, title: m.target_entity, detail: `Data Mapping v${m.version} · ${words(m.status)}${m.domain_name ? ` · ${m.domain_name}` : ""}`, href: `/dashboard/sttm/${m.catalog_id}` })),
+    ...jira.slice(0, 5).map((i) => ({ kind: "jira" as const, title: `${i.key} ${i.summary}`, detail: `Jira${i.type ? ` · ${i.type}` : ""}${i.status ? ` · ${i.status}` : ""}${i.assignee ? ` · ${i.assignee}` : ""}`, href: `/os/run/tickets?tab=ticket&key=${encodeURIComponent(i.key)}` })),
+    ...cases.map((c) => ({ kind: "case" as const, title: `${c.number} ${c.title}`, detail: `Case · ${c.severity} · ${words(c.status)}${c.domain_name ? ` · ${c.domain_name}` : ""}`, href: `/os/release/qa/cases/${c.case_id}` })),
+    ...runs.map((r) => ({ kind: "run" as const, title: r.run_name, detail: `Run · ${words(r.current_state)}${r.source_system_name ? ` · ${r.source_system_name}` : ""}`, href: `/os/build/runs/${r.run_id}` })),
+    ...profiles.map((p) => ({ kind: "table" as const, title: p.table_fqn, detail: `Profiled table · ${p.column_count ?? "?"} columns${p.domain_name ? ` · ${p.domain_name}` : ""}`, href: `/os/design/profiling?table=${encodeURIComponent(p.table_name)}` })),
+    ...sttm.map((m) => ({ kind: "sttm" as const, title: m.target_entity, detail: `Data Mapping v${m.version} · ${words(m.status)}${m.domain_name ? ` · ${m.domain_name}` : ""}`, href: `/os/design/sttm/${m.catalog_id}` })),
     ...packs.filter((p) => p.name.toLowerCase().includes(ql) || (p.tags ?? []).some((t) => t.includes(ql))).slice(0, 5)
-      .map((p) => ({ kind: "qa" as const, title: p.name, detail: `QA pack · ${words(p.status)}${p.domain_name ? ` · ${p.domain_name}` : ""}`, href: `/dashboard/qa-store?pack=${p.pack_id}` })),
-    ...dq.slice(0, 5).map((t) => ({ kind: "dq" as const, title: t.table, detail: `Data quality · ${t.checks} checks`, href: `/dashboard/dq-store?table=${encodeURIComponent(t.table)}` })),
-    ...dbt.slice(0, 4).map((g) => ({ kind: "dbt" as const, title: g.target_model ?? g.run_name ?? "dbt project", detail: `dbt v${g.generation_version} · ${words(g.generation_status)}${g.run_name ? ` · ${g.run_name}` : ""}`, href: `/dashboard/modeling/dbt/${g.generation_id}` })),
-    ...tests.slice(0, 4).map((t) => ({ kind: "test" as const, title: t.title, detail: `Run test${t.outcome ? ` · ${words(t.outcome)}` : ""}${t.run_name ? ` · ${t.run_name}` : t.target_fqn ? ` · ${t.target_fqn}` : ""}`, href: "/dashboard/qa-store?view=tests" })),
+      .map((p) => ({ kind: "qa" as const, title: p.name, detail: `QA pack · ${words(p.status)}${p.domain_name ? ` · ${p.domain_name}` : ""}`, href: `/os/design/qa-store?pack=${p.pack_id}` })),
+    ...dq.slice(0, 5).map((t) => ({ kind: "dq" as const, title: t.table, detail: `Data quality · ${t.checks} checks`, href: `/os/design/dq-store?table=${encodeURIComponent(t.table)}` })),
+    ...dbt.slice(0, 4).map((g) => ({ kind: "dbt" as const, title: g.target_model ?? g.run_name ?? "dbt project", detail: `dbt v${g.generation_version} · ${words(g.generation_status)}${g.run_name ? ` · ${g.run_name}` : ""}`, href: `/os/design/modeling/dbt/${g.generation_id}` })),
+    ...tests.slice(0, 4).map((t) => ({ kind: "test" as const, title: t.title, detail: `Run test${t.outcome ? ` · ${words(t.outcome)}` : ""}${t.run_name ? ` · ${t.run_name}` : t.target_fqn ? ` · ${t.target_fqn}` : ""}`, href: "/os/design/qa-store?view=tests" })),
   ];
   return Response.json({ hits }, { headers: { "Cache-Control": "private, max-age=10" } });
 }

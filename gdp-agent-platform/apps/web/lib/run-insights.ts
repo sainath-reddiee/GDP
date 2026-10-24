@@ -48,7 +48,7 @@ export function summarize(runs: RunSummary[]) {
 export function runHref(run: Pick<RunSummary, "run_id" | "current_stage">) {
   const stage = run.current_stage === "DOMAIN" ? "PROFILING" : run.current_stage;
   const meta = stage ? byStage(stage) : undefined;
-  return meta ? `/runs/${run.run_id}/${meta.slug}` : `/runs/${run.run_id}`;
+  return meta ? `/os/build/runs/${run.run_id}/${meta.slug}` : `/os/build/runs/${run.run_id}`;
 }
 
 export function ago(value: string | null | undefined) {

@@ -47,14 +47,18 @@ export const loadKnowledgeFeed = (limit = 12) =>
   load(api<{ items: KnowledgeFeedItem[] }>(`/api/knowledge/feed?limit=${limit}`).then((r) => r.items ?? []), [] as KnowledgeFeedItem[]);
 
 export type KnowledgeUsage = { run_id: string; run_name: string; current_state: string; stage: string; version: number; uses: number; last_used: string };
-/** One knowledge record with its version history and the runs that used it. */
+export type KnowledgeOutcome = { stage: string; uses: number; runs: number; observed: number; accepted: number; corrected: number; rejected: number; helpfulness: number | null };
+type KnowledgeUsageReport = { runs: KnowledgeUsage[]; by_stage: Record<string, number>; total: number; outcomes?: KnowledgeOutcome[] };
+/** One knowledge record with its version history, the runs that used it and how its use turned out per stage. */
 export async function loadKnowledgeRecord(id: string) {
   const [versions, usage] = await Promise.all([
     load(api<{ versions: KnowledgeItem[] }>(`/api/knowledge/${encodeURIComponent(id)}/versions`).then((r) => r.versions ?? []), [] as KnowledgeItem[]),
-    load(api<{ runs: KnowledgeUsage[] }>(`/api/knowledge/${encodeURIComponent(id)}/usage`).then((r) => r.runs ?? []), [] as KnowledgeUsage[]),
+    load(api<KnowledgeUsageReport>(`/api/knowledge/${encodeURIComponent(id)}/usage`), null as KnowledgeUsageReport | null),
   ]);
   const item = versions.data.find((v) => v.knowledge_id === id) ?? versions.data.find((v) => v.is_current) ?? null;
-  return { item, versions: versions.data, usage: usage.data, error: versions.error ?? usage.error };
+  const u = usage.data;
+  return { item, versions: versions.data, usage: u?.runs ?? [], byStage: u?.by_stage ?? {}, total: u?.total ?? 0,
+           outcomes: u?.outcomes ?? [], error: versions.error ?? usage.error };
 }
 
 export type KnowledgeInboxItem = { knowledge_id: string; title: string; knowledge_type: string; domain_name: string | null; origin: string | null; created_at: string };
@@ -190,7 +194,7 @@ export type RunSkill = { skill_name: string; version: string; skill_id: string; 
 export type RunBundle = {
   run: RunState;
   events: AuditEvent[];
-  reviews: { review_id: string; stage: string; decision: string; business_justification: string | null; reviewer: string; reviewed_at: string }[];
+  reviews: { review_id: string; stage: string; to_state?: string | null; decision: string; business_justification: string | null; reviewer: string; reviewed_at: string }[];
   checks: ValidationCheck[];
   /** every validation of the run, newest first: its score against the gate of the time */
   attempts: ValidationAttempt[];
@@ -354,3 +358,17 @@ export function runsByDomain(runs: RunSummary[]) {
   }
   return map;
 }
+
+/* Build, Ready to build (GET /api/build/readiness, services/workflow/readiness.py) */
+
+export type BuildStatus = "READY" | "FLAGGED" | "BUILDING" | "REVIEW" | "MODEL" | "DESIGN" | "ENABLE" | "ATTENTION" | "BUILT";
+export type BuildRun = {
+  run_id: string; run_name: string; parent_run_id: string | null; parent_name: string | null; target_model: string | null;
+  source_system_name: string | null; current_state: string; status: BuildStatus;
+  design: { model: boolean; mapping: boolean; sttm: boolean; dq: boolean }; percent: number; waiting: string | null;
+  updated_at: string | null; score: number | null; attempts: number; request: { request_id: string; title: string } | null;
+};
+export type BuildDomain = { domain_id: string | null; domain_name: string; model_approved: boolean; approved_version: number | null;
+  percent: number; runs: BuildRun[]; counts: Record<BuildStatus, number> };
+export type Readiness = { domains: BuildDomain[]; totals: Record<BuildStatus, number> };
+export const loadReadiness = () => load(api<Readiness>("/api/build/readiness"), null as Readiness | null);

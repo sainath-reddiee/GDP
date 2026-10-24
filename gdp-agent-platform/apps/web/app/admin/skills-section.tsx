@@ -60,7 +60,7 @@ export function SkillsSection({ stages, bindings, skills }: { stages: string[]; 
     <div className="space-y-4 pb-16">
       <p className="text-sm text-muted-foreground">
         Every stage loads its enabled skills, in this order, before it acts. A skill always loads its production version
-        (or the version a run is trying). Versions and releases live on <Link href="/skills" className="text-primary hover:underline">Agent Skills</Link>.
+        (or the version a run is trying). Versions and releases live on <Link href="/os/skills/registry" className="text-primary hover:underline">Agent Skills</Link>.
         &ldquo;GDP runs&rdquo; skills load only when the run follows the GDP standard.
       </p>
       <div className="grid gap-3 lg:grid-cols-2 2xl:grid-cols-3">
@@ -84,7 +84,7 @@ export function SkillsSection({ stages, bindings, skills }: { stages: string[]; 
                       <span className="h-4 w-7 rounded-full bg-muted transition peer-checked:bg-primary" />
                       <span className="absolute left-0.5 h-3 w-3 rounded-full bg-white shadow transition peer-checked:translate-x-3" />
                     </label>
-                    <Link href={`/skills/${encodeURIComponent(b.skill_name)}`}
+                    <Link href={`/os/skills/registry/${encodeURIComponent(b.skill_name)}`}
                           className={cn("min-w-0 flex-1 truncate text-xs hover:text-primary", !b.enabled && "text-muted-foreground line-through")}>
                       {pretty(b.skill_name)}
                     </Link>

@@ -27,7 +27,7 @@ const words = (s: string) => s.toLowerCase().replace(/_/g, " ");
 
 export const codeHref = (c: { repo_id?: string | null; path?: string | null; line?: number | null }) =>
   c.repo_id && c.path
-    ? `/code?${new URLSearchParams({ repo: c.repo_id, path: c.path, ...(c.line ? { line: String(c.line) } : {}) })}`
+    ? `/os/build/code?${new URLSearchParams({ repo: c.repo_id, path: c.path, ...(c.line ? { line: String(c.line) } : {}) })}`
     : null;
 
 /** Only app paths and http(s) links are followed; anything else from the model shows as text. */
@@ -366,7 +366,7 @@ export function ImpactPanel({ incidentId, envId, dagId }: { incidentId: string; 
           <ul className="mt-1 space-y-0.5">
             {impact.sttm.map((s) => (
               <li key={`${s.run_id}:${s.target}`}>
-                <Link href={`/runs/${encodeURIComponent(s.run_id)}/modeling?tab=transformations`} className="font-mono text-primary hover:underline">{s.target || s.run_id}</Link>
+                <Link href={`/os/build/runs/${encodeURIComponent(s.run_id)}/modeling?tab=transformations`} className="font-mono text-primary hover:underline">{s.target || s.run_id}</Link>
               </li>
             ))}
           </ul>
@@ -377,7 +377,7 @@ export function ImpactPanel({ incidentId, envId, dagId }: { incidentId: string; 
           <ul className="mt-1 space-y-0.5">
             {impact.qa.map((q) => (
               <li key={q.target_table_id} className="flex min-w-0 items-center gap-2">
-                <Link href={`/qa?${new URLSearchParams({ tab: "results", table: q.target_table_id })}`}
+                <Link href={`/os/release/qa?${new URLSearchParams({ tab: "results", table: q.target_table_id })}`}
                       className="min-w-0 truncate font-mono text-primary hover:underline" title={q.fqn}>{q.fqn || q.target_table_id}</Link>
                 <span className={cn(pill, outcomeTone(q.last_outcome))}>{q.last_outcome ? words(q.last_outcome) : "not tested"}</span>
               </li>

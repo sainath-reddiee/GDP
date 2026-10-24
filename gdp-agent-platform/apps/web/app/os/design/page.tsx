@@ -9,6 +9,7 @@ import { loadRequests } from "@/lib/os/data";
 import { RequestQueue } from "@/components/os/request-queue";
 import { actMode } from "@/lib/os/access";
 import { Action } from "@/components/os/action";
+import { gateHref } from "@/lib/os/lifecycle";
 import { Banner, Bar, Btn, Card, Empty, Field, Kpi, PageHeader, SourceError, Tag, ago, pretty } from "@/components/os/ui";
 import { DomainEr } from "@/components/os/client";
 import { cn } from "@/lib/utils";
@@ -56,8 +57,8 @@ export default async function DesignerStudio({ searchParams }: { searchParams: {
         title="Profile, model and map"
         subtitle="Profile only the source tables the domain needs, reuse its approved model, and approve mappings before the build agent generates code."
         actions={<>
-          <Btn href={`/domains/${domain.domain_id}`}>Domain workspace</Btn>
-          {atGate[0] && <Action access={access} id="decideGate" privilege={GATES[atGate[0].current_state].privilege} label="Approve model and mappings" href={`/runs/${atGate[0].run_id}/${GATES[atGate[0].current_state].slug}`} variant="primary" />}
+          <Btn href={`/os/knowledge/domains/${domain.domain_id}`}>Domain workspace</Btn>
+          {atGate[0] && <Action access={access} id="decideGate" privilege={GATES[atGate[0].current_state].privilege} label="Approve model and mappings" href={gateHref(atGate[0].run_id, GATES[atGate[0].current_state].slug)} variant="primary" />}
         </>}
       />
       <div className="mb-4 flex flex-wrap gap-2">
@@ -85,14 +86,14 @@ export default async function DesignerStudio({ searchParams }: { searchParams: {
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.65fr)_minmax(0,1fr)]">
         <div className="flex min-w-0 flex-col gap-4">
           <Card title="Business model and relationships" subtitle={diagram ? `${domain.domain_name} model v${diagram.version} · ${pretty(diagram.status)}${diagram.approved_by ? ` · approved by ${diagram.approved_by}` : ""}` : "No model yet"}
-                action={<Action access={access} id="editModel" href={`/domains/${domain.domain_id}`} />}>
+                action={<Action access={access} id="editModel" href={`/os/knowledge/domains/${domain.domain_id}`} />}>
             {diagram?.entities.length
               ? <DomainEr className="h-[420px] rounded-xl border border-[var(--os-line)]" entities={diagram.entities} relationships={diagram.relationships} />
               : <Empty icon={Network} title="The domain has no data model yet" />}
           </Card>
 
           <Card title="Source-to-domain mappings" subtitle={mapRun ? <>Best proposal per source column from <Link className="underline" href={`/os/build?run=${mapRun.run_id}`}>{mapRun.run_name}</Link></> : "No run of this domain has reached mapping"}
-                action={mapRun ? <Action access={access} id="answerQuestion" label="Open mapping" href={`/runs/${mapRun.run_id}/modeling?tab=mapping`} /> : undefined} pad={false}>
+                action={mapRun ? <Action access={access} id="answerQuestion" label="Open mapping" href={`/os/build/runs/${mapRun.run_id}/modeling?tab=mapping`} /> : undefined} pad={false}>
             {top.length ? (
               <div className="max-h-[460px] overflow-auto">
                 <table className="os-table">
@@ -122,7 +123,7 @@ export default async function DesignerStudio({ searchParams }: { searchParams: {
         </div>
 
         <div className="flex min-w-0 flex-col gap-4">
-          <Card title="Source profiling" subtitle="Sources that feed this domain, as profiled" action={<Btn href="/dashboard/profiling">Profiling store</Btn>} pad={false}>
+          <Card title="Source profiling" subtitle="Sources that feed this domain, as profiled" action={<Btn href="/os/design/profiling">Profiling store</Btn>} pad={false}>
             {domainSources.length ? (
               <table className="os-table">
                 <thead><tr><th>Source</th><th className="text-right">Tables</th><th className="text-right">Staged</th><th>Profile</th></tr></thead>
@@ -152,7 +153,7 @@ export default async function DesignerStudio({ searchParams }: { searchParams: {
                     <div className="text-[12.5px] font-semibold leading-snug">{q.question}</div>
                     <div className="os-faint mt-0.5 flex items-center gap-2 text-[11px]">
                       <span>{pretty(q.stage ?? q.kind)} · {ago(q.created_at)}</span>
-                      {q.run_id && actMode(access, "MAPPING.DECIDE") !== "none" && <Link className="underline" href={`/runs/${q.run_id}/modeling?tab=mapping`}>answer</Link>}
+                      {q.run_id && actMode(access, "MAPPING.DECIDE") !== "none" && <Link className="underline" href={`/os/build/runs/${q.run_id}/modeling?tab=mapping`}>answer</Link>}
                     </div>
                   </div>
                 ))}

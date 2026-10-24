@@ -109,6 +109,11 @@ SYSTEM_ROLES: Dict[str, Dict[str, Any]] = {
                       "inherits": ["VIEWER"]},
     "VIEWER": {"description": "Read everything, change nothing (no AI calls, no requests)", "privileges": ["AUDIT.VIEW", "CODE.VIEW", "OPS.VIEW"],
                "inherits": []},
+    # the Data Designer persona's working role: starts and profiles runs and designs them (model, mapping), without
+    # building code, operating pipelines or editing skills (those are the Forward Engineering Lead's DATA_ENGINEER)
+    "DATA_DESIGNER": {"description": "Starts and profiles runs, models and maps them; no code, operations or skills",
+                      "privileges": ["PROFILE.RUN", "RUN.CREATE", "MODEL.EDIT", "MAPPING.DECIDE", "REQUEST.CHANGES", "AI.USE"],
+                      "inherits": ["VIEWER"]},
 }
 # Privileges added to system roles after their first release: {version: [privilege]}. Bootstrap grants them to the
 # system roles whose spec lists them, once, so existing deployments pick them up without overriding admin edits.

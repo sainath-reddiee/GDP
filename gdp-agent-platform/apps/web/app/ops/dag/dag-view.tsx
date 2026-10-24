@@ -78,7 +78,7 @@ export function DagView({ envId, envName, envEnabled, initial, initialRun, canOp
       <div className="flex flex-wrap items-end gap-4">
         <div className="min-w-[min(100%,24rem)] flex-1">
           <p className="eyebrow">
-            <Link href={`/ops?${new URLSearchParams({ env: envId })}`} className="hover:underline">Pipelines</Link>
+            <Link href={`/os/run/ops?${new URLSearchParams({ env: envId })}`} className="hover:underline">Pipelines</Link>
             <span className="mx-1.5 text-muted-foreground">/</span>
             <span className="normal-case tracking-normal text-muted-foreground">{envName}</span>
           </p>

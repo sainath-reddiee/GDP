@@ -19,7 +19,7 @@ export function RunModels({ models }: { models: RunModel[] }) {
         <TBody>
           {models.map((m) => (
             <TR key={m.design_id} className="align-top">
-              <TD><Link href={`/runs/${m.run_id}/domain`} className="font-medium text-primary hover:underline">{m.run_name ?? m.run_id.slice(0, 8)}</Link>
+              <TD><Link href={`/os/build/runs/${m.run_id}/domain`} className="font-medium text-primary hover:underline">{m.run_name ?? m.run_id.slice(0, 8)}</Link>
                 <p className="text-[11px] text-muted-foreground">{(m.current_state ?? "").toLowerCase().replace(/_/g, " ")}</p></TD>
               <TD><span className="flex items-center gap-2"><StatusPill status={m.status} /> v{m.version}</span>
                 <p className="text-[11px] text-muted-foreground">{[m.decision?.toLowerCase().replace(/_/g, " "), m.origin?.toLowerCase()].filter(Boolean).join(" · ")}</p></TD>
@@ -29,7 +29,7 @@ export function RunModels({ models }: { models: RunModel[] }) {
               <TD>{m.domain_name ?? "-"}</TD>
               <TD>{m.publication_status ? <span className="flex items-center gap-2"><StatusPill status={m.publication_status} /><Pr url={m.pr_url} number={m.pr_number} branch={m.head_branch} /></span> : <span className="text-muted-foreground">not yet</span>}</TD>
               <TD className="whitespace-nowrap text-xs text-muted-foreground">{m.created_at.slice(0, 16)}<br />{m.approved_by ? `approved by ${m.approved_by}` : m.created_by}</TD>
-              <TD className="whitespace-nowrap text-xs"><Link href={`/dashboard/modeling?view=tables&run=${encodeURIComponent(m.run_id)}`} className="text-primary hover:underline">Table models</Link></TD>
+              <TD className="whitespace-nowrap text-xs"><Link href={`/os/design/modeling?view=tables&run=${encodeURIComponent(m.run_id)}`} className="text-primary hover:underline">Table models</Link></TD>
             </TR>
           ))}
         </TBody>
@@ -48,7 +48,7 @@ export function DbtGenerations({ generations }: { generations: DbtGeneration[] }
         <TBody>
           {generations.map((g) => (
             <TR key={g.generation_id} className="align-top">
-              <TD><Link href={`/dashboard/modeling/dbt/${g.generation_id}`} className="font-medium text-primary hover:underline" data-testid={`dbt-${g.generation_id}`}>{g.run_name ?? g.run_id.slice(0, 8)}</Link>
+              <TD><Link href={`/os/design/modeling/dbt/${g.generation_id}`} className="font-medium text-primary hover:underline" data-testid={`dbt-${g.generation_id}`}>{g.run_name ?? g.run_id.slice(0, 8)}</Link>
                 {g.sttm_changed && <p className="mt-0.5 flex items-center gap-1 text-[11px] text-amber-700 dark:text-amber-300"><AlertTriangle className="h-3 w-3" /> Data Mapping changed since; regenerate</p>}</TD>
               <TD className="font-mono text-xs">{g.target_model ?? "-"}</TD>
               <TD><span className="flex items-center gap-2"><StatusPill status={g.generation_status} /> v{g.generation_version}</span></TD>

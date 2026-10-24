@@ -35,7 +35,7 @@ export const up = (s: string | null | undefined) => (s ?? "").toUpperCase();
 export const caseStatusLabel = (s: string) => STATUS_LABEL[up(s)] ?? s.toLowerCase().replace(/_/g, " ");
 export const caseKindLabel = (k: string) => KIND_LABEL[up(k)] ?? k.toLowerCase().replace(/_/g, " ");
 export const caseSourceLabel = (s: string) => SOURCES[up(s) as CaseSource] ?? s.toLowerCase().replace(/_/g, " ");
-export const caseHref = (id: string) => `/qa/cases/${encodeURIComponent(id)}`;
+export const caseHref = (id: string) => `/os/release/qa/cases/${encodeURIComponent(id)}`;
 
 export const pill = "inline-flex shrink-0 whitespace-nowrap rounded-full px-1.5 py-0.5 text-[10px] font-medium ring-1 ring-inset";
 

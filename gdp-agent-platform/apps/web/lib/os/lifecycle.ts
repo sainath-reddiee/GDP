@@ -3,7 +3,9 @@ import { GATES } from "@/lib/run-labels";
 
 // The Agentic Data OS lifecycle: the run's real workflow states (snowflake/database/seed/workflow_graph.json) grouped
 // into the eight steps the /os screens draw. Nothing here is invented: a step is done, active, waiting on a person or
-// failed purely from the run's current_state (or failed_from_state when the run failed).
+// failed from the run's current_state (or failed_from_state when the run failed), and from the work already done: the
+// build lanes run in parallel with the Data Quality gate, so generated code or a validation result marks Generate or
+// Validate done even while the run still waits at the checks.
 
 export type StepKey = "intake" | "enable" | "ingest" | "design" | "generate" | "validate" | "pr" | "release";
 export type StepStatus = "done" | "active" | "waiting" | "failed" | "pending" | "cancelled";
@@ -40,9 +42,12 @@ const ORDER = LIFECYCLE.flatMap((s) => s.states);
 const stepIndexOf = (state: string | null | undefined) => LIFECYCLE.findIndex((s) => !!state && s.states.includes(state));
 
 export type StepView = LifecycleStep & { status: StepStatus };
+/** What the run has already produced (the build workbench's bundle). */
+export type StepEvidence = { generated?: boolean; validated?: boolean; validationPassed?: boolean };
 
 /** The eight steps with their status for one run. */
-export function lifecycleOf(run: Pick<RunSummary, "current_state"> & { failed_from_state?: string | null }): StepView[] {
+export function lifecycleOf(run: Pick<RunSummary, "current_state"> & { failed_from_state?: string | null },
+                            evidence: StepEvidence = {}): StepView[] {
   const state = run.current_state;
   const failed = state === "FAILED";
   const cancelled = state === "CANCELLED";
@@ -57,6 +62,10 @@ export function lifecycleOf(run: Pick<RunSummary, "current_state"> & { failed_fr
       else if (step.key === "release" && state !== "DEPLOYMENT_PENDING") status = "done";
       else if (state in GATES) status = "waiting";
       else status = "active";
+    }
+    if (status === "pending" && !failed && !cancelled) {   // built ahead of the gate the run waits at
+      if (step.key === "generate" && evidence.generated) status = "done";
+      if (step.key === "validate" && evidence.validated) status = evidence.validationPassed ? "done" : "failed";
     }
     return { ...step, status };
   });
@@ -74,8 +83,32 @@ export function progressOf(run: Pick<RunSummary, "current_state">): number {
   return i < 0 ? 0 : (i + 1) / ORDER.length;
 }
 
-/** The classic run workspace page for a step of a run. */
-export const classicHref = (runId: string, step: LifecycleStep) => `/runs/${runId}${step.slug ? `/${step.slug}` : ""}`;
+/** The classic run workspace page for a step of a run (the detailed editors: mapping, checks, dbt studio). */
+export const classicHref = (runId: string, step: LifecycleStep) => `/os/build/runs/${runId}${step.slug ? `/${step.slug}` : ""}`;
 
-/** Lifecycle for a full RunState (the build workbench). */
-export const lifecycleOfRun = (r: RunState) => lifecycleOf({ current_state: r.current_state, failed_from_state: r.failed_from_state });
+/** The /os page a step of a run is worked on. Design is per domain (Designer studio); decisions autopilot made are
+ *  reviewed from the stores and Review. */
+export function osHref(runId: string, step: Pick<LifecycleStep, "key">, domainId?: string | null): string {
+  const run = `run=${encodeURIComponent(runId)}`;
+  switch (step.key) {
+    case "intake": return "/os/intake";
+    case "enable": case "ingest": return "/os/enable";
+    case "design": return domainId ? `/os/design?domain=${encodeURIComponent(domainId)}` : "/os/design";
+    case "generate": return `/os/build?${run}`;
+    case "validate": case "pr": return `/os/review?${run}`;
+    case "release": return `/os/release?${run}`;
+  }
+}
+
+/** Where a gate's decision is read and reopened: Data Quality checks in the DQ store (this run's checks), code review
+ *  on Review, the mapping and STTM in their editors. */
+export function gateHref(runId: string, slug: string): string {
+  const run = encodeURIComponent(runId);
+  if (slug === "soda") return `/os/design/dq-store?view=runs&run=${run}`;
+  if (slug === "review") return `/os/review?run=${run}`;
+  return `/os/build/runs/${run}/${slug}`;
+}
+
+/** Lifecycle for a full RunState (the build workbench), with what the run has produced. */
+export const lifecycleOfRun = (r: RunState, evidence: StepEvidence = {}) =>
+  lifecycleOf({ current_state: r.current_state, failed_from_state: r.failed_from_state }, evidence);

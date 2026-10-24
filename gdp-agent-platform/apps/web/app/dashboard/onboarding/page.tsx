@@ -20,7 +20,7 @@ export default async function Onboarding({ searchParams }: { searchParams: { typ
   if (searchParams.type !== "source") {
     // no kind (or the application kind, not available): sources are what this page onboards
     const keep = new URLSearchParams(Object.entries(searchParams).filter((e): e is [string, string] => !!e[1] && e[0] !== "type"));
-    redirect(`/dashboard/onboarding?type=source${keep.size ? `&${keep}` : ""}`);
+    redirect(`/os/enable/onboarding?type=source${keep.size ? `&${keep}` : ""}`);
   }
   const branch = searchParams.branch === "share" || searchParams.branch === "external" ? searchParams.branch : null;
   const sourceKind = searchParams.kind === "database" || searchParams.kind === "file" ? searchParams.kind : null;

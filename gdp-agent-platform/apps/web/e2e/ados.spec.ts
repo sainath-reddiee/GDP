@@ -18,6 +18,7 @@ const SCREENS: [string, RegExp][] = [
   ["/os/run", /Production operations/],
   ["/os/help", /One workflow, many personas/],
   ["/os/history", /Run history/],
+  ["/os/build/ready", /Ready to build/],
   ["/os/requests/history", /Request history/],
   ["/os/enable/new-domain", /Onboard a domain/],
 ];
@@ -149,8 +150,9 @@ test("the rail is the package's ten entries and every page is a tab of one", asy
   await expect(page.getByRole("navigation", { name: "Main" })).toHaveCount(0);
   await expect(railLinks(page).filter({ hasText: "Build" })).toHaveAttribute("aria-current", "page");
   const tabs = page.getByTestId("section-tabs");
-  await expect(tabs.getByRole("link")).toHaveText(["Workbench", "Silver pipeline", "Gold pipeline", "Lineage", "Code", "Run history"]);
-  await expect(tabs.getByRole("link", { name: "Silver pipeline" })).toHaveAttribute("aria-current", "page");
+  // the old Silver and Gold lists live on under Run history
+  await expect(tabs.getByRole("link")).toHaveText(["Ready to build", "Workbench", "Lineage", "Code", "Run history"]);
+  await expect(tabs.getByRole("link", { name: "Run history" })).toHaveAttribute("aria-current", "page");
   await page.goto("/dashboard/sttm");
   await expect(railLinks(page).filter({ hasText: "Design" })).toHaveAttribute("aria-current", "page");
   await expect(tabs.getByRole("link", { name: "Stores" })).toHaveAttribute("aria-current", "page");
@@ -361,4 +363,29 @@ test("a new domain is requested by name and onboarded by the administrator; data
     await page.goto("/os/enable/new-domain").catch(() => undefined);
     await page.waitForURL(/\/os\?denied=newDomain$/);
   }
+});
+
+// Build: what is ready (design done), built end to end by autopilot up to code review.
+test("Ready to build shows each domain's design readiness and builds ready runs end to end", async ({ page }) => {
+  await page.goto("/os");
+  await expect(railLinks(page).filter({ hasText: "Build" })).toHaveAttribute("href", "/os/build/ready");
+  await page.goto("/os/build/ready");
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Ready to build");
+  await expect(page.getByRole("list", { name: "Flow" }).getByRole("link")).toHaveText([/Intake/, /Enable/, /Design/, /Build/, /Review/]);
+  const board = page.getByTestId("ready-board");
+  test.skip(!(await board.count()), "no Silver run on record");
+  const row = board.getByTestId("ready-row").first();
+  for (const check of ["Model", "Mapping", "Transformations", "DQ checks"]) await expect(row).toContainText(check);
+  // never clicked here: a build is a real run of the platform's agents
+  const build = page.getByTestId("build-end-to-end");
+  if (await build.count()) await expect(build.first()).toBeVisible();
+  await page.goto("/os/history");
+  await expect(page.getByRole("link", { name: "Silver pipeline list" })).toHaveAttribute("href", "/runs");
+  // a preview never builds; a viewer reads Run history, not the board
+  await previewAs(page, "forward_lead");
+  await page.goto("/os/build/ready");
+  if (await page.getByTestId("build-end-to-end").count()) await expect(page.getByTestId("build-end-to-end").first()).toBeDisabled();
+  await previewAs(page, "viewer");
+  await page.goto("/os/build/ready").catch(() => undefined);
+  await page.waitForURL(/\/os\?denied=ready$/);
 });

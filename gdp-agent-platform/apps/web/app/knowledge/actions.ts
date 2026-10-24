@@ -70,20 +70,20 @@ export async function answerKnowledge(question: string, domain?: string | null, 
 
 export async function addKnowledge(item: ItemInput) {
   const result = await attemptValue(() => api<KnowledgeItem>("/api/knowledge", { method: "POST", body: JSON.stringify(item) }));
-  if (result.ok) revalidatePath("/knowledge");
+  if (result.ok) revalidatePath("/os/knowledge");
   return result;
 }
 
 export async function editKnowledge(id: string, item: ItemInput) {
   const result = await attemptValue(() =>
     api<KnowledgeItem>(`/api/knowledge/${id}`, { method: "PUT", body: JSON.stringify(item) }));
-  if (result.ok) revalidatePath("/knowledge");
+  if (result.ok) revalidatePath("/os/knowledge");
   return result;
 }
 
 export async function setKnowledgeStatus(id: string, action: "retire" | "restore") {
   const result = await attemptValue(() => api<KnowledgeItem>(`/api/knowledge/${id}/${action}`, { method: "POST" }));
-  if (result.ok) revalidatePath("/knowledge");
+  if (result.ok) revalidatePath("/os/knowledge");
   return result;
 }
 
@@ -92,7 +92,7 @@ export async function knowledgeHistory(id: string) {
 }
 
 function changed() {
-  revalidatePath("/knowledge");
+  revalidatePath("/os/knowledge");
 }
 
 export async function knowledgeVersions(id: string) {

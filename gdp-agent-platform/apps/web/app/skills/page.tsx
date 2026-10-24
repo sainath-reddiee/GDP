@@ -17,12 +17,12 @@ export default async function Skills() {
                   description="Playbooks the agents load before each stage. Every change is a new version; the production label decides what runs use, and a candidate can be tried on one run first."
                   actions={<>
                     {waiting !== null && (
-                      <Link href="/skills/proposed" className="inline-flex items-center gap-1.5 rounded-lg border bg-card px-3 py-1.5 text-sm font-medium shadow-sm hover:bg-muted" data-testid="proposed-skills-link">
+                      <Link href="/os/skills/registry/proposed" className="inline-flex items-center gap-1.5 rounded-lg border bg-card px-3 py-1.5 text-sm font-medium shadow-sm hover:bg-muted" data-testid="proposed-skills-link">
                         <Radar className="h-4 w-4 text-agent" />Proposed skills
                         {waiting > 0 && <span className="rounded-full bg-agent/10 px-1.5 text-xs tabular-nums text-agent">{waiting}</span>}
                       </Link>
                     )}
-                    <Link href="/admin?section=skills" className="inline-flex items-center gap-1.5 rounded-lg border bg-card px-3 py-1.5 text-sm font-medium shadow-sm hover:bg-muted">
+                    <Link href="/os/admin/settings?section=skills" className="inline-flex items-center gap-1.5 rounded-lg border bg-card px-3 py-1.5 text-sm font-medium shadow-sm hover:bg-muted">
                       <Settings2 className="h-4 w-4" />Skills per stage
                     </Link>
                   </>} />

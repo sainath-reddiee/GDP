@@ -23,7 +23,9 @@ const PREVIEW_COOKIE = "ados_preview_persona";
 
 export type ShellScreen = { key: ScreenKey; href: string; label: string; exact?: boolean; section?: SectionKey };
 export type ShellSection = { key: SectionKey; label: string; href: string };
-export type ShellPersona = { id: string; label: string; short: string };
+export type ShellPersona = { id: string; label: string; short: string; home: string; responsibility: string };
+/** the persona the person works as, and how much of their own access it leaves out (screens and privileges) */
+export type ShellScope = { label: string; open: number; hidden: number; privileges: number; ownPrivileges: number; full: boolean };
 /** the persona a super admin is previewing (started from Admin, People) */
 export type ShellPreview = { current: string };
 
@@ -43,20 +45,25 @@ export type ShellProps = {
   user: string | null; environment: string;
   /** the rail entries the person may open (each opens its first open tab), and every open tab */
   sections: ShellSection[]; screens: ShellScreen[]; personas: ShellPersona[]; persona: string;
-  preview: ShellPreview | null;
+  preview: ShellPreview | null; scope?: ShellScope | null;
   /** beside the brand (the domain scope) and at the end of the header (new menu, account) */
   headerStart?: ReactNode; headerEnd?: ReactNode;
   children: ReactNode;
 };
 
-export function OsShell({ user, environment, sections, screens, personas, persona, preview, headerStart, headerEnd, children }: ShellProps) {
+export function OsShell({ user, environment, sections, screens, personas, persona, preview, scope, headerStart, headerEnd, children }: ShellProps) {
   const path = usePathname();
   const router = useRouter();
   const [pending, start] = useTransition();
   const [menu, setMenu] = useState(false);
   useEffect(() => setMenu(false), [path]);
 
-  const choose = (id: string) => { setCookie(PERSONA_COOKIE, id); start(() => router.refresh()); };
+  // a persona narrows what the API allows, so the page on show may close: go to the persona's own start page
+  const choose = (id: string) => {
+    setCookie(PERSONA_COOKIE, id);
+    const home = personas.find((p) => p.id === id)?.home ?? "/os";
+    start(() => { router.push(home); router.refresh(); });
+  };
   const stopPreview = () => { setCookie(PREVIEW_COOKIE, null); setCookie(PERSONA_COOKIE, null); start(() => router.push("/os/people")); };
   // the page on show: its own tab, or the one it sits under (a run's workspace is under Build's Workbench)
   const here = screenOfPath(path);
@@ -64,10 +71,14 @@ export function OsShell({ user, environment, sections, screens, personas, person
   const section = here?.section ?? null;
   const tabs = screens.filter((s) => s.section && s.section === section);
   const help = screens.find((s) => s.key === "help");
+  // what the chosen persona leaves out, on hover of the picker (not a banner: it is not something to act on)
+  const scopeHint = !preview?.current && scope && !scope.full && scope.hidden > 0
+    ? `Working as ${scope.label}: ${scope.hidden} screen${scope.hidden === 1 ? " is" : "s are"} hidden for this persona. Switch persona to use them.`
+    : undefined;
   const personaPicker = (compact: boolean) => personas.length > 1 ? (
-    <select value={persona} onChange={(e) => choose(e.target.value)} aria-label={compact ? "View as persona (menu)" : "View as persona"}
+    <select value={persona} onChange={(e) => choose(e.target.value)} aria-label={compact ? "View as persona (menu)" : "View as persona"} title={scopeHint}
             className={cn("os-input appearance-none font-bold", compact ? "w-[78px] px-1 py-1 text-[10px] lg:hidden" : "py-1.5 pl-3 pr-8 text-[12px]", pending && "opacity-60")}>
-      {personas.map((p) => <option key={p.id} value={p.id}>{compact ? p.short : p.label}</option>)}
+      {personas.map((p) => <option key={p.id} value={p.id} title={p.responsibility}>{compact ? p.short : p.label}</option>)}
     </select>
   ) : compact ? null : <span className="os-tag os-tag-green" aria-label="Persona">{personas[0]?.label}</span>;
 
@@ -139,7 +150,7 @@ export function OsShell({ user, environment, sections, screens, personas, person
       {preview?.current && (
         <div role="status" className="sticky top-[58px] z-30 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 border-b border-[var(--os-amber-line)] bg-[var(--os-amber-bg)] px-4 py-1.5 text-[12px] text-[var(--os-amber-ink)]">
           <Eye className="h-3.5 w-3.5" />
-          <span><b>Previewing as {preview.current}</b>: the screens and actions this persona is shown. Data still loads as you; decisions are off.</span>
+          <span><b>Previewing as {preview.current}</b>: the screens and actions this persona has. The API answers with this persona's privileges too, so anything outside it is refused.</span>
           <button type="button" className="font-bold underline" onClick={stopPreview}>Stop preview</button>
         </div>
       )}

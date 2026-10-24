@@ -233,7 +233,7 @@ export function QaStoreView({ packs, domains, scope, initialPack, openNew, canEd
     && (!q || `${p.name} ${p.description ?? ""} ${p.domain_name ?? ""}`.toLowerCase().includes(q.toLowerCase())));
   const groups = shown.reduce<Record<string, PackRow[]>>((g, p) => { (g[p.domain_name ?? "No domain"] ??= []).push(p); return g; }, {});
 
-  const close = () => { setOpen(null); if (initialPack) router.replace("/dashboard/qa-store"); };
+  const close = () => { setOpen(null); if (initialPack) router.replace("/os/design/qa-store"); };
 
   return (
     <div className="space-y-5">

@@ -2150,7 +2150,7 @@ def audit(run_id: str, db: Db = Depends(current_db)):
     )
     reviews = db.query(
         """
-        SELECT REVIEW_ID, STAGE, DECISION, BUSINESS_JUSTIFICATION, REVIEWER,
+        SELECT REVIEW_ID, STAGE, TO_STATE, DECISION, BUSINESS_JUSTIFICATION, REVIEWER,
                REVIEWED_AT::VARCHAR AS REVIEWED_AT
           FROM CORE.REVIEW_DECISION
          WHERE RUN_ID = %s
@@ -4217,6 +4217,46 @@ def run_history(ids: str = Query(..., max_length=4000), db: Db = Depends(current
         f"""SELECT RUN_ID, STAGE, DECISION, REVIEWER, REVIEWED_AT::VARCHAR AS REVIEWED_AT
               FROM CORE.REVIEW_DECISION WHERE RUN_ID IN ({marks})""", tuple(run_ids))
     return {"runs": summarize(run_ids, summaries, reviews)}
+
+
+@app.get("/api/build/readiness")
+def build_readiness(include_test: bool = False, db: Db = Depends(current_db)):
+    """Ready to build (services/workflow/readiness.py): every live Silver run, table by table, with its design
+    readiness (domain model, mapping and STTM approved), its build status, its latest validation score and the
+    onboarding request it serves, grouped by domain."""
+    from services.validation.history import summarize
+    from services.workflow.readiness import board
+
+    runs = db.query(
+        """SELECT R.RUN_ID, R.RUN_NAME, R.DOMAIN_ID, R.CURRENT_STATE, R.FAILED_FROM_STATE, R.FAILURE_REASON, R.PARENT_RUN_ID,
+                  R.TARGET_MODEL, R.UPDATED_AT::VARCHAR AS UPDATED_AT, S.SOURCE_SYSTEM_NAME
+             FROM CORE.WORKFLOW_RUN R
+             LEFT JOIN CORE.SOURCE_REGISTRY S ON S.SOURCE_SYSTEM_ID = R.SOURCE_SYSTEM_ID
+            WHERE R.DELETED_AT IS NULL AND NOT COALESCE(R.IS_ARCHIVED, FALSE) AND COALESCE(R.PIPELINE, 'SILVER') = 'SILVER'
+              AND (COALESCE(R.ENVIRONMENT, '') <> 'TEST' OR %s)""", (bool(include_test),))
+    domains = {r["domain_id"]: r for r in db.query(
+        """SELECT D.DOMAIN_ID, D.DOMAIN_NAME, M.APPROVED_VERSION
+             FROM CORE.DOMAIN_REGISTRY D
+             LEFT JOIN CORE.DOMAIN_MODEL M ON M.DOMAIN_ID = D.DOMAIN_ID AND COALESCE(M.LAYER, 'SILVER') = 'SILVER'
+            WHERE COALESCE(D.ACTIVE_FLAG, TRUE)""")}
+    ids = [r["run_id"] for r in runs]
+    history: dict = {}
+    requests: dict = {}
+    for i in range(0, len(ids), 200):
+        chunk = ids[i:i + 200]
+        marks = ", ".join(["%s"] * len(chunk))
+        history.update(summarize(chunk, db.query(
+            f"""SELECT RUN_ID, STATUS, ERROR_COUNT, RESULT_JSON, STARTED_AT::VARCHAR AS STARTED_AT,
+                       COMPLETED_AT::VARCHAR AS COMPLETED_AT
+                  FROM CORE.VALIDATION_RUN WHERE VALIDATION_TYPE = 'SUMMARY' AND RUN_ID IN ({marks})""", tuple(chunk)), []))
+        try:   # before V075 there are no requests to link
+            for r in db.query(f"""SELECT I.RUN_ID, Q.REQUEST_ID, Q.TITLE FROM CORE.ONBOARDING_REQUEST_ITEM I
+                                    JOIN CORE.ONBOARDING_REQUEST Q ON Q.REQUEST_ID = I.REQUEST_ID
+                                   WHERE I.RUN_ID IN ({marks}) AND I.REMOVED_AT IS NULL AND Q.STATUS = 'OPEN'""", tuple(chunk)):
+                requests.setdefault(r["run_id"], {"request_id": r["request_id"], "title": r["title"]})
+        except Exception:
+            pass
+    return board(runs, domains, history, requests)
 
 
 @app.post("/api/runs/{run_id}/standards")

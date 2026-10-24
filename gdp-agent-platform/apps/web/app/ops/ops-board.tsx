@@ -14,7 +14,7 @@ export type OpsNav = { env: string; q: string; state: string; owner: string; tea
 
 const STATES = ["failed", "running", "success", "queued", "up_for_retry", "upstream_failed"];
 
-export const dagHref = (envId: string, dagId: string) => `/ops/dag?${new URLSearchParams({ env: envId, dag: dagId })}`;
+export const dagHref = (envId: string, dagId: string) => `/os/run/ops/dag?${new URLSearchParams({ env: envId, dag: dagId })}`;
 
 function Card({ label, value, hint, icon: Icon, tone }: {
   label: string; value: React.ReactNode; hint?: React.ReactNode; icon: typeof Activity; tone: string;
@@ -95,7 +95,7 @@ export function OpsBoard({ envs, summary: initialSummary, summaryError, initial,
       <Empty icon={<Workflow className="h-6 w-6" />} title="No Airflow environment connected"
              text="Connect Amazon MWAA in Admin, Integrations, Airflow. DAGs, runs and task logs then show up here."
              action={access.canManage
-               ? <Link href="/admin?section=integrations&view=airflow" className="text-sm text-primary hover:underline">Open Airflow setup</Link>
+               ? <Link href="/os/admin/settings?section=integrations&view=airflow" className="text-sm text-primary hover:underline">Open Airflow setup</Link>
                : <span className="text-xs text-muted-foreground">Ask an admin with the INTEGRATION.MANAGE privilege to connect it.</span>} />
     );
   }
@@ -192,7 +192,7 @@ function NeedsAttention({ dags }: { dags: DagRow[] | null }) {
         <AlertTriangle className="h-4 w-4 text-rose-600" />
         <h2 className="text-sm font-semibold">Needs attention</h2>
         <span className="text-xs text-muted-foreground">{rows.length} DAG{rows.length === 1 ? "" : "s"} failing or with open incidents</span>
-        <Link href="/incidents" className="ml-auto text-xs font-medium text-primary hover:underline">All incidents</Link>
+        <Link href="/os/run/incidents" className="ml-auto text-xs font-medium text-primary hover:underline">All incidents</Link>
       </header>
       <ul className="grid divide-y md:grid-cols-2 md:divide-y-0 xl:grid-cols-3">
         {rows.slice(0, ATTENTION_MAX).map((d) => (
@@ -205,7 +205,7 @@ function NeedsAttention({ dags }: { dags: DagRow[] | null }) {
             </p>
             <p className="flex flex-wrap items-center gap-3 text-xs">
               {d.open_incidents > 0
-                ? <Link href={`/incidents?${new URLSearchParams({ dag: d.dag_id, env: d.env_id, status: "OPEN,ACK" })}`} className="font-semibold text-rose-700 hover:underline">
+                ? <Link href={`/os/run/incidents?${new URLSearchParams({ dag: d.dag_id, env: d.env_id, status: "OPEN,ACK" })}`} className="font-semibold text-rose-700 hover:underline">
                     {d.open_incidents} open incident{d.open_incidents === 1 ? "" : "s"}</Link>
                 : <span className="text-muted-foreground">no open incident yet</span>}
               {d.success_7d != null && <span className={cn("tabular-nums", pctTone(d.success_7d))}>{pct(d.success_7d)} success 7 d</span>}
@@ -264,7 +264,7 @@ function DagTable({ dags, filtered }: { dags: DagRow[] | null; filtered: boolean
                   {!d.is_active && <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500">inactive</span>}
                   {d.criticality && <span className="rounded-full bg-blue-50 px-1.5 py-0.5 text-[10px] text-blue-700">{d.criticality.toLowerCase()}</span>}
                   {d.open_incidents > 0 && (
-                    <Link href={`/incidents?${new URLSearchParams({ dag: d.dag_id, env: d.env_id, status: "OPEN,ACK" })}`}
+                    <Link href={`/os/run/incidents?${new URLSearchParams({ dag: d.dag_id, env: d.env_id, status: "OPEN,ACK" })}`}
                           className="rounded-full bg-rose-50 px-1.5 py-0.5 text-[10px] font-semibold text-rose-700 ring-1 ring-inset ring-rose-100 hover:bg-rose-100">
                       {d.open_incidents} open incident{d.open_incidents === 1 ? "" : "s"}</Link>
                   )}

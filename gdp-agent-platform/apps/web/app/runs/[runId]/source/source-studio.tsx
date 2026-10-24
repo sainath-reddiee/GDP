@@ -274,7 +274,7 @@ export function SourceStudio({
                 <span className="inline-flex items-center gap-1.5 text-sm font-medium text-success">
                   <CheckCircle2 className="h-4 w-4" /> Ingestion complete
                 </span>
-                <Link href={`/runs/${runId}/profile`} className={buttonVariants({ variant: "outline", size: "lg" })}>
+                <Link href={`/os/build/runs/${runId}/profile`} className={buttonVariants({ variant: "outline", size: "lg" })}>
                   View profiles <ArrowRight className="h-4 w-4" />
                 </Link>
               </>

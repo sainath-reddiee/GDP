@@ -33,7 +33,7 @@ function describe(page: CopilotPage): string {
   if (page.table) return `${page.database}.${page.schema}.${page.table}`;
   const run = page.path.match(/^\/runs\/[0-9a-f-]{36}(?:\/([a-z]+))?/);
   if (run) return `Run · ${run[1] ? STAGE_LABEL[run[1]] ?? run[1] : "Overview"}`;
-  if (page.path.startsWith("/sources") || page.path.startsWith("/dashboard/sources")) return page.schema ? `Sources · ${page.database}.${page.schema}` : "Sources";
+  if (page.path.startsWith("/sources") || page.path.startsWith("/os/design/sources")) return page.schema ? `Sources · ${page.database}.${page.schema}` : "Sources";
   return (page.path.split("/")[1] || "dashboard").replace(/^\w/, (c) => c.toUpperCase());
 }
 
@@ -159,7 +159,7 @@ function CopilotShell({ children }: { children: ReactNode }) {
     <CopilotCtx.Provider value={{ setFocus, open, shown: show }}>
       {children}
       {/* the Copilot workspace is the full version of this drawer; its own controls sit where the launcher would */}
-      {can("AI.USE") && !pathname.startsWith("/dashboard/copilot") && <button type="button" onClick={() => setShow((v) => !v)} aria-label={show ? "Close copilot" : "Open copilot"}
+      {can("AI.USE") && !pathname.startsWith("/os/work/copilot") && <button type="button" onClick={() => setShow((v) => !v)} aria-label={show ? "Close copilot" : "Open copilot"}
               title="Copilot (Ctrl+J)" aria-expanded={show} data-copilot-launcher
               className={cn("fixed bottom-5 right-5 z-[71] grid h-14 w-14 place-items-center rounded-full bg-primary text-white shadow-lg ring-4 ring-background transition hover:scale-105 hover:shadow-xl",
                             show && "max-sm:hidden")}>
@@ -179,7 +179,7 @@ function CopilotShell({ children }: { children: ReactNode }) {
               <p className="text-sm font-semibold">Copilot</p>
               <p className="truncate text-[11px] text-muted-foreground" title={label}>Looking at {label}</p>
             </div>
-            <Link href="/dashboard/copilot" onClick={() => setShow(false)} data-testid="copilot-open-full"
+            <Link href="/os/work/copilot" onClick={() => setShow(false)} data-testid="copilot-open-full"
                   title="Open the full Copilot: saved chats, attachments, Jira issues and drafted changes"
                   className="ml-auto inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-primary hover:bg-primary/10">
               Full Copilot <ArrowRight className="h-3 w-3" />

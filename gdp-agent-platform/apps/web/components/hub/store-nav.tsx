@@ -14,7 +14,7 @@ export function StoreNav({ current, domain }: { current: string | null; domain?:
   return (
     <nav aria-label="Stores" data-testid="store-nav"
          className="-mx-1 flex items-center gap-1 overflow-x-auto rounded-xl border bg-card/60 p-1 text-sm shadow-sm">
-      <Link href={storeHref("/dashboard/store", domain)} aria-current={current === null ? "page" : undefined}
+      <Link href={storeHref("/os/design/store", domain)} aria-current={current === null ? "page" : undefined}
             className={cn("inline-flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-1.5 font-medium transition",
                           current === null ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:bg-muted hover:text-foreground")}>
         <Store className="h-4 w-4" />All stores
@@ -38,7 +38,7 @@ export function StoreNav({ current, domain }: { current: string | null; domain?:
 /** Store › {store} › {item} above a store's detail page. */
 export function StoreCrumb({ store, trail = [] }: { store: string; trail?: { label: string; href?: string }[] }) {
   const s = STORES.find((x) => x.id === store);
-  const parts = [{ label: "Store", href: "/dashboard/store" }, ...(s ? [{ label: s.label, href: s.href }] : []), ...trail];
+  const parts = [{ label: "Store", href: "/os/design/store" }, ...(s ? [{ label: s.label, href: s.href }] : []), ...trail];
   return (
     <nav aria-label="Breadcrumb" className="eyebrow">
       <ol className="flex flex-wrap items-center gap-1.5">

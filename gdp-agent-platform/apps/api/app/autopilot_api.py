@@ -30,6 +30,73 @@ _lock = threading.Lock()
 WAIT_SECONDS, WAIT_LIMIT = 5, 24
 
 
+def _autonomous(db: Db) -> bool:
+    """Setting AUTOPILOT_AUTONOMOUS (default on): autopilot decides the table run's gates itself."""
+    try:
+        from app.governance import settings
+
+        return bool(settings(db).get("AUTOPILOT_AUTONOMOUS", True))
+    except Exception:
+        return True
+
+
+def _approve(db: Db, run_id: str, to_state: str, what: str):
+    from app import main as m
+
+    return m.review(run_id, m.Review(to_state=to_state, decision="APPROVE",
+                                     business_justification=ap.JUSTIFICATION.format(what=what)), db)
+
+
+def _approve_mapping(db: Db, run_id: str):
+    """Decide every open mapping pair with its best candidate, then approve the mapping."""
+    from app import main as m
+
+    candidates = db.query("""SELECT C.CANDIDATE_ID, C.SOURCE_COLUMN_ID, C.TARGET_COLUMN_ID, C.RANK, C.FINAL_SCORE,
+                                    C.RECOMMENDATION, COALESCE(C.TARGET_TABLE_ID, T.TARGET_TABLE_ID) AS TARGET_TABLE_ID
+                               FROM CORE.MAPPING_CANDIDATE C
+                               LEFT JOIN CORE.TARGET_COLUMN_REGISTRY T ON T.TARGET_COLUMN_ID = C.TARGET_COLUMN_ID
+                              WHERE C.RUN_ID = %s AND C.IS_CURRENT""", (run_id,))
+    current = db.query("""SELECT D.SOURCE_COLUMN_ID, D.TARGET_COLUMN_ID, D.DECISION,
+                                 COALESCE(D.TARGET_TABLE_ID, T.TARGET_TABLE_ID) AS TARGET_TABLE_ID
+                            FROM CORE.MAPPING_DECISION D
+                            LEFT JOIN CORE.TARGET_COLUMN_REGISTRY T ON T.TARGET_COLUMN_ID = D.TARGET_COLUMN_ID
+                           WHERE D.RUN_ID = %s AND D.IS_CURRENT""", (run_id,))
+    decisions = ap.auto_mapping_decisions(
+        candidates, [(d["source_column_id"], d.get("target_table_id")) for d in current],
+        [(d["target_column_id"], d.get("target_table_id")) for d in current
+         if d["decision"] != "REJECTED" and d.get("target_column_id")])
+    if decisions:
+        m.save_mapping(run_id, m.MappingDecisions(decisions=decisions), db)
+    return _approve(db, run_id, "MAPPING_APPROVED", f"mapping accepted from the best candidates ({len(decisions)} decided)")
+
+
+def _approve_soda(db: Db, run_id: str):
+    """At the checks gate: approve it. Past it (the code moved the run on): approve the checks still proposed."""
+    state = db.query("SELECT CURRENT_STATE FROM CORE.WORKFLOW_RUN WHERE RUN_ID = %s", (run_id,))[0]["current_state"]
+    if state == "SODA_REVIEW":
+        return _approve(db, run_id, "SODA_APPROVED", "proposed Data Quality checks accepted")
+    db.execute("""UPDATE CORE.SODA_EXPECTATION_REGISTRY SET STATUS = 'APPROVED', REVIEWED_BY = CURRENT_USER(),
+                         REVIEWED_AT = CURRENT_TIMESTAMP()
+                   WHERE RUN_ID = %s AND IS_CURRENT AND STATUS = 'PROPOSED'""", (run_id,))
+    try:
+        from app.main import invoke_source
+        from services.soda.procedures import store_approved_set
+
+        invoke_source(db, store_approved_set, run_id)   # kept in the DQ store, as a person's approval does
+    except Exception:
+        pass
+    return {"ok": True}
+
+
+def _signoff_qa(db: Db, run_id: str):
+    """Run the QA suite on the current STTM, then sign it off; blocking failures stop autopilot for a person."""
+    from app import main as m
+
+    m.qa_run(run_id, m.QaRunIn(), db)
+    return m.qa_signoff(run_id, m.QaSignoff(decision="APPROVED", note=ap.JUSTIFICATION.format(
+        what="QA suite ran with no failing critical or high tests")), db)
+
+
 def _facts(db: Db, run_id: str) -> Tuple[str, Dict[str, Any], Dict[str, Any]]:
     """(state, facts, run row) the decision needs, read fresh each step."""
     from app.main import _load_intent
@@ -60,6 +127,12 @@ def _facts(db: Db, run_id: str) -> Tuple[str, Dict[str, Any], Dict[str, Any]]:
                         ORDER BY STTM_VERSION DESC LIMIT 1""", (run_id,))
     facts["soda_generated"] = bool(db.query("""SELECT 1 FROM CORE.SODA_EXPECTATION_REGISTRY WHERE RUN_ID = %s AND IS_CURRENT
                                                LIMIT 1""", (run_id,)))
+    facts["soda_proposed"] = bool(db.query("""SELECT 1 FROM CORE.SODA_EXPECTATION_REGISTRY WHERE RUN_ID = %s AND IS_CURRENT
+                                              AND STATUS = 'PROPOSED' LIMIT 1""", (run_id,)))
+    from app.main import _qa_signoff
+
+    facts["qa_signed"] = str((_qa_signoff(db, run_id) or {}).get("decision") or "").upper() == "APPROVED"
+    facts["autonomous"] = _autonomous(db)
     gen = db.query("""SELECT GENERATION_ID FROM CORE.DBT_GENERATION_REGISTRY WHERE RUN_ID = %s AND STTM_ID = %s
                         AND GENERATION_STATUS IN ('GENERATED', 'APPROVED') ORDER BY GENERATION_VERSION DESC LIMIT 1""",
                    (run_id, sttm[0]["sttm_id"] if sttm else ""))
@@ -70,8 +143,9 @@ def _facts(db: Db, run_id: str) -> Tuple[str, Dict[str, Any], Dict[str, Any]]:
     return r["current_state"], facts, r
 
 
-def _call(db: Db, run_id: str, action: str) -> Tuple[str, str, Callable[[], Any]]:
-    """(method, path, call) of an action: the route a person's click uses, and the function behind it."""
+def _call(db: Db, run_id: str, action: str) -> Tuple[str, str, Callable[[], Any], Optional[Dict[str, Any]]]:
+    """(method, path, call, body) of an action: the route a person's click uses, the function behind it, and the body
+    its governance check needs (a review's privilege depends on the state it approves)."""
     from app import main as m
 
     def prepare():
@@ -98,8 +172,20 @@ def _call(db: Db, run_id: str, action: str) -> Tuple[str, str, Callable[[], Any]
         "generate_soda": ("POST", f"/api/runs/{run_id}/soda", lambda: m.generate_soda(run_id, db)),
         "generate_dbt": ("POST", f"/api/runs/{run_id}/dbt", lambda: m.generate_dbt(run_id, None, db)),
         "validate": ("POST", f"/api/runs/{run_id}/validation", lambda: m.validate_dbt(run_id, db)),
+        "approve_mapping": ("POST", f"/api/runs/{run_id}/review", lambda: _approve_mapping(db, run_id),
+                            {"to_state": "MAPPING_APPROVED", "decision": "APPROVE"}),
+        "approve_sttm": ("POST", f"/api/runs/{run_id}/review",
+                         lambda: _approve(db, run_id, "STTM_APPROVED", "transformations generated from the approved mapping"),
+                         {"to_state": "STTM_APPROVED", "decision": "APPROVE"}),
+        "approve_soda": ("POST", f"/api/runs/{run_id}/review", lambda: _approve_soda(db, run_id),
+                         {"to_state": "SODA_APPROVED", "decision": "APPROVE"}),
+        "signoff_qa": ("POST", f"/api/runs/{run_id}/qa/signoff", lambda: _signoff_qa(db, run_id), None),
+        "approve_code": ("POST", f"/api/runs/{run_id}/review",
+                         lambda: _approve(db, run_id, "DBT_APPROVED", "validation passed, checks approved and QA signed off"),
+                         {"to_state": "DBT_APPROVED", "decision": "APPROVE"}),
     }
-    return table[action]
+    entry = table[action]
+    return entry if len(entry) == 4 else (*entry, None)
 
 
 def drive(db: Db, run_id: str, job: Dict[str, Any], log: Optional[Callable[[Dict[str, Any]], None]] = None) -> Dict[str, Any]:
@@ -122,8 +208,8 @@ def drive(db: Db, run_id: str, job: Dict[str, Any], log: Optional[Callable[[Dict
         action = nxt["action"]
         if done.count(action) >= 2:   # the same step did not move the run on: stop instead of looping
             return {"kind": "BLOCKED", "label": f"{nxt['label']} did not move the run on; open the run to see why"}
-        method, path, call = _call(db, run_id, action)
-        verdict = preview_call(db, method, path)
+        method, path, call, body = _call(db, run_id, action)
+        verdict = preview_call(db, method, path, body)
         if verdict.get("verdict") != "ALLOW":
             return {"kind": "BLOCKED", "label": f"{nxt['label']} needs {verdict.get('privilege')}"
                     + (f" (approval by {verdict['approver_role']})" if verdict.get("approver_role") else "")
@@ -156,7 +242,12 @@ def _start(db: Db, run_id: str) -> Dict[str, Any]:
                "finished_at": None, "steps": [], "stop": None, "children": []}
         _jobs[job["job_id"]] = job
 
+    from app.governance import _persona, current_persona
+
+    persona = current_persona()   # autopilot acts with the persona the person started it as, never more
+
     def work() -> None:
+        _persona.set(persona)
         try:
             stop = drive(db, run_id, job)
             _state, facts, run = _facts(db, run_id)
@@ -168,7 +259,8 @@ def _start(db: Db, run_id: str) -> Dict[str, Any]:
                     child_stop = drive(db, child["run_id"], child_job)
                     job["children"].append({"run_id": child["run_id"], "entity": child.get("entity"),
                                             "steps": child_job["steps"], "stop": child_stop})
-                stop = {"kind": "GATE", "label": "Each table run stopped at its next review; see the star schema", "where": "star schema"}
+                stop = {"kind": "GATE", "label": "Each table run went as far as autopilot can take it; see the star schema",
+                        "where": "star schema"}
             job.update(status="STOPPED", stop=stop)
         except Exception as exc:
             job.update(status="FAILED", stop={"kind": "BLOCKED", "label": str(exc)[:600]})

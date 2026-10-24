@@ -40,13 +40,13 @@ export function refHref(kind: string | null | undefined, ref: string | null | un
   if (!ref) return null;
   const k = (kind ?? "").toUpperCase();
   const enc = encodeURIComponent;
-  if (k === "RUN") return `/runs/${enc(ref)}`;
-  if (k === "CASE") return `/qa/cases/${enc(ref)}`;
-  if (k === "INCIDENT") return `/incidents/${enc(ref)}`;
+  if (k === "RUN") return `/os/build/runs/${enc(ref)}`;
+  if (k === "CASE") return `/os/release/qa/cases/${enc(ref)}`;
+  if (k === "INCIDENT") return `/os/run/incidents/${enc(ref)}`;
   if (k === "TABLE" || k === "TARGET_TABLE") {
     // a table id is only known when the ref is one, or when it names a table this case already knows by name
     const id = tables?.[ref.toUpperCase()] ?? (/^[\w-]{8,}$/.test(ref) && !ref.includes(".") ? ref : null);
-    return id ? `/qa?${new URLSearchParams({ tab: "suites", table: id })}` : null;
+    return id ? `/os/release/qa?${new URLSearchParams({ tab: "suites", table: id })}` : null;
   }
   return null;
 }

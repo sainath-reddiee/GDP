@@ -218,7 +218,7 @@ export function IngestionWizard({ kind, domains, user, initialName = "" }: { kin
           </p>
         )}
         <div className="flex gap-2">
-          <Link href="/dashboard/sources" className={buttonVariants()}>Open in the Source Store</Link>
+          <Link href="/os/design/sources" className={buttonVariants()}>Open in the Source Store</Link>
           <Button variant="outline" onClick={() => { setSaved(null); setCheckedFor(null); setCheckedOnce(false); setTables([{ ...EMPTY_TABLE }]); setPreview([]); }}>Onboard another</Button>
         </div>
       </div>

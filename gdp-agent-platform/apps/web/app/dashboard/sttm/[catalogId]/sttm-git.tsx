@@ -45,7 +45,7 @@ export function SttmGit({ catalogId, version, status, canEdit, prs, repos, publi
         <h2 className="text-sm font-semibold">Git</h2>
         <span className="text-xs text-muted-foreground">An approved version is published as a pull request; the repository&apos;s owners merge it.</span>
         <span className="flex-1" />
-        <Link href={`/dashboard/source-control?kind=STTM`} className="text-xs text-primary hover:underline">Source control</Link>
+        <Link href={`/os/release/source-control?kind=STTM`} className="text-xs text-primary hover:underline">Source control</Link>
       </div>
       {canEdit && approved && (
         <div className="flex flex-wrap items-end gap-2">

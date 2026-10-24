@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DiffView } from "@/components/diff-view";
 import { useAccess } from "@/components/access";
+import { Portal } from "@/components/portal";
 import { useScrollLock } from "@/components/use-scroll-lock";
 import { cn } from "@/lib/utils";
 import { ago } from "../skills/types";
@@ -26,7 +27,7 @@ import { ItemEditor } from "./knowledge-browser";
 import { ORIGINS, OriginChip, prettyType, StatusPill, TypeIcon } from "./knowledge-ui";
 
 
-function useOpenItem() {
+export function useOpenItem() {
   const router = useRouter();
   const [open, setOpen] = useState<KnowledgeItem | null>(null);
   const [editing, setEditing] = useState<KnowledgeItem | null>(null);
@@ -197,7 +198,7 @@ function Timeline({ items, onOpen }: { items: FeedItem[]; onOpen: (id: string) =
                 </button>
                 <p className="mt-0.5 text-muted-foreground">
                   {i.domain_name} · {i.created_by} · {ago(i.created_at)}
-                  {i.source_run_id && <> · run <Link href={`/runs/${i.source_run_id}`} className="text-primary hover:underline">{i.run_name ?? i.source_run_id.slice(0, 8)}</Link></>}
+                  {i.source_run_id && <> · run <Link href={`/os/build/runs/${i.source_run_id}`} className="text-primary hover:underline">{i.run_name ?? i.source_run_id.slice(0, 8)}</Link></>}
                   {i.change_note && <> · {i.change_note}</>}
                 </p>
               </li>
@@ -317,7 +318,7 @@ export function InboxPanel({ items }: { items: InboxItem[] }) {
             <div className="min-w-0 flex-1">
               <p className="flex flex-wrap items-center gap-2 text-sm font-semibold">{p.title}<OriginChip origin={p.origin} />{p.current ? <span className="text-[11px] font-normal text-muted-foreground">update to v{p.current.version}</span> : <span className="text-[11px] font-normal text-muted-foreground">new item</span>}</p>
               <p className="text-xs text-muted-foreground">{prettyType(p.knowledge_type)} · {p.domain_name} · {p.created_by} · {ago(p.created_at)}
-                {p.source_run_id && <> · from run <Link href={`/runs/${p.source_run_id}`} className="text-primary hover:underline">{p.run_name ?? p.source_run_id.slice(0, 8)}</Link></>}</p>
+                {p.source_run_id && <> · from run <Link href={`/os/build/runs/${p.source_run_id}`} className="text-primary hover:underline">{p.run_name ?? p.source_run_id.slice(0, 8)}</Link></>}</p>
             </div>
             <div className="flex gap-1.5">
               {p.current && <Button size="sm" variant="ghost" disabled={pending} onClick={() => diff(p)}><ArrowLeftRight className="h-3.5 w-3.5" />Diff</Button>}
@@ -433,7 +434,7 @@ export function HealthPanel({ stale, pairs, staleDays }: {
   );
 }
 
-function PolicyDialog({ onClose }: { onClose: () => void }) {
+export function PolicyDialog({ onClose }: { onClose: () => void }) {
   useScrollLock();
   const router = useRouter();
   const [data, setData] = useState<Policy | null>(null);
@@ -448,6 +449,7 @@ function PolicyDialog({ onClose }: { onClose: () => void }) {
     if (r.ok) router.refresh();
   });
   return (
+    <Portal>
     <div className="fixed inset-0 z-50 grid place-items-center bg-black/30 p-4" role="dialog" aria-modal="true" aria-label="Learning policy">
       <div className="flex max-h-[85vh] w-full max-w-xl flex-col rounded-2xl border bg-background shadow-2xl">
         <div className="flex items-start justify-between border-b px-5 py-3">
@@ -486,5 +488,6 @@ function PolicyDialog({ onClose }: { onClose: () => void }) {
         </div>
       </div>
     </div>
+    </Portal>
   );
 }

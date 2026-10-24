@@ -14,7 +14,7 @@ export function CodeCitations({ items, label = "Code used" }: { items?: CodeCita
       <span className="text-[11px] font-medium text-muted-foreground">{label}</span>
       {items.map((c) => {
         const start = (c.lines ?? "").split("-")[0];
-        const href = `/code?repo=${encodeURIComponent(c.repo_id ?? "")}&path=${encodeURIComponent(c.path ?? "")}${start ? `&line=${start}` : ""}`;
+        const href = `/os/build/code?repo=${encodeURIComponent(c.repo_id ?? "")}&path=${encodeURIComponent(c.path ?? "")}${start ? `&line=${start}` : ""}`;
         return (
           <Link key={`${c.repo_id}-${c.path}-${c.lines}`} href={href} title={`${c.repo}:${c.path} lines ${c.lines}${c.commit ? ` @ ${c.commit}` : ""}`}
                 className="inline-flex max-w-[260px] items-center gap-1 rounded-full border border-blue-100 bg-blue-50/70 px-2 py-0.5 font-mono text-[10px] text-blue-700 hover:border-blue-300">

@@ -35,7 +35,7 @@ export default async function People() {
     <>
       <PageHeader eyebrow="Admin / Super admins only" title="People and personas"
                   subtitle="Give people personas instead of roles. Each persona is a bundle of governance roles; the platform grants the roles and shows each person only the personas they hold. Anyone without a persona is a Viewer."
-                  actions={<Btn href="/admin?section=access">Advanced: roles and policies</Btn>} />
+                  actions={<Btn href="/os/admin/settings?section=access">Advanced: roles and policies</Btn>} />
       <SourceError what="People" error={people.error} />
       <SourceError what="Personas" error={personas.error} />
       {pending.length > 0 && (
@@ -65,7 +65,7 @@ export default async function People() {
                     {p.direct_roles.length > 0 && <div className="mt-1 text-[10.5px] text-[var(--os-amber-ink)]" title="Given outside any persona, in Access">+ {p.direct_roles.map((r) => r.toLowerCase()).join(", ")}</div>}
                     {p.domains.length > 0 && (
                       <div className="mt-1 flex flex-wrap gap-1">
-                        {p.domains.map((d) => <Link key={d.domain_id + d.role} href={`/domains/${d.domain_id}`}><Tag tone="blue">{d.domain_name} · {pretty(d.role)}</Tag></Link>)}
+                        {p.domains.map((d) => <Link key={d.domain_id + d.role} href={`/os/knowledge/domains/${d.domain_id}`}><Tag tone="blue">{d.domain_name} · {pretty(d.role)}</Tag></Link>)}
                       </div>
                     )}
                   </div>

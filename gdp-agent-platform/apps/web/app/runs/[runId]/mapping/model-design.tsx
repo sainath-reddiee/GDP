@@ -222,7 +222,7 @@ function UseDomainModel({ dm, inUse, canApply, busy, onUse }: {
 function WorkbenchBanner({ wb }: { wb: WorkbenchState }) {
   const p = wb.proposal;
   const model = wb.model_id ?? p?.model_id ?? null;
-  const href = (tab: string) => (model ? `/dashboard/modeling/${model}?tab=${tab}` : "/dashboard/modeling");
+  const href = (tab: string) => (model ? `/os/design/modeling/${model}?tab=${tab}` : "/os/design/modeling");
   return (
     <div className="space-y-1.5 rounded-lg border border-blue-300/60 bg-blue-50/50 px-3 py-2 text-xs dark:border-blue-800 dark:bg-blue-950/20" data-testid="run-workbench">
       <p className="flex flex-wrap items-center gap-2">
@@ -421,7 +421,7 @@ export function ModelDesign({ runId, data, canApply, state, canEdit = true, canA
           {versions.length > 0 && (
             <p className="text-xs text-muted-foreground">
               Every saved version keeps its tables in the Model Store, where they can be reopened and edited after this run moves on.{" "}
-              <Link href={`/dashboard/modeling?view=tables&run=${encodeURIComponent(runId)}`} className="font-medium text-primary hover:underline" data-testid="run-table-models">Open this run&apos;s table models</Link>
+              <Link href={`/os/design/modeling?view=tables&run=${encodeURIComponent(runId)}`} className="font-medium text-primary hover:underline" data-testid="run-table-models">Open this run&apos;s table models</Link>
             </p>
           )}
           <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">

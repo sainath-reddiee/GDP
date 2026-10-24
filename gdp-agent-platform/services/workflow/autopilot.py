@@ -9,13 +9,19 @@ runs the step through the same functions and governance checks a person's click 
 next_action(state, facts) -> {"kind": ACTION | GATE | WAIT | BLOCKED | DONE, "action"?, "label"}
 facts: pipeline (SILVER | GOLD), has_target, planned_tables (count), gold_model {approved, open} (Gold), has_children
 (a Gold run that built its star schema, or a Silver run mapped to several tables), table_runs {total, done, failed}
-(a Silver parent's table runs), soda_generated, dbt_generated (for the current STTM), validated (the current
-generation), validation_failed, failure_reason.
+(a Silver parent's table runs), soda_generated, soda_proposed (checks still to decide), dbt_generated (for the current
+STTM), validated (the current generation), qa_signed (the current STTM's QA tests signed off), validation_failed,
+failure_reason, autonomous (setting AUTOPILOT_AUTONOMOUS).
+
+Autonomous: the gates of a table run (mapping, STTM, Data Quality checks, QA sign-off, code review) are decided by the
+autopilot on the evidence (best mapping candidate, proposed checks, a QA run without blocking failures, a passed
+validation), recorded with an "Autopilot" justification so a person reviews or reopens them later from the stores.
+It still stops where only a person can act: no target model, an open gold model, a failed validation or QA run.
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 ACTIONS = {
     "prepare_source": "Validate access and select the tables",
@@ -28,9 +34,17 @@ ACTIONS = {
     "generate_soda": "Generate the Data Quality checks",
     "generate_dbt": "Generate the code",
     "validate": "Validate the code",
+    "approve_mapping": "Accept the best mapping candidates and approve the field mapping",
+    "approve_sttm": "Approve the transformations (STTM)",
+    "approve_soda": "Approve the Data Quality checks",
+    "signoff_qa": "Run the QA tests and sign them off",
+    "approve_code": "Approve the code (Code review)",
 }
 RUNNING = {"ACCESS_VALIDATION", "LANDING_RUNNING", "PROFILING_RUNNING", "DBT_GENERATING", "VALIDATION_RUNNING"}
-MAX_STEPS = 14
+MAX_STEPS = 24
+POST_STTM_BUILD = ("STTM_APPROVED", "SODA_PENDING", "SODA_REVIEW", "SODA_APPROVED", "DBT_PENDING",
+                   "VALIDATION_PENDING", "VALIDATION_PASSED", "DBT_REVIEW")
+JUSTIFICATION = "Autopilot: {what}. Review or reopen it from the store."
 
 
 def _act(action: str) -> Dict[str, Any]:
@@ -41,8 +55,56 @@ def _gate(label: str, where: str) -> Dict[str, Any]:
     return {"kind": "GATE", "label": label, "where": where}
 
 
+def auto_mapping_decisions(candidates: List[Dict[str, Any]], decided: Iterable[Tuple[str, Optional[str]]],
+                           claimed: Iterable[Tuple[str, Optional[str]]]) -> List[Dict[str, Any]]:
+    """One decision per undecided (source column, target table): its rank-1 candidate, approved, best score first; a
+    target column another source already feeds is rejected instead (pure).
+
+    candidates: candidate_id, source_column_id, target_column_id, target_table_id, rank, final_score, recommendation.
+    decided: (source_column_id, target_table_id) already decided; claimed: (target_column_id, target_table_id) mapped."""
+    done, taken = set(decided), set(claimed)
+    best = sorted((c for c in candidates if int(c.get("rank") or 0) == 1
+                   and (c["source_column_id"], c.get("target_table_id")) not in done),
+                  key=lambda c: -float(c.get("final_score") or 0))
+    out = []
+    for c in best:
+        key = (c["source_column_id"], c.get("target_table_id"))
+        if key in done:
+            continue
+        done.add(key)
+        target = (c.get("target_column_id"), c.get("target_table_id"))
+        score = float(c.get("final_score") or 0)
+        if not c.get("target_column_id") or target in taken:
+            out.append({"candidate_id": c["candidate_id"], "decision": "REJECTED",
+                        "business_justification": JUSTIFICATION.format(what="target already mapped from a better match")})
+            continue
+        taken.add(target)
+        out.append({"candidate_id": c["candidate_id"], "decision": "APPROVED",
+                    "business_justification": JUSTIFICATION.format(
+                        what=f"best candidate ({c.get('recommendation') or 'MANUAL'}, score {score:.2f})")})
+    return out
+
+
+def _build(state: str, facts: Dict[str, Any]) -> Dict[str, Any]:
+    """Autonomous, after the STTM: checks, code, validation, QA, code review, in the order the gates need them."""
+    if not facts.get("soda_generated") and state in ("STTM_APPROVED", "SODA_PENDING"):
+        return _act("generate_soda")
+    if state == "SODA_REVIEW" or facts.get("soda_proposed"):
+        return _act("approve_soda")
+    if not facts.get("dbt_generated"):
+        return _act("generate_dbt")
+    if state not in ("VALIDATION_PASSED", "DBT_REVIEW"):
+        return _act("validate")   # also moves a run whose code was validated while it waited at the checks gate
+    if not facts.get("qa_signed"):
+        return _act("signoff_qa")
+    if state == "DBT_REVIEW":
+        return _act("approve_code")
+    return {"kind": "BLOCKED", "label": "Validation passed but the run did not reach code review; open the run"}
+
+
 def next_action(state: str, facts: Dict[str, Any]) -> Dict[str, Any]:
     gold = str(facts.get("pipeline") or "").upper() == "GOLD"
+    auto = bool(facts.get("autonomous"))
     if state == "COMPLETED":
         return {"kind": "DONE", "label": "The run is complete"}
     if state == "CANCELLED":
@@ -74,7 +136,7 @@ def next_action(state: str, facts: Dict[str, Any]) -> Dict[str, Any]:
             return _gate("Choose the target model on Modeling", "target model")
         return _act("generate_mapping")
     if state == "MAPPING_REVIEW":
-        return _gate("Review and approve the field mapping", "mapping")
+        return _act("approve_mapping") if auto else _gate("Review and approve the field mapping", "mapping")
     if state in ("MAPPING_APPROVED", "STTM_PENDING") and facts.get("has_children") and not gold:
         runs = facts.get("table_runs") or {}
         if runs.get("total") and runs.get("done") == runs.get("total"):
@@ -85,9 +147,11 @@ def next_action(state: str, facts: Dict[str, Any]) -> Dict[str, Any]:
     if state in ("MAPPING_APPROVED", "STTM_PENDING"):
         return _act("generate_sttm")
     if state == "STTM_REVIEW":
-        return _gate("Review and approve the transformations (STTM)", "sttm")
+        return _act("approve_sttm") if auto else _gate("Review and approve the transformations (STTM)", "sttm")
     if state == "VALIDATION_FAILED":
         return {"kind": "BLOCKED", "label": "Validation failed: open Validation, fix the findings and regenerate"}
+    if auto and state in POST_STTM_BUILD:
+        return _build(state, facts)
     if state in ("STTM_APPROVED", "SODA_PENDING", "SODA_REVIEW", "SODA_APPROVED", "DBT_PENDING", "VALIDATION_PENDING",
                  "VALIDATION_PASSED"):
         if not facts.get("soda_generated") and state in ("STTM_APPROVED", "SODA_PENDING"):

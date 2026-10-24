@@ -218,6 +218,8 @@ export type WhoAmI = {
   user: string; role: string; auth_mode: "dev" | "pat"; agent: string | null;
   governance?: boolean; roles?: string[]; granted_roles?: string[]; privileges?: string[]; pending_for_me?: number;
   read_only?: boolean;
+  /** the persona the API narrowed this session to, and the person's own privileges without it */
+  persona?: string | null; own_privileges?: string[];
 };
 
 /** Does the signed-in user hold a privilege? Everything is allowed until governance is deployed. */

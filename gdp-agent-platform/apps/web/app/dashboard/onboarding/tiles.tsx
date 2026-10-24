@@ -114,7 +114,7 @@ function ImportModal({ open, onClose }: { open: boolean; onClose: () => void }) 
           <CheckCircle2 className="h-10 w-10 text-emerald-600" />
           <p className="mt-3 text-base font-semibold">{done.domain_name} is registered</p>
           <p className="text-sm text-muted-foreground">{done.targets} targets, {done.columns} columns, {done.knowledge} knowledge items</p>
-          <Link href={`/domains/${done.domain_id}`} className={buttonVariants({ className: "mt-4" })}>Open the domain</Link>
+          <Link href={`/os/knowledge/domains/${done.domain_id}`} className={buttonVariants({ className: "mt-4" })}>Open the domain</Link>
         </div>
       ) : (
         <div className="space-y-4">

@@ -157,7 +157,7 @@ export function CodeExplorer({ repos, summary, usage, initial }: {
         <p className="mt-3 text-sm font-semibold">No repositories connected</p>
         <p className="mt-1 max-w-md text-xs text-muted-foreground">Connect the client&apos;s dbt or SQL repository in Admin, Integrations. Once indexed, dbt review, QA tests,
           data quality checks, Data Mapping and the copilot reuse its models, macros and tests, and the dbt workspace builds on it.</p>
-        <Link href="/admin?section=integrations" className="mt-4 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground">Connect a repository</Link>
+        <Link href="/os/admin/settings?section=integrations" className="mt-4 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground">Connect a repository</Link>
       </div>
     );
   }
@@ -192,7 +192,7 @@ export function CodeExplorer({ repos, summary, usage, initial }: {
               <span className="block truncate pl-4 text-[11px] text-muted-foreground">{(r.stats?.files ?? 0).toLocaleString()} files · {r.last_indexed ? `indexed ${ago(r.last_indexed)}` : "not indexed"}</span>
             </button>
           ))}
-          <Link href="/admin?section=integrations" className="mt-2 block px-2.5 text-[11px] text-primary hover:underline">Manage repositories in Admin</Link>
+          <Link href="/os/admin/settings?section=integrations" className="mt-2 block px-2.5 text-[11px] text-primary hover:underline">Manage repositories in Admin</Link>
         </aside>
 
         <div className="min-w-0 space-y-4">
@@ -681,7 +681,7 @@ function UsageTab({ repo, onOpen }: { repo: CodeRepo; onOpen: OpenFn }) {
               <tbody className="divide-y">
                 {data.recent.map((r, i) => (
                   <tr key={`${r.run_id}-${r.stage}-${i}`}>
-                    <td className="px-4 py-2">{r.run_id ? <Link href={`/runs/${r.run_id}`} className="hover:text-primary hover:underline">{r.run_name || r.run_id.slice(0, 8)}</Link> : <span className="text-muted-foreground">copilot</span>}</td>
+                    <td className="px-4 py-2">{r.run_id ? <Link href={`/os/build/runs/${r.run_id}`} className="hover:text-primary hover:underline">{r.run_name || r.run_id.slice(0, 8)}</Link> : <span className="text-muted-foreground">copilot</span>}</td>
                     <td>{r.stage.toLowerCase()}</td>
                     <td className="text-right tabular-nums">{r.citations}</td>
                     <td className="max-w-[16rem] truncate pl-4 font-mono text-muted-foreground" title={r.names.join(", ")}>{r.names.join(", ")}</td>

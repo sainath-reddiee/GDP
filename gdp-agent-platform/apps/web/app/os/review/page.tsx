@@ -8,7 +8,7 @@ import {
 import { guard } from "@/lib/os/session";
 import { ACTIONS, actMode, has } from "@/lib/os/access";
 import { Action } from "@/components/os/action";
-import { lifecycleOfRun, classicHref } from "@/lib/os/lifecycle";
+import { gateHref, lifecycleOfRun, osHref } from "@/lib/os/lifecycle";
 import { ActivityRow, Banner, Bar, Btn, Card, Empty, Field, Kpi, PageHeader, SourceError, Stepper, Tag, ago, pretty } from "@/components/os/ui";
 import { RunPicker } from "@/components/os/run-picker";
 import { GateDecision, ReviewStandards, ValidateAgain } from "@/components/os/decide";
@@ -80,8 +80,8 @@ export default async function ReviewGate({ searchParams }: { searchParams: { run
 
   const { run } = b;
   const score = scoreOf(b.checks);
-  const steps = lifecycleOfRun(run);
   const passed = gatePassed(score, b.gate);
+  const steps = lifecycleOfRun(run, { generated: !!b.generation, validated: score.total > 0, validationPassed: passed });
   const failed = run.current_state === "VALIDATION_FAILED" || (score.score !== null && !passed);
   const min = b.gate.min_score;
   // why the gate held the run: the reasons VALIDATE_DBT recorded on its latest attempt, else worked out here
@@ -118,8 +118,8 @@ export default async function ReviewGate({ searchParams }: { searchParams: { run
           <Btn href={`/os/build?run=${run.run_id}`}>Build workbench</Btn>
           {failed
             ? <Action access={access} id="editSkill" label="Improve skill and regenerate" href={`/os/skills${validationSkill ? `?skill=${encodeURIComponent(validationSkill.skill_name)}` : ""}`} variant="primary" icon={<Sparkles className="h-3.5 w-3.5" />} />
-            : run.current_state === "DBT_REVIEW" ? <Action access={access} id="reviewCode" href={`/runs/${run.run_id}/review`} variant="primary" />
-            : gate ? <Action access={access} id="decideGate" privilege={gate.privilege} label={`Open ${gate.name.toLowerCase()}`} href={`/runs/${run.run_id}/${gate.slug}`} variant="primary" /> : null}
+            : run.current_state === "DBT_REVIEW" ? <Action access={access} id="reviewCode" href={`/os/build/runs/${run.run_id}/review`} variant="primary" />
+            : gate ? <Action access={access} id="decideGate" privilege={gate.privilege} label={`Open ${gate.name.toLowerCase()}`} href={gateHref(run.run_id, gate.slug)} variant="primary" /> : null}
         </>}
       />
 
@@ -129,11 +129,11 @@ export default async function ReviewGate({ searchParams }: { searchParams: { run
         </Banner>
       )}
       {!failed && gate && (
-        <Banner tone="amber" icon={Hand}><b>{gate.name} waits on a {gate.role.toLowerCase()}.</b> Agents prepared the proposal; a person approves it before the workflow continues.</Banner>
+        <Banner tone="amber" icon={Hand}><b>{gate.name} waits on a {gate.role.toLowerCase()}.</b> Agents prepared the proposal. Approve it here, or run Build end to end and autopilot decides it on the evidence; you can reopen it later from the store.</Banner>
       )}
       {b.errors.length > 0 && <SourceError what="Part of this run" error={b.errors.join(" · ")} />}
 
-      <div className="mb-4"><Stepper steps={steps} hrefOf={(s) => s.status === "pending" ? null : classicHref(run.run_id, s)} /></div>
+      <div className="mb-4"><Stepper steps={steps} hrefOf={(s) => s.status === "pending" ? null : osHref(run.run_id, s, run.run.domain_id)} /></div>
 
       <div className="mb-4 grid grid-cols-2 gap-3 xl:grid-cols-4">
         <Kpi label="Validation score" value={score.score === null ? "–" : `${score.score}%`} hint={`Gate ${gateText(b.gate)}`} icon={passed ? ShieldCheck : ShieldAlert} tone={score.score === null ? "neutral" : passed ? "green" : "red"} />
@@ -161,7 +161,7 @@ export default async function ReviewGate({ searchParams }: { searchParams: { run
                             <div className="os-muted line-clamp-2 text-[11.5px]" title={msg}>{msg ? msg.split("\n")[0] : `${c.error_count} errors · ${c.warning_count} warnings`}</div>
                             {findings.length > 1 && <div className="os-faint text-[10.5px]">+{findings.length - 1} more finding{findings.length > 2 ? "s" : ""}</div>}
                           </td>
-                          <td>{fix && !checkPassed(c) ? <Action access={access} id="workStep" privilege={fix.privilege} label={fix.label} href={`/runs/${run.run_id}/${fix.slug}`} /> : <span className="os-faint">–</span>}</td>
+                          <td>{fix && !checkPassed(c) ? <Action access={access} id="workStep" privilege={fix.privilege} label={fix.label} href={`/os/build/runs/${run.run_id}/${fix.slug}`} /> : <span className="os-faint">–</span>}</td>
                         </tr>
                       );
                     })}
@@ -176,7 +176,7 @@ export default async function ReviewGate({ searchParams }: { searchParams: { run
               <Field label="Validation run">{lastValidation ? `${stateLabel(lastValidation.to_state)} · ${ago(lastValidation.created_at)}` : "None yet"}</Field>
               <Field label="Reviewer">{b.skills.filter((s) => /STANDARDS|VALIDATION|READINESS/.test(s.skill_name)).map((s) => `${s.skill_name.toLowerCase()}@${s.version}`).join(", ") || "Independent review agent"}</Field>
               <Field label="Evidence">{b.generation ? <code className="text-[11px]">{b.generation.stage_path}</code> : "No generation yet"}</Field>
-              <Field label="Decision history">{b.reviews.length ? b.reviews.map((r) => `${pretty(r.stage)}: ${pretty(r.decision)} by ${r.reviewer}`).join(" · ") : "No human decision yet"}</Field>
+              <Field label="Decision history">{b.reviews.length ? b.reviews.map((r) => `${pretty(r.stage)}: ${pretty(r.decision)} by ${/^Autopilot:/.test(r.business_justification ?? "") ? `autopilot (as ${r.reviewer})` : r.reviewer}`).join(" · ") : "No decision yet"}</Field>
             </div>
           </Card>
         </div>
@@ -184,7 +184,7 @@ export default async function ReviewGate({ searchParams }: { searchParams: { run
         <div className="flex min-w-0 flex-col gap-4">
           {gate && approveTo && gateMode !== "none" && (
             <Card title={<>{gate.name}: your decision</>} subtitle={`Human gate · ${gate.role}. The agents prepared the proposal; it continues only once a person approves.`}
-                  className="border-[var(--os-amber-line)]" action={<Btn href={`/runs/${run.run_id}/${gate.slug}`}>Read the evidence</Btn>}>
+                  className="border-[var(--os-amber-line)]" action={<Btn href={gateHref(run.run_id, gate.slug)}>Read the evidence</Btn>}>
               <GateDecision runId={run.run_id} gate={gate.name} role={gate.role} approveTo={approveTo} sendBack={sendBack}
                             mode={gateMode} approver={access.approvers[gate.privilege]} previewing={!!access.preview} />
             </Card>
@@ -210,7 +210,7 @@ export default async function ReviewGate({ searchParams }: { searchParams: { run
               {b.generation && validateMode !== "none"
                 ? <ValidateAgain runId={run.run_id} mode={validateMode} previewing={!!access.preview} variant={failed ? "primary" : "default"} />
                 : null}
-              <Action access={access} id="revalidate" href={`/runs/${run.run_id}/validation`} />
+              <Action access={access} id="revalidate" href={`/os/build/runs/${run.run_id}/validation`} />
             </div>
             {b.generation && actMode(access, ACTIONS.reviewStandards.privilege) !== "none" && (
               <div className="mt-3 border-t border-[var(--os-line)] pt-3">
@@ -221,7 +221,7 @@ export default async function ReviewGate({ searchParams }: { searchParams: { run
               </div>
             )}
             <div className="mt-3 flex flex-wrap gap-2">
-              {run.current_state === "DBT_REVIEW" && <Action access={access} id="reviewCode" label="Review the code" href={`/runs/${run.run_id}/review`} variant="mint" />}
+              {run.current_state === "DBT_REVIEW" && <Action access={access} id="reviewCode" label="Review the code" href={`/os/build/runs/${run.run_id}/review`} variant="mint" />}
               {failed && validationSkill && <Action access={access} id="editSkill" label="Open skill studio" href={`/os/skills?skill=${encodeURIComponent(validationSkill.skill_name)}`} variant="warn" />}
             </div>
           </Card>

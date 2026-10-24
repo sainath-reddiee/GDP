@@ -50,10 +50,11 @@ export function TableRunsPanel({ runId, runs, canPublish }: {
       </CardHeader>
       <CardContent className="space-y-1.5">
         {runs.map((r) => (
-          <Link key={r.run_id} href={`/runs/${r.run_id}`}
+          <Link key={r.run_id} href={`/os/build/runs/${r.run_id}`}
             className="flex items-center gap-2 rounded-lg border px-3 py-2 text-sm hover:bg-muted/50">
-            <span className="min-w-0 flex-1 truncate font-medium">{r.model_entity ?? r.run_name}</span>
-            <span className="hidden truncate font-mono text-[11px] text-muted-foreground sm:inline">{r.target_model}</span>
+            <span className="shrink-0 font-medium">{r.model_entity ?? r.run_name}</span>
+            <span className="hidden min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground sm:inline">{r.target_model}</span>
+            <span className="flex-1 sm:hidden" />
             <Badge variant={CODE_READY.includes(r.current_state) ? "success" : "outline"} className="text-[10px]">
               {r.current_state.replaceAll("_", " ").toLowerCase()}
             </Badge>

@@ -49,7 +49,7 @@ export function RunMenu({ runId, archived, canCancel }: { runId: string; archive
       </Button>
       {open && (
         <div role="menu" className="popover absolute right-0 z-30 mt-1.5 w-60 animate-pop-in p-1.5">
-          <Link href={`/runs/${runId}/audit`} role="menuitem" className={item} onClick={() => setOpen(false)}>
+          <Link href={`/os/build/runs/${runId}/audit`} role="menuitem" className={item} onClick={() => setOpen(false)}>
             <FileClock className="h-4 w-4 text-muted-foreground" />Audit trail
           </Link>
           <button type="button" role="menuitem" className={item} disabled={pending} onClick={archive}>

@@ -141,7 +141,7 @@ function ProposalCard({ p, canEdit, canRelease, pending, busy, run }: {
       </details>
       {live && p.skill_id && p.skill_name && (
         <div className="flex flex-wrap items-center gap-2 pt-1">
-          <Link href={`/skills/${encodeURIComponent(p.skill_name)}?tab=versions`} className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline">Open <ArrowRight className="h-3 w-3" /></Link>
+          <Link href={`/os/skills/registry/${encodeURIComponent(p.skill_name)}?tab=versions`} className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline">Open <ArrowRight className="h-3 w-3" /></Link>
           {canEdit && p.state === "PROPOSED" && (
             <Button size="sm" variant="outline" disabled={pending} onClick={() => run(`c${p.proposal_id}`, () => moveLabel(p.skill_name!, "candidate", p.skill_id!, "From the skill scout"), () => "It is the candidate: try it on a run from the skill's page.")}>
               {busy === `c${p.proposal_id}` ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}Make candidate

@@ -16,7 +16,7 @@ const TOUR: { key: ScreenKey; href: string; title: string; what: string }[] = [
   { key: "intake", href: "/os/intake", title: "Intake", what: "Link a domain and its sources; see what is reused and where the request routes." },
   { key: "enable", href: "/os/enable", title: "Enable", what: "Source readiness and the config-driven ingestion framework." },
   { key: "design", href: "/os/design", title: "Design", what: "The domain model, mapping proposals with confidence, open questions and the contract." },
-  { key: "build", href: "/os/build", title: "Build", what: "One run end to end: lifecycle, agents, generated artifacts, pinned skills and gates. Run history lists every run." },
+  { key: "ready", href: "/os/build/ready", title: "Build", what: "Ready to build: every run whose design is done, built end to end by autopilot up to code review; the Workbench shows one run; Run history lists every run." },
   { key: "review", href: "/os/review", title: "Review", what: "The validation gate (review and code standards agents, minimum score) and every human gate across domains." },
   { key: "skills", href: "/os/skills", title: "Skills", what: "Versioned skills, real version diffs, tests and controlled recovery." },
   { key: "release", href: "/os/release", title: "Release", what: "Pull request, promotion stages, QA and UAT signoff and what the run taught memory." },

@@ -123,7 +123,7 @@ export default async function MissionControl({ searchParams }: { searchParams: {
                           requests={mineNow} access={access} error={waiting.error} empty="Nothing waits on you" />
           )}
           <Card id="queue" title="My action queue" subtitle={`Decisions and blocked work, ${persona.short.toLowerCase()} items first`}
-                action={<Action access={access} id="viewApprovals" href="/approvals" />} pad={false}>
+                action={<Action access={access} id="viewApprovals" href="/os/review/approvals" />} pad={false}>
             {queue.length ? (
               <div className="overflow-x-auto">
                 <table className="os-table">
@@ -231,7 +231,7 @@ export default async function MissionControl({ searchParams }: { searchParams: {
         </div>
       </div>
 
-      <Card className="mt-4" title="Onboarded domains" subtitle="The estate the agents build on: each domain's model, memory and runs" action={<Btn href="/domains">Domains</Btn>}>
+      <Card className="mt-4" title="Onboarded domains" subtitle="The estate the agents build on: each domain's model, memory and runs" action={<Btn href="/os/knowledge?view=domains">Domains</Btn>}>
         <SourceError what="Domains" error={domains.error} />
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           {estate.map((d) => {

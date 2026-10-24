@@ -145,6 +145,13 @@ def validate_dbt(session, run_id: str) -> Dict[str, Any]:
     if stage.state in ("VALIDATION_FAILED", "VALIDATION_PENDING", "VALIDATION_RUNNING"):
         stage.walk(["VALIDATION_FAILED", "VALIDATION_PENDING", "VALIDATION_RUNNING"], "validation started")
         walked = True
+    elif stage.state in ("SODA_APPROVED", "DBT_PENDING", "DBT_GENERATING"):
+        # the code was generated while the run waited at the Data Quality gate: once the checks are approved, the
+        # same generation goes on to validation instead of being generated again
+        _current_generation(session, run_id)
+        stage.walk(["SODA_APPROVED", "DBT_PENDING", "DBT_GENERATING", "VALIDATION_PENDING", "VALIDATION_RUNNING"],
+                   "validation started on the generated code")
+        walked = True
     with tool_call(session, run_id, "validate_dbt", {"run_id": run_id}) as call:
         try:
             generation = _current_generation(session, run_id)

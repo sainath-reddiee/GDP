@@ -29,7 +29,7 @@ export type ScreenKey =
   | "intake" | "requests" | "requestHistory" | "onboarding"
   | "enable"
   | "design" | "newDomain" | "domains" | "stores"
-  | "build" | "pipelines" | "gold" | "lineage" | "code" | "history" | "runs"
+  | "ready" | "build" | "pipelines" | "gold" | "lineage" | "code" | "history" | "runs"
   | "review" | "governance" | "audit"
   | "skills" | "registry"
   | "release" | "sourceControl" | "qa"
@@ -59,9 +59,9 @@ const SUPER = ["*"] as const;
 export const SCREENS: Screen[] = [
   // My Work: the person's own work, the estate overview and the copilot
   { key: "work", section: "work", href: "/os", label: "My Work", exact: true, why: "everyone signed in" },
-  { key: "inbox", section: "work", href: "/work", label: "Inbox", why: "everyone signed in (requests, questions, tickets)" },
-  { key: "overview", section: "work", href: "/dashboard", label: "Overview", exact: true, why: "everyone signed in" },
-  { key: "copilot", section: "work", href: "/dashboard/copilot", label: "Copilot", view: ["AI.USE"], why: "people who may use AI" },
+  { key: "inbox", section: "work", href: "/os/work/inbox", label: "Inbox", why: "everyone signed in (requests, questions, tickets)" },
+  { key: "overview", section: "work", href: "/os/work/overview", label: "Overview", exact: true, why: "everyone signed in" },
+  { key: "copilot", section: "work", href: "/os/work/copilot", label: "Copilot", view: ["AI.USE"], why: "people who may use AI" },
 
   // Intake: asking for something, and the onboarding wizards that start it
   { key: "intake", section: "intake", href: "/os/intake", label: "New request",
@@ -71,7 +71,7 @@ export const SCREENS: Screen[] = [
 
   // Enable: onboarding sources is the Data OS Administrator's alone (registering, landing and starting the run)
   { key: "enable", section: "enable", href: "/os/enable", label: "Source readiness", view: ["SOURCE.CONNECT", "DOMAIN.ONBOARD", "CONFIG.EDIT", "INTEGRATION.MANAGE"], why: "the Data OS Administrator (onboarding sources and domains, configuring ingestion)" },
-  { key: "onboarding", section: "enable", href: "/dashboard/onboarding?type=source", label: "Onboard a source", paths: ["/dashboard/onboarding", "/dashboard/sources/new", "/onboarding"],
+  { key: "onboarding", section: "enable", href: "/os/enable/onboarding?type=source", label: "Onboard a source", paths: ["/os/enable/onboarding", "/os/design/sources/new"],
     view: ["SOURCE.CONNECT"], why: "the Data OS Administrator (onboarding a source registers it, lands it and starts its run)" },
   { key: "newDomain", section: "enable", href: "/os/enable/new-domain", label: "Onboard a domain", paths: ["/os/design/new-domain"], view: ["DOMAIN.ONBOARD"],
     why: "the Data OS Administrator (a domain's model, contract and memory); data owners request one on Intake" },
@@ -79,51 +79,53 @@ export const SCREENS: Screen[] = [
   // Design: the domain model and the stores the design is kept in
   { key: "design", section: "design", href: "/os/design", label: "Designer studio",
     view: ["MODEL.EDIT", "MODEL.APPROVE", "MAPPING.DECIDE", "MAPPING.APPROVE", "STTM.EDIT", "STTM.APPROVE", "DOMAIN.EDIT"], why: "people who model and map" },
-  { key: "domains", section: "design", href: "/domains", label: "Domains", why: "everyone signed in (stewards edit)" },
-  { key: "stores", section: "design", href: "/dashboard/store", label: "Stores",
-    paths: ["/dashboard/sources", "/dashboard/profiling", "/dashboard/modeling", "/dashboard/sttm", "/dashboard/qa-store", "/dashboard/dq-store"], view: BUILDERS, why: "people who build runs or decide their gates" },
+  { key: "domains", section: "knowledge", href: "/os/knowledge?view=domains", label: "Domains", paths: ["/os/knowledge/domains"], rail: false, under: "knowledge", why: "everyone signed in (stewards edit)" },
+  { key: "stores", section: "design", href: "/os/design/store", label: "Stores",
+    paths: ["/os/design/sources", "/os/design/profiling", "/os/design/modeling", "/os/design/sttm", "/os/design/qa-store", "/os/design/dq-store"], view: BUILDERS, why: "people who build runs or decide their gates" },
 
-  // Build: one run's workbench, every pipeline, lineage and the code
+  // Build: what is ready to build (design done), one run's workbench, lineage, the code and every run's history. The
+  // Silver and Gold pipeline lists live on under Run history (sourcing, modelling and mapping moved to Intake, Enable
+  // and Design), still guarded and reachable from there.
+  { key: "ready", section: "build", href: "/os/build/ready", label: "Ready to build", view: BUILDERS, why: "people who build runs or decide their gates" },
   { key: "build", section: "build", href: "/os/build", label: "Workbench", view: ["RUN.OPERATE", "DBT.EDIT", "REVIEW.APPROVE"], why: "people who build or review code" },
-  { key: "pipelines", section: "build", href: "/runs", label: "Silver pipeline", exact: true, view: BUILDERS, why: "people who build runs or decide their gates" },
-  { key: "gold", section: "build", href: "/gold", label: "Gold pipeline", view: BUILDERS, why: "people who build runs or decide their gates" },
-  { key: "lineage", section: "build", href: "/lineage", label: "Lineage", view: BUILDERS, why: "people who build runs or decide their gates" },
-  { key: "code", section: "build", href: "/code", label: "Code", view: BUILDERS, why: "people who build runs or decide their gates" },
+  { key: "pipelines", section: "build", href: "/os/build/runs", label: "Silver pipeline", paths: ["=/os/build/runs"], rail: false, under: "history", view: BUILDERS, why: "people who build runs or decide their gates" },
+  { key: "gold", section: "build", href: "/os/build/gold", label: "Gold pipeline", paths: ["/os/build/gold"], rail: false, under: "history", view: BUILDERS, why: "people who build runs or decide their gates" },
+  { key: "lineage", section: "build", href: "/os/build/lineage", label: "Lineage", view: BUILDERS, why: "people who build runs or decide their gates" },
+  { key: "code", section: "build", href: "/os/build/code", label: "Code", view: BUILDERS, why: "people who build runs or decide their gates" },
   { key: "history", section: "build", href: "/os/history", label: "Run history", why: "everyone signed in (every run of both pipelines, read only)" },
   // a run's own workspace is where every gate is decided, so it is open to every builder and approver
-  { key: "runs", section: "build", href: "/runs/", label: "Run workspace", paths: ["/runs/"], rail: false, under: "build", view: BUILDERS, why: "people who build runs or decide their gates" },
+  { key: "runs", section: "build", href: "/os/build/runs/", label: "Run workspace", paths: ["/os/build/runs/"], rail: false, under: "build", view: BUILDERS, why: "people who build runs or decide their gates" },
 
   // Review: the gates, the change requests, and the audit trail behind them
   { key: "review", section: "review", href: "/os/review", label: "Gates", view: [...GATE_DECIDERS, "RUN.OPERATE", "APPROVAL.VIEW", "REQUEST.CHANGES"], why: "people who decide a gate or raise change requests" },
-  { key: "governance", section: "review", href: "/approvals", label: "Approvals",
+  { key: "governance", section: "review", href: "/os/review/approvals", label: "Approvals",
     view: ["APPROVAL.VIEW", "ROLE.MANAGE", "REQUEST.CHANGES", ...GATE_DECIDERS, "MODEL.APPROVE"], why: "people who raise or decide change requests" },
 
 
   { key: "skills", section: "skills", href: "/os/skills", label: "Skill studio", view: ["SKILL.EDIT", "SKILL.RELEASE"], why: "skill authors and owners" },
-  { key: "registry", section: "skills", href: "/skills", label: "Registry", view: ["SKILL.EDIT", "SKILL.RELEASE"], why: "skill authors and owners" },
+  { key: "registry", section: "skills", href: "/os/skills/registry", label: "Registry", view: ["SKILL.EDIT", "SKILL.RELEASE"], why: "skill authors and owners" },
 
   // Release: the PR, source control and QA
   { key: "release", section: "release", href: "/os/release", label: "Release", view: ["REVIEW.APPROVE", "DBT.EDIT", "QA.EDIT", "QA.SIGNOFF"], why: "developers and QA" },
-  { key: "sourceControl", section: "release", href: "/dashboard/source-control", label: "Source control", view: ["REVIEW.APPROVE", "DBT.EDIT", "APPROVAL.VIEW"], why: "developers and reviewers" },
-  { key: "qa", section: "release", href: "/qa", label: "QA testing", view: ["QA.EDIT", "QA.SIGNOFF"], why: "QA engineers and leads" },
+  { key: "sourceControl", section: "release", href: "/os/release/source-control", label: "Source control", view: ["REVIEW.APPROVE", "DBT.EDIT", "APPROVAL.VIEW"], why: "developers and reviewers" },
+  { key: "qa", section: "release", href: "/os/release/qa", label: "QA testing", view: ["QA.EDIT", "QA.SIGNOFF"], why: "QA engineers and leads" },
 
   { key: "knowledge", section: "knowledge", href: "/os/knowledge", label: "Knowledge hub", why: "everyone signed in (shared memory; stewards curate)" },
-  { key: "memory", section: "knowledge", href: "/knowledge", label: "Enterprise Memory", why: "everyone signed in (stewards curate)" },
 
   // Run & DQ: production quality and operations
   { key: "run", section: "run", href: "/os/run", label: "Run & DQ", view: ["OPS.VIEW", "OPS.OPERATE", "SODA.EDIT", "SODA.APPROVE", "QA.EDIT"], why: "operations and quality" },
-  { key: "quality", section: "run", href: "/dashboard/quality", label: "Quality center", view: ["OPS.VIEW", "SODA.EDIT", "SODA.APPROVE", "QA.EDIT", "QA.SIGNOFF", "RUN.OPERATE"], why: "quality and operations" },
-  { key: "operations", section: "run", href: "/ops", label: "Monitoring", view: OPERATORS, why: "pipeline support and case work" },
-  { key: "incidents", section: "run", href: "/incidents", label: "Incidents", view: ["OPS.VIEW"], why: "pipeline support" },
-  { key: "resolutions", section: "run", href: "/ops/resolutions", label: "Resolutions", view: ["OPS.VIEW"], why: "pipeline support" },
-  { key: "fixes", section: "run", href: "/ops/fixes", label: "Known fixes", view: ["OPS.VIEW"], why: "pipeline support" },
-  { key: "permanentFixes", section: "run", href: "/ops/permanent-fixes", label: "Permanent fixes", view: ["OPS.VIEW"], why: "pipeline support" },
-  { key: "tickets", section: "run", href: "/tickets", label: "Tickets", paths: ["/jira"], view: ["JIRA.READ", "CASE.WORK"], why: "people who work Jira issues and cases" },
+  { key: "quality", section: "run", href: "/os/run/quality", label: "Quality center", view: ["OPS.VIEW", "SODA.EDIT", "SODA.APPROVE", "QA.EDIT", "QA.SIGNOFF", "RUN.OPERATE"], why: "quality and operations" },
+  { key: "operations", section: "run", href: "/os/run/ops", label: "Monitoring", view: OPERATORS, why: "pipeline support and case work" },
+  { key: "incidents", section: "run", href: "/os/run/incidents", label: "Incidents", view: ["OPS.VIEW"], why: "pipeline support" },
+  { key: "resolutions", section: "run", href: "/os/run/ops/resolutions", label: "Resolutions", view: ["OPS.VIEW"], why: "pipeline support" },
+  { key: "fixes", section: "run", href: "/os/run/ops/fixes", label: "Known fixes", view: ["OPS.VIEW"], why: "pipeline support" },
+  { key: "permanentFixes", section: "run", href: "/os/run/ops/permanent-fixes", label: "Permanent fixes", view: ["OPS.VIEW"], why: "pipeline support" },
+  { key: "tickets", section: "run", href: "/os/run/tickets", label: "Tickets", paths: ["/os/run/jira"], view: ["JIRA.READ", "CASE.WORK"], why: "people who work Jira issues and cases" },
 
   // Admin: a super admin's alone, people and their personas first
   { key: "people", section: "admin", href: "/os/people", label: "People & personas", view: SUPER, why: "super admins only" },
-  { key: "admin", section: "admin", href: "/admin", label: "Platform settings", view: SUPER, why: "super admins only" },
-  { key: "audit", section: "admin", href: "/audit", label: "Audit", view: SUPER, why: "super admins only" },
+  { key: "admin", section: "admin", href: "/os/admin/settings", label: "Platform settings", view: SUPER, why: "super admins only" },
+  { key: "audit", section: "admin", href: "/os/admin/audit", label: "Audit", view: SUPER, why: "super admins only" },
 
   { key: "help", href: "/os/help", label: "Help", why: "everyone signed in" },
 ];
@@ -176,7 +178,7 @@ export const ACTIONS = {
   signoffQa: { privilege: "QA.SIGNOFF", label: "Sign off QA" },
   editSkill: { privilege: "SKILL.EDIT", label: "Edit and version the skill" },
   releaseSkill: { privilege: "SKILL.RELEASE", label: "Review candidate" },
-  curateKnowledge: { privilege: "KNOWLEDGE.EDIT", label: "Curate in Enterprise Memory" },
+  curateKnowledge: { privilege: "KNOWLEDGE.EDIT", label: "Curate knowledge" },
   verifyKnowledge: { privilege: "KNOWLEDGE.EDIT", label: "Verify" },
   decideInbox: { privilege: "KNOWLEDGE.EDIT", label: "Approve" },
   operateIncident: { privilege: "OPS.OPERATE", label: "Investigate" },

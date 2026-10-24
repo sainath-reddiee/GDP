@@ -28,7 +28,7 @@ export function ModelsList({ rows, canEdit, layer = "SILVER" }: { rows: DmListRo
 
   const create = (r: DmListRow) => start(async () => {
     const res = await createModel(r.domain_id);
-    if (res.ok) { toast("ok", `Model for ${r.domain_name} created as a draft`); router.push(`/dashboard/modeling/${res.data.model_id}`); }
+    if (res.ok) { toast("ok", `Model for ${r.domain_name} created as a draft`); router.push(`/os/design/modeling/${res.data.model_id}`); }
     else toast("error", explain(res.error).message);
   });
   const baseline = () => start(async () => {
@@ -39,7 +39,7 @@ export function ModelsList({ rows, canEdit, layer = "SILVER" }: { rows: DmListRo
   const doFork = () => start(async () => {
     if (!fork?.model_id) return;
     const res = await forkModel(fork.model_id, name.trim().toUpperCase());
-    if (res.ok) { toast("ok", `${res.data.domain} forked from ${fork.domain_name}`); router.push(`/dashboard/modeling/${res.data.model_id}`); }
+    if (res.ok) { toast("ok", `${res.data.domain} forked from ${fork.domain_name}`); router.push(`/os/design/modeling/${res.data.model_id}`); }
     else toast("error", explain(res.error).message);
   });
 
@@ -48,7 +48,7 @@ export function ModelsList({ rows, canEdit, layer = "SILVER" }: { rows: DmListRo
       <div className="flex flex-wrap items-center gap-2">
         <div className="flex rounded-lg border p-0.5 text-xs" role="group" aria-label="Layer">
           {(["SILVER", "GOLD"] as const).map((l) => (
-            <Link key={l} href={`/dashboard/modeling?layer=${l}`} aria-pressed={layer === l}
+            <Link key={l} href={`/os/design/modeling?layer=${l}`} aria-pressed={layer === l}
                   className={cn("rounded-md px-2.5 py-1", layer === l ? LAYER_META[l].solid : "text-muted-foreground hover:bg-muted")}>
               {LAYER_META[l].label} models</Link>
           ))}
@@ -80,7 +80,7 @@ export function ModelsList({ rows, canEdit, layer = "SILVER" }: { rows: DmListRo
                   </p>
                   {r.counts && <p className="text-xs tabular-nums">{r.counts.entities} entities · {r.counts.columns} columns · {r.counts.relationships} relationships</p>}
                   <div className="mt-auto flex items-center gap-2 pt-1">
-                    <Link href={`/dashboard/modeling/${r.model_id}`} className="text-sm font-medium text-primary hover:underline">Open model</Link>
+                    <Link href={`/os/design/modeling/${r.model_id}`} className="text-sm font-medium text-primary hover:underline">Open model</Link>
                     {canEdit && r.approved_version && (
                       <button type="button" onClick={() => { setFork(r); setName(""); }} className="ml-auto inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
                         <GitFork className="h-3.5 w-3.5" /> Fork</button>

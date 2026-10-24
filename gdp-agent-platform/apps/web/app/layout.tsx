@@ -60,6 +60,8 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
   const classic = mayUseClassic(access.own) && jar.get(CLASSIC_COOKIE)?.value === "1";
   // the rail: the entries with at least one tab the person may open; each opens its first such tab
   const open = SCREENS.filter((s) => s.rail !== false && canSee(access, s.key));
+  // what the person could open with all their privileges: the difference is what the chosen persona hides
+  const ownOpen = SCREENS.filter((s) => s.rail !== false && canSee(access.own, s.key));
   const sections = SECTIONS.flatMap((sec) => {
     const first = open.find((s) => s.section === sec.key);
     return first ? [{ key: sec.key, label: sec.label, href: first.href }] : [];
@@ -82,8 +84,12 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
                 environment: (process.env.AIP_ENVIRONMENT ?? "DEV").toUpperCase(),
                 sections,
                 screens: open.map(({ key, href, label, exact, section }) => ({ key, href, label, exact, section })),
-                personas: access.personas.map(({ id, label, short }) => ({ id, label, short })),
+                personas: access.personas.map(({ id, label, short, home, responsibility }) => ({ id, label, short, home, responsibility })),
                 persona: access.persona.id,
+                scope: access.governance && !access.preview
+                  ? { label: access.persona.label, open: open.length, hidden: ownOpen.length - open.length, privileges: access.privileges.length,
+                      ownPrivileges: access.own.privileges.length, full: access.privileges.includes("*") }
+                  : null,
                 preview: access.preview ? { current: access.preview.label } : null,
                 headerStart: <DomainSwitcher domains={domains} scope={getDomainScope()} />,
                 headerEnd: <><NewMenu privileges={privileges} />{account}</>,

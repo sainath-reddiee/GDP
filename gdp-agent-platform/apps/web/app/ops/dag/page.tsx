@@ -21,7 +21,7 @@ async function load<T>(fn: () => Promise<T>): Promise<{ data: T; error: null; st
 function Crumb({ env }: { env?: string }) {
   return (
     <p className="eyebrow">
-      <Link href={env ? `/ops?${new URLSearchParams({ env })}` : "/ops"} className="hover:underline">Pipelines</Link>
+      <Link href={env ? `/os/run/ops?${new URLSearchParams({ env })}` : "/os/run/ops"} className="hover:underline">Pipelines</Link>
     </p>
   );
 }

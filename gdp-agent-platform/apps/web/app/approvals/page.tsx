@@ -35,7 +35,7 @@ export default async function ApprovalsPage({ searchParams }: { searchParams: { 
                   description="Changes that need another role's approval. Approving applies the change with your access; every decision is logged." />
       <nav role="tablist" className="flex gap-1 border-b">
         {scopes.map((s) => (
-          <Link key={s.key} href={`/approvals?scope=${s.key}`} role="tab" aria-selected={s.key === scope}
+          <Link key={s.key} href={`/os/review/approvals?scope=${s.key}`} role="tab" aria-selected={s.key === scope}
                 className={cn("-mb-px border-b-2 px-3 py-2 text-sm font-medium",
                               s.key === scope ? "border-primary" : "border-transparent text-muted-foreground hover:text-foreground")}>
             {s.label}
@@ -48,7 +48,7 @@ export default async function ApprovalsPage({ searchParams }: { searchParams: { 
           {fixes.map((a) => (
             <div key={a.approval_id} className="surface space-y-2 p-4">
               <p className="text-sm font-medium">
-                <Link href={`/ops/resolutions/${encodeURIComponent(a.failure_id)}`} className="hover:text-primary">{a.dag_id} · {a.task_id}</Link>
+                <Link href={`/os/run/ops/resolutions/${encodeURIComponent(a.failure_id)}`} className="hover:text-primary">{a.dag_id} · {a.task_id}</Link>
                 <span className="ml-2 text-xs font-normal text-muted-foreground">{a.exception_class ?? "Airflow failure"}</span>
               </p>
               <FixDecision approvalId={a.approval_id} fixTitle={a.issue_title} approver={a.approver} compact proposal={a.kind === "PROPOSAL" ? { cause: a.cause, rationale: a.rationale, steps: a.steps } : null} />

@@ -188,7 +188,7 @@ function Overview({ detail, card, prod, cand, categories, byId, canEdit, onMoveC
         <section className="rounded-xl border bg-card p-4 shadow-sm">
           <h3 className="text-sm font-semibold">Where it is used</h3>
           <p className="mb-3 text-xs text-muted-foreground">Stages load their bound skills, in order, before they act.
-            Change the bindings in <Link href="/admin?section=skills" className="text-primary hover:underline">Admin, Skills per stage</Link>.</p>
+            Change the bindings in <Link href="/os/admin/settings?section=skills" className="text-primary hover:underline">Admin, Skills per stage</Link>.</p>
           {stages.length ? (
             <div className="flex flex-wrap gap-2">
               {stages.map((b) => (
@@ -205,7 +205,7 @@ function Overview({ detail, card, prod, cand, categories, byId, canEdit, onMoveC
               <h4 className="mb-1.5 mt-4 text-xs font-semibold">Sub-skills</h4>
               <div className="flex flex-wrap gap-1.5">
                 {detail.children.map((c) => (
-                  <Link key={c} href={`/skills/${encodeURIComponent(c)}`} className="rounded-md border px-2 py-0.5 text-xs hover:border-primary hover:text-primary">{pretty(c)}</Link>
+                  <Link key={c} href={`/os/skills/registry/${encodeURIComponent(c)}`} className="rounded-md border px-2 py-0.5 text-xs hover:border-primary hover:text-primary">{pretty(c)}</Link>
                 ))}
               </div>
             </>
@@ -395,7 +395,7 @@ function RunsTable({ runs, byId }: { runs: SkillDetail["runs"]; byId: Map<string
           const v = r.skill_id ? byId.get(r.skill_id) : undefined;
           return (
             <tr key={`${r.run_id}-${r.skill_id}`}>
-              <td className="py-1.5"><Link href={`/runs/${r.run_id}`} className="font-medium hover:text-primary">{r.run_name ?? r.run_id.slice(0, 8)}</Link>
+              <td className="py-1.5"><Link href={`/os/build/runs/${r.run_id}`} className="font-medium hover:text-primary">{r.run_name ?? r.run_id.slice(0, 8)}</Link>
                 {r.current_state && <span className="ml-1.5 text-[10px] text-muted-foreground">{r.current_state}</span>}</td>
               <td>{v ? versionLabel(v) : r.version ? `v${r.version.split("+")[0]}` : ""}</td>
               <td>{r.picked_by === "override" ? <LabelPill label="candidate" version="trial" /> : <span className="text-muted-foreground">{r.picked_by ?? "production"}</span>}</td>
@@ -421,7 +421,7 @@ function Usage({ detail, byId, canEdit, onClear }: {
           <ul className="divide-y text-xs">
             {detail.overrides.map((o) => (
               <li key={o.run_id} className="flex items-center gap-3 py-2">
-                <Link href={`/runs/${o.run_id}`} className="font-medium hover:text-primary">{o.run_name ?? o.run_id.slice(0, 8)}</Link>
+                <Link href={`/os/build/runs/${o.run_id}`} className="font-medium hover:text-primary">{o.run_name ?? o.run_id.slice(0, 8)}</Link>
                 <LabelPill label="candidate" version={versionLabel(byId.get(o.skill_id))} />
                 <span className="text-muted-foreground">by {o.set_by} · {ago(o.set_at)}</span>
                 {canEdit && <Button size="sm" variant="ghost" className="ml-auto" onClick={() => onClear(o.run_id)}>Back to production</Button>}

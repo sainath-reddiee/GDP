@@ -12,7 +12,7 @@ Every screen reads live platform data through the endpoints the classic pages al
 | Intake | New request, Requests, Request history |
 | Enable | Source readiness, Onboard a source, Onboard a domain (the Data OS Administrator's alone) |
 | Design | Designer studio, Domains, Stores (the six stores, with their own store tabs) |
-| Build | Workbench (and every `/runs/[id]` workspace), Silver pipeline, Gold pipeline, Lineage, Code, Run history |
+| Build | Ready to build, Workbench (and every `/runs/[id]` workspace), Lineage, Code, Run history (with the Silver and Gold pipeline lists) |
 | Review | Gates, Approvals, Audit |
 | Skills | Skill studio, Registry (including proposed skills) |
 | Release | Release, Source control, QA testing |
@@ -219,6 +219,16 @@ An independent agent reviews every generated dbt project against the written sta
 - **When Cortex fails:** the review becomes one `SKIPPED` check with the reason. Skipped checks are not evaluated, so the gate stands on the other checks.
 - **Running it alone:** `CORE.REVIEW_STANDARDS` (`POST /api/runs/{id}/standards`, "Review standards" on Review, `RUN.OPERATE`) reports the areas without recording a validation or moving the run. Every review records its tool call and its Cortex cost (agent `CODE_STANDARDS`).
 - **Improving it:** a new version of `CODE-STANDARDS-REVIEW` in Skill Studio, promoted, changes how the next review judges. A better generation playbook, after regenerating, changes the code it judges. Review links to the standards skill when a standards area failed.
+
+## Build: ready to build, end to end
+
+Sourcing moved to Intake and Enable, and modelling and mapping to Design, so Build starts where design ends. Build, Ready to build (`/os/build/ready`, the Build rail entry) lists every live Silver run, table by table, grouped by domain (`GET /api/build/readiness`, `services/workflow/readiness.py`):
+
+- **Design readiness:** each run shows four checks: the domain model approved, the field mapping approved, the transformations (STTM) approved, and the data quality checks approved. Readiness is the share of the first three. Data quality approval runs in parallel with the build, so it is shown but never waited for.
+- **Status:** Ready to build; Building; Validation flagged; In review; Model not approved; In design; Being onboarded; Failed; Built (hidden unless asked for). A run not ready says who acts next and links where they act.
+- **Linked:** each run names the onboarding request it serves, its source and, for a table run, the run it belongs to; a flow ribbon counts the runs at Intake, Enable, Design, Build and Review.
+- **Build end to end:** autopilot (`/api/runs/{id}/autopilot`, `services/workflow/autopilot.py`) runs every automatic step of a ready run in order: generate the code and the data quality checks, then validate with the review and standards agents. It stops at the code review gate a person owns. Each step passes the same governance check as a click (`RUN.OPERATE`); a preview of another role disables it. "Build all ready" starts every ready run of a domain. The Workbench offers the same button for a ready run.
+- **The Workbench** is one run's detail, opened from the board. The Silver and Gold pipeline lists left Build's tabs: they open from Run history ("Silver pipeline list", "Gold pipeline list") and stay guarded as before.
 
 ## Run and request history
 

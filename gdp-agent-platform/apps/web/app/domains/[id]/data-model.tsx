@@ -111,7 +111,7 @@ export function DataModel({ domainId, domainName }: { domainId: string; domainNa
   if (error) return <section className="surface p-4 text-sm text-destructive" role="alert">The data model could not be read: {error}</section>;
   if (!data) return <section className="surface p-4 text-xs text-muted-foreground"><Loader2 className="mr-1 inline h-3 w-3 animate-spin" />Drawing the data model…</section>;
   const m = data.model;
-  const workbench = m ? `/dashboard/modeling/${encodeURIComponent(m.model_id)}` : "/dashboard/modeling";
+  const workbench = m ? `/os/design/modeling/${encodeURIComponent(m.model_id)}` : "/os/design/modeling";
   const mayImport = canAct("MODEL.EDIT");
   const mayExamples = canAct("KNOWLEDGE.EDIT");
   const draft = view === "draft";

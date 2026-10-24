@@ -31,8 +31,8 @@ function Tabs({ view, env }: { view: "dags" | "reliability"; env?: string }) {
   );
   return (
     <nav className="flex gap-1 border-b" aria-label="Pipelines views">
-      {tab("dags", "DAGs", env ? `/ops?${new URLSearchParams({ env })}` : "/ops")}
-      {tab("reliability", "Reliability", "/ops?view=reliability")}
+      {tab("dags", "DAGs", env ? `/os/run/ops?${new URLSearchParams({ env })}` : "/os/run/ops")}
+      {tab("reliability", "Reliability", "/os/run/ops?view=reliability")}
     </nav>
   );
 }
@@ -44,7 +44,7 @@ export default async function OpsPage({ searchParams }: { searchParams?: Params 
     <PageHeader eyebrow="Operations" title="Pipelines"
                 description="Airflow DAG health from Amazon MWAA: what failed, what is running, how long runs take and how often they succeed. Open a DAG for its runs, task grid and logs."
                 actions={access.canManage ? (
-                  <Link href="/admin?section=integrations&view=airflow" className="inline-flex items-center gap-1.5 rounded-lg border bg-card px-3 py-1.5 text-sm font-medium shadow-xs hover:bg-muted">
+                  <Link href="/os/admin/settings?section=integrations&view=airflow" className="inline-flex items-center gap-1.5 rounded-lg border bg-card px-3 py-1.5 text-sm font-medium shadow-xs hover:bg-muted">
                     <Settings2 className="h-4 w-4" />Airflow environments
                   </Link>
                 ) : undefined} />

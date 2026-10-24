@@ -99,7 +99,7 @@ export type TargetModel = { table: string; description: string | null; active: b
 
 function refreshDomain(domainId: string) {
   refreshDomains();
-  revalidatePath(`/domains/${domainId}`);
+  revalidatePath(`/os/knowledge/domains/${domainId}`);
 }
 
 export async function domainDiff(domainId: string, base: number, head: number) {
@@ -212,7 +212,7 @@ export async function saveDomainSkills(domainId: string, skills: Omit<DomainSkil
                                        pipeline: "SILVER" | "GOLD" = "SILVER") {
   const r = await attemptValue(() => api<DomainSkills>(`/api/domains/${encodeURIComponent(domainId)}/skills?pipeline=${pipeline}`,
     { method: "PUT", body: JSON.stringify({ skills }) }));
-  revalidatePath(`/domains/${domainId}`);
+  revalidatePath(`/os/knowledge/domains/${domainId}`);
   return r;
 }
 
@@ -238,7 +238,7 @@ export async function playbookPreview(domainId: string, pipeline: "SILVER" | "GO
 export async function saveDomainConventions(domainId: string, pipeline: "SILVER" | "GOLD", overrides: Record<string, unknown>, note?: string) {
   const r = await attemptValue(() => api<Conventions>(`/api/domains/${encodeURIComponent(domainId)}/conventions?pipeline=${pipeline}`,
     { method: "PUT", body: JSON.stringify({ overrides, note: note || null }) }));
-  revalidatePath(`/domains/${domainId}`);
+  revalidatePath(`/os/knowledge/domains/${domainId}`);
   return r;
 }
 export async function mdmLayer(domainId: string) {
@@ -267,7 +267,7 @@ export async function domainDocuments(domainId: string) {
 export async function linkConfluence(domainId: string, url: string) {
   const r = await attemptValue(() => api<{ source_id: string; title: string; kind: string; result: { read: number; unchanged: number; proposed: number } }>(
     `/api/domains/${encodeURIComponent(domainId)}/documents/confluence`, { method: "POST", body: JSON.stringify({ url }) }));
-  revalidatePath(`/domains/${domainId}`);
+  revalidatePath(`/os/knowledge/domains/${domainId}`);
   return r;
 }
 export type UploadedDocument = { file_name: string; source_id?: string; kind?: string; size?: number; read_status?: string;
@@ -275,7 +275,7 @@ export type UploadedDocument = { file_name: string; source_id?: string; kind?: s
 export async function uploadDomainDocuments(domainId: string, form: FormData) {
   const r = await attemptValue(() => apiForm<{ documents: UploadedDocument[]; skipped?: number }>(
     `/api/domains/${encodeURIComponent(domainId)}/documents/upload`, form));
-  revalidatePath(`/domains/${domainId}`);
+  revalidatePath(`/os/knowledge/domains/${domainId}`);
   return r;
 }
 export async function refreshDocument(domainId: string, sourceId: string) {
@@ -360,7 +360,7 @@ export async function domainMdmCoverage(domainId: string) {
 export async function saveDomainMdm(domainId: string, consumes: { domain: string; silver_column: string; gold_column: string }[]) {
   const r = await attemptValue(() => api<DomainMdm>(`/api/domains/${encodeURIComponent(domainId)}/mdm`,
     { method: "PUT", body: JSON.stringify({ consumes }) }));
-  revalidatePath(`/domains/${domainId}`);
+  revalidatePath(`/os/knowledge/domains/${domainId}`);
   return r;
 }
 
@@ -385,7 +385,7 @@ export async function uploadReferences(domainId: string, form: FormData) {
   const r = await attemptValue(() => apiForm<{ references: { file_name: string; reference_id?: string; kind?: ReferenceKind;
     duplicate?: boolean; error?: string; detected?: { kind: string; why: string } }[]; skipped: number }>(
     `/api/domains/${encodeURIComponent(domainId)}/references`, form));
-  revalidatePath(`/domains/${domainId}`);
+  revalidatePath(`/os/knowledge/domains/${domainId}`);
   return r;
 }
 export async function addSchemaReference(domainId: string, body: { database: string; schema: string; layer: string; kind: "DATA_MODEL" | "MDM_SCHEMA" }) {
@@ -400,7 +400,7 @@ export async function useReferenceAsModel(domainId: string, rid: string, replace
   const r = await attemptValue(() => api<{ model_id: string; version: number; layer: string }>(
     `/api/domains/${encodeURIComponent(domainId)}/references/${encodeURIComponent(rid)}/use-as-model`,
     { method: "POST", body: JSON.stringify({ replace }) }));
-  revalidatePath(`/domains/${domainId}`);
+  revalidatePath(`/os/knowledge/domains/${domainId}`);
   return r;
 }
 export async function rescoreReferences(domainId: string) {
@@ -411,7 +411,7 @@ export async function useReferenceAsMdm(domainId: string, rid: string) {
   const r = await attemptValue(() => api<{ domain_id: string; role: string }>(
     `/api/domains/${encodeURIComponent(domainId)}/references/${encodeURIComponent(rid)}/use-as-mdm`,
     { method: "POST", body: JSON.stringify({}) }));
-  revalidatePath(`/domains/${domainId}`);
+  revalidatePath(`/os/knowledge/domains/${domainId}`);
   return r;
 }
 export async function withdrawReference(domainId: string, rid: string) {

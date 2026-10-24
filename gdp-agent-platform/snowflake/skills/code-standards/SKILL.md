@@ -1,7 +1,7 @@
 ---
 name: CODE-STANDARDS-REVIEW
 type: VALIDATION
-version: 1.0.0
+version: 1.0.2
 description: How the code standards agent reviews a generated dbt project against the platform's written standards, area by area, before code review.
 ---
 
@@ -22,18 +22,29 @@ reports a preference the standards do not state.
 - When the generated code follows a documented exception (an STTM anomaly, a domain contract override), it is not
   a finding.
 - Do not invent files, tables or columns. Judge only what is in the project and the approved mapping.
+- Read `release/generation-report.json` first: it records the run's standard (GDP or generic), each target column's
+  source type, target type and the cast the generator applied. Judge types and layout against it, not against a guess.
 
 ## Areas
 
 ### NAMING: naming and layering
-- Model files carry their layer prefix: `stg_` in staging, `int_` in intermediate, `dim_` or `fct_` in marts; Silver
-  hubs and their HIST follow the playbook's naming.
+- Judge the layout by the run's standard. A generic (non-GDP) run lands each table in
+  `models/<domain>/landing/landing_<table>.sql`, builds `models/<domain>/<table>.sql` from a snapshot in
+  `snapshots/<table>_snapshot.sql`: that layout is correct, `landing_` is its staging prefix. A GDP run follows its
+  playbook's Silver hub and HIST naming. `stg_`, `int_`, `dim_` and `fct_` apply only where a playbook uses them.
 - Column names are the approved target names from the mapping, upper or lower case as the playbook says, never a
   source name left in place.
-- One model per file; file name equals model name.
+- One SQL model per file, file name equals model name. Schema YAML follows the dbt convention `_<model>.yml`
+  (one file documents its model); that is not a naming violation.
 
 ### TYPES: casts and data types
-- Every target column is cast explicitly to its target data type.
+- Casts only on a type mismatch (GDP-DBT-ONBOARD-SOURCE Rule 2, the generator's rulebook): a column whose source
+  type equals its target type is passed through, and that is correct. A mismatch is a different type family (DATE to
+  TIMESTAMP_NTZ, NUMBER to FLOAT, TEXT to NUMBER or DATE) or a different numeric precision or scale.
+- Every mismatch must be converted explicitly in the model; a mismatch left unconverted is an error.
+- A text column carried into a target with a declared length (TEXT to VARCHAR(100)) is not a mismatch under Rule 2:
+  it is passed through, and the Soda length checks guard the values. Mention it as a warning only when no Soda
+  length check covers the column.
 - Text columns are trimmed and empty strings turned into NULL (`NULLIF(TRIM(col), '')`) where the playbook requires it.
 - Dates, timestamps and numbers use the playbook's safe conversion (`TRY_TO_*`) where source values can be invalid.
 
@@ -44,9 +55,12 @@ reports a preference the standards do not state.
 - Deduplication keeps the latest record by the playbook's ordering; SCD1 and HIST handling follow the playbook.
 
 ### TESTS: tests and data quality
-- Required columns carry `not_null`; business keys carry `unique` (or the combination test the playbook names).
+- The business key (`source_unique_id`) carries `not_null` and `unique` (or the combination test the playbook names).
+- `not_null` is required only on columns the approved mapping marks required (a nullable rule or required flag). A
+  column the mapping leaves nullable needs none; the Soda missing checks watch it.
 - Columns with accepted values in the mapping carry `accepted_values`.
-- The Soda checks file covers the same required columns and keys.
+- A Soda duplicate check on the business key, on top of the dbt `unique` test, is recommended: its absence is a
+  warning, not an error.
 
 ### DOCS: documentation and sources
 - Every model and its columns are described in YAML.
@@ -64,3 +78,13 @@ Each area is one validation check (`STANDARDS_NAMING`, `STANDARDS_TYPES`, ...). 
 lowers the validation score and, while `validation.standards_block` holds, its errors block code review. Improving
 this skill (a new version in Skill Studio, then promoted) changes how the next review judges; improving a generation
 playbook and regenerating changes the code it judges.
+
+## Changes
+
+- 1.0.2: text-length narrowing follows Rule 2 exactly: not a type mismatch (the generator passes text through and
+  the Soda length checks guard it), a warning only without a Soda length check. 1.0.1 had made it an error, which
+  the rulebook does not.
+- 1.0.1: naming judged by the run's standard (the generic `landing_` layout and `_<model>.yml` are correct); casts only
+  on a type mismatch, with text narrowing named as one; `not_null` only where the mapping requires it; a Soda
+  duplicate check on the key is a recommendation. Grounded in the generator's rulebook, after v1.0.0 flagged correct
+  code on a generic run.

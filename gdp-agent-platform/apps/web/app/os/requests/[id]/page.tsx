@@ -44,20 +44,20 @@ const EVENT: Record<string, (e: RequestEvent) => string> = {
 function actHref(w: Wait, item: RequestItem | undefined, domainId: string | null, product: boolean, requestId: string): string | null {
   // a domain to onboard opens the administrator's domain wizard for this request; a retired one is restored in Domains
   if (w.privilege === "DOMAIN.ONBOARD") return `/os/enable/new-domain?${new URLSearchParams({ request: requestId })}`;
-  if (w.privilege === "DOMAIN.EDIT") return "/domains";
-  if (w.privilege === "MODEL.APPROVE" || w.privilege === "MODEL.EDIT") return domainId ? `/domains/${domainId}` : "/domains";
+  if (w.privilege === "DOMAIN.EDIT") return "/os/knowledge?view=domains";
+  if (w.privilege === "MODEL.APPROVE" || w.privilege === "MODEL.EDIT") return domainId ? `/os/knowledge/domains/${domainId}` : "/domains";
   if (item?.run_id) {
     return ["MAPPING.APPROVE", "STTM.APPROVE", "SODA.APPROVE", "REVIEW.APPROVE"].includes(w.privilege)
       ? `/os/review?run=${item.run_id}` : `/os/build?run=${item.run_id}`;
   }
-  if (w.privilege === "RUN.CREATE") return product ? "/gold" : "/os/build";
+  if (w.privilege === "RUN.CREATE") return product ? "/os/build/gold" : "/os/build";
   if (w.privilege === "SOURCE.CONNECT" || w.privilege === "PROFILE.RUN") {
     // a source to register, or whose run is to start, opens the administrator's wizard for this request (Enable shows
     // the same); one unreachable or not landed goes to the source store
     if (item && (!item.source_system_id || item.status === "NO_RUN" || item.status === "ATTENTION")) {
-      return `/dashboard/onboarding?type=source&${new URLSearchParams({ request: requestId, item: item.item_id, name: item.source_name })}`;
+      return `/os/enable/onboarding?type=source&${new URLSearchParams({ request: requestId, item: item.item_id, name: item.source_name })}`;
     }
-    return item?.source_system_id ? "/dashboard/sources" : "/os/enable";
+    return item?.source_system_id ? "/os/design/sources" : "/os/enable";
   }
   return null;
 }

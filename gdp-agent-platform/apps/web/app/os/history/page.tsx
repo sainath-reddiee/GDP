@@ -60,7 +60,12 @@ export default async function RunHistoryPage({ searchParams }: { searchParams: {
   return (
     <>
       <PageHeader eyebrow={`${access.persona.label} / Build`} title="Run history"
-                  subtitle="Every run of the Silver and Gold pipelines, finished or not: how it ended, every validation attempt and who decided its gates." />
+                  subtitle="Every run of the Silver and Gold pipelines, finished or not: how it ended, every validation attempt and who decided its gates."
+                  actions={(canSee(access, "pipelines") || canSee(access, "gold")) ? <>
+                    {/* the pipelines' own lists (stage filters, tags, archiving), from before Intake, Enable and Design took sourcing, modelling and mapping */}
+                    {canSee(access, "pipelines") && <Btn href="/os/build/runs">Silver pipeline list</Btn>}
+                    {canSee(access, "gold") && <Btn href="/os/build/gold">Gold pipeline list</Btn>}
+                  </> : undefined} />
       <SourceError what="Runs" error={runs.error} />
       <SourceError what="Validation history" error={history.error} />
 

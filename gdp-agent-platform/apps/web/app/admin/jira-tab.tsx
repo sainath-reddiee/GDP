@@ -47,7 +47,7 @@ export function JiraTab({ status, may, onMsg }: { status: JiraStatus | null; may
     if (r.ok) { setClientId(""); router.refresh(); }
   });
   const connect = () => start(async () => {
-    const r = await connectJira("/admin?section=integrations&view=jira");
+    const r = await connectJira("/os/admin/settings?section=integrations&view=jira");
     if (r.ok) window.location.href = r.data.url;
     else onMsg({ tone: "error", text: r.error });
   });

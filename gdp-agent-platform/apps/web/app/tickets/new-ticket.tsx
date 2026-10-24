@@ -87,7 +87,7 @@ export function NewTicket({ open, onClose, defaultProject, onCreated }: {
                  Open in Jira <ExternalLink className="h-3.5 w-3.5" />
                </a>
                <button type="button" onClick={() => { onCreated(done.key); close(); }} className="h-9 rounded-lg border px-3 text-sm hover:bg-muted">View ticket</button>
-               <Link href={`/dashboard/copilot?jira=${encodeURIComponent(done.key)}`}
+               <Link href={`/os/work/copilot?jira=${encodeURIComponent(done.key)}`}
                      className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-primary px-3 text-sm font-medium text-primary-foreground">
                  <Bot className="h-4 w-4" /> Work on it in the Copilot
                </Link>

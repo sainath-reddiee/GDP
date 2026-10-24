@@ -62,12 +62,12 @@ export default async function NewDomain({ searchParams }: { searchParams: { how?
                               .map((d) => ({ domain_id: d.domain_id, domain_name: d.domain_name, label: displayDomain(d.domain_name) ?? d.domain_name }))} />
         </div>
         <FormatsMatrix />
-        <Panel title="Domains on the platform" icon={Boxes} action={<Link href="/domains" className="text-xs font-medium text-primary hover:underline">Manage domains</Link>}>
+        <Panel title="Domains on the platform" icon={Boxes} action={<Link href="/os/knowledge?view=domains" className="text-xs font-medium text-primary hover:underline">Manage domains</Link>}>
           {!active.length ? <p className="text-sm text-muted-foreground">No domains registered yet.</p> : (
             <ul className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
               {active.map((d) => (
                 <li key={d.domain_id}>
-                  <Link href={`/domains/${d.domain_id}`} className="block rounded-lg border px-3 py-2 transition hover:border-primary/40 hover:bg-accent/40">
+                  <Link href={`/os/knowledge/domains/${d.domain_id}`} className="block rounded-lg border px-3 py-2 transition hover:border-primary/40 hover:bg-accent/40">
                     <p className="font-mono text-sm font-medium">{d.domain_name}</p>
                     <p className="text-xs text-muted-foreground">{d.target_tables ?? 0} tables · {d.knowledge_items ?? 0} knowledge items</p>
                   </Link>

@@ -174,7 +174,7 @@ function TicketsShortcut({ privileges }: { privileges?: string[] | null }) {
   if (!allowed) return null;
   const label = open ? `Tickets: ${open} open ticket${open === 1 ? "" : "s"} assigned to you` : "Tickets";
   return (
-    <Link href="/tickets" aria-label={label} title={label} data-testid="tickets-shortcut"
+    <Link href="/os/run/tickets" aria-label={label} title={label} data-testid="tickets-shortcut"
           className="relative grid h-9 w-9 place-items-center rounded-xl border border-border/80 bg-card/70 text-muted-foreground shadow-xs transition hover:border-primary/40 hover:text-foreground">
       <Ticket className="h-4 w-4" />
       {!!open && (
@@ -192,7 +192,7 @@ function CopilotShortcut({ privileges }: { privileges?: string[] | null }) {
   const allowed = !privileges || privileges.includes("*") || privileges.includes("AI.USE");
   if (!allowed) return null;
   return (
-    <Link href="/dashboard/copilot" title="Copilot chat (Ctrl+J for a quick question about this page)" data-testid="copilot-shortcut"
+    <Link href="/os/work/copilot" title="Copilot chat (Ctrl+J for a quick question about this page)" data-testid="copilot-shortcut"
           className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-border/80 bg-card/70 px-3 text-sm font-medium text-muted-foreground shadow-xs transition hover:border-agent/40 hover:text-agent">
       <Sparkles className="h-4 w-4" /><span className="hidden lg:inline">Copilot</span>
     </Link>

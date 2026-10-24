@@ -71,10 +71,10 @@ export default async function CodeAndRelease({ searchParams }: { searchParams: {
         subtitle="Agent-generated code enters the normal SDLC: a pull request, CI evidence, QA and UAT signoff, then a controlled release. Nothing is merged or deployed automatically."
         actions={<>
           <RunPicker base="/os/release" current={run.run_id} runs={runOptions(runs.data.runs)} />
-          <Action access={access} id="openDbtStudio" label="dbt studio" href={`/runs/${run.run_id}/dbt`} icon={<FileCode2 className="h-3.5 w-3.5" />} />
+          <Action access={access} id="openDbtStudio" label="dbt studio" href={`/os/build/runs/${run.run_id}/dbt`} icon={<FileCode2 className="h-3.5 w-3.5" />} />
           {run.current_state === "DBT_REVIEW"
             ? <Action access={access} id="reviewCode" label="Review and decide" href={`/os/review?run=${run.run_id}`} variant="primary" />
-            : <Btn href="/dashboard/source-control" variant="primary"><GitPullRequest className="h-3.5 w-3.5" /> Source control</Btn>}
+            : <Btn href="/os/release/source-control" variant="primary"><GitPullRequest className="h-3.5 w-3.5" /> Source control</Btn>}
         </>}
       />
       {validated
@@ -87,7 +87,7 @@ export default async function CodeAndRelease({ searchParams }: { searchParams: {
         <Kpi label="Generated artifacts" value={b.artifacts.length} hint={b.generation ? `generation v${b.generation.generation_version} · ${ago(b.generation.created_at)}` : "no generation"} icon={FileCode2} tone="green" />
         <Kpi label="Validation score" value={score.score === null ? "–" : `${score.score}%`} hint={`${score.passed}/${score.total} checks`} icon={ShieldCheck} tone={validated ? "green" : "red"} />
         <Kpi label="QA tests" value={qa.tests.length} hint={qa.run ? `${qaPassed} passed · ${qaFailed} failed · ${qa.run.not_run} not run` : "pack generated, not executed"} icon={FlaskConical} tone="blue" />
-        <Kpi label="Open pull requests" value={prs.data.counts.open} hint={`${prs.data.counts.merged} merged across the platform`} icon={GitPullRequest} tone="purple" href="/dashboard/source-control" />
+        <Kpi label="Open pull requests" value={prs.data.counts.open} hint={`${prs.data.counts.merged} merged across the platform`} icon={GitPullRequest} tone="purple" href="/os/release/source-control" />
       </div>
 
       <Card className="mb-4" title="Promotion stages" subtitle="Every gate between generated code and production, from the run's real state">
@@ -109,7 +109,7 @@ export default async function CodeAndRelease({ searchParams }: { searchParams: {
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
         <div className="flex min-w-0 flex-col gap-4">
           <Card title="Pull request" subtitle={repo ? `${repo.name} · ${repo.git_url.replace(/^https?:\/\//, "")}` : "No repository connected"}
-                action={runPrs[0]?.pr_url ? <Btn href={runPrs[0].pr_url} external>Open on Git</Btn> : <Action access={access} id="publishPr" href={`/runs/${run.run_id}/dbt`} />}>
+                action={runPrs[0]?.pr_url ? <Btn href={runPrs[0].pr_url} external>Open on Git</Btn> : <Action access={access} id="publishPr" href={`/os/build/runs/${run.run_id}/dbt`} />}>
             {runPrs.length ? (
               <div className="os-divide">
                 {runPrs.map((p, i) => (
@@ -165,7 +165,7 @@ export default async function CodeAndRelease({ searchParams }: { searchParams: {
         </div>
 
         <div className="flex min-w-0 flex-col gap-4">
-          <Card title="QA and UAT workbench" subtitle="The generated test pack and its signoff" action={<Action access={access} id="runQa" href={`/runs/${run.run_id}/qa`} />}>
+          <Card title="QA and UAT workbench" subtitle="The generated test pack and its signoff" action={<Action access={access} id="runQa" href={`/os/build/runs/${run.run_id}/qa`} />}>
             {qa.tests.length ? (
               <>
                 <div className="flex flex-wrap gap-1.5">
@@ -194,7 +194,7 @@ export default async function CodeAndRelease({ searchParams }: { searchParams: {
           <Card title="Release control" subtitle="Controlled promotion within the SDLC">
             <div className="grid gap-2.5">
               <Field label="Current state">{stateLabel(run.current_state)}</Field>
-              <Field label="Code review">{reviewed ? "Approved" : run.current_state === "DBT_REVIEW" ? <Link className="underline" href={`/runs/${run.run_id}/review`}>Awaiting the data developer</Link> : "Not reached"}</Field>
+              <Field label="Code review">{reviewed ? "Approved" : run.current_state === "DBT_REVIEW" ? <Link className="underline" href={`/os/build/runs/${run.run_id}/review`}>Awaiting the data developer</Link> : "Not reached"}</Field>
               <Field label="Environment">{run.run.environment} · {run.run.target_model}</Field>
             </div>
           </Card>

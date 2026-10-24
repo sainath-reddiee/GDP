@@ -56,7 +56,7 @@ export function SourceControlView({ prs, kinds, publisherReady, filters: fromUrl
     const nextFilters = { ...filters, ...patch };
     setFilters(nextFilters);
     const p = new URLSearchParams(Object.entries(nextFilters).filter(([, v]) => !!v) as [string, string][]);
-    router.push(`/dashboard/source-control${p.size ? `?${p}` : ""}`);
+    router.push(`/os/release/source-control${p.size ? `?${p}` : ""}`);
   };
   const check = () => start(async () => {
     const r = await syncPullRequests(filters.kind || undefined);

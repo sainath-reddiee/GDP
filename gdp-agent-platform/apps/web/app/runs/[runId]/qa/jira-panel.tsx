@@ -62,12 +62,12 @@ export function JiraPanel({ runId, savedTests, canWrite, canAI }: {
   if (!status?.installed) return <Empty title="Jira is not installed" text="It needs the latest deploy (migration V027). Ask a platform admin." />;
   if (!status.ready) {
     return <Empty title="Jira is not set up yet" text="A platform admin connects the Jira site once in Admin, Integrations, Jira; then each engineer signs in with their own account."
-                  action={<Link href="/admin?section=integrations&view=jira" className="text-sm text-primary hover:underline">Open Jira setup</Link>} />;
+                  action={<Link href="/os/admin/settings?section=integrations&view=jira" className="text-sm text-primary hover:underline">Open Jira setup</Link>} />;
   }
   if (!status.connected) {
     return <Empty title="Connect your Jira account" text={`See the issues assigned to you${status.site_url ? ` on ${status.site_url.replace(/^https:\/\//, "")}` : ""}, reproduce a reported bug against this run's data, and post the results back, all as yourself. You approve the access in Atlassian.`}
                   action={<Button disabled={connecting} onClick={() => startConnect(async () => {
-                    const r = await connectJira(`/runs/${runId}/qa?tab=jira`);
+                    const r = await connectJira(`/os/build/runs/${runId}/qa?tab=jira`);
                     if (r.ok) window.location.href = r.data.url; else setError(r.error);
                   })}>{connecting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Link2 className="h-4 w-4" />}Connect Jira</Button>} error={error} />;
   }
@@ -247,7 +247,7 @@ function Details({ issue, links, savedTests, canWrite, testId, setTestId, onLink
         <ul className="space-y-1">
           {links.filter((l) => l.qa_test_id).map((l) => (
             <li key={l.link_id} className="flex items-center gap-2 rounded-md border px-2.5 py-1.5 text-xs">
-              <Link href={`/runs/${runId}/qa`} className="min-w-0 flex-1 truncate hover:text-primary">{l.test_title ?? l.qa_test_id}</Link>
+              <Link href={`/os/build/runs/${runId}/qa`} className="min-w-0 flex-1 truncate hover:text-primary">{l.test_title ?? l.qa_test_id}</Link>
               {canWrite && <button type="button" onClick={() => onUnlink(l.link_id)} disabled={pending} className="text-muted-foreground hover:text-destructive" aria-label="Unlink test"><Unlink className="h-3.5 w-3.5" /></button>}
             </li>
           ))}

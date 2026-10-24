@@ -164,7 +164,7 @@ export function ModelWorkbench({ detail, comments, me, initialTab, canEdit, canA
 
   const open = (fromVersion?: number) => start(async () => {
     const r = await openDraft(modelId, fromVersion);
-    if (r.ok) { toast("ok", `Draft v${r.data.version} opened`); router.push(`/dashboard/modeling/${modelId}?tab=entities`); router.refresh(); }
+    if (r.ok) { toast("ok", `Draft v${r.data.version} opened`); router.push(`/os/design/modeling/${modelId}?tab=entities`); router.refresh(); }
     else toast("error", explain(r.error).message);
   });
   const save = () => start(async () => {
@@ -214,14 +214,14 @@ export function ModelWorkbench({ detail, comments, me, initialTab, canEdit, canA
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
         <Select aria-label="Version" className="h-9 w-64" value={String(current.version)}
-                onChange={(e) => router.push(`/dashboard/modeling/${modelId}?version=${e.target.value}`)}>
+                onChange={(e) => router.push(`/os/design/modeling/${modelId}?version=${e.target.value}`)}>
           {detail.versions.map((v) => <option key={v.version} value={v.version}>v{v.version} · {v.status.toLowerCase().replace(/_/g, " ")}{v.version === detail.model.approved_version ? " (approved)" : ""}</option>)}
         </Select>
         {!detail.open && canEdit && (
           <Button onClick={() => open()} disabled={pending} data-testid="open-draft"><PencilLine className="h-4 w-4" /> Open a draft</Button>
         )}
         {detail.open && detail.open.version !== current.version && (
-          <Link href={`/dashboard/modeling/${modelId}`} className="text-sm font-medium text-primary hover:underline">Go to v{detail.open.version} ({detail.open.status === "IN_REVIEW" ? "in review" : "draft"})</Link>
+          <Link href={`/os/design/modeling/${modelId}`} className="text-sm font-medium text-primary hover:underline">Go to v{detail.open.version} ({detail.open.status === "IN_REVIEW" ? "in review" : "draft"})</Link>
         )}
         {current.status === "IN_REVIEW" && own && <Button variant="outline" onClick={withdraw} disabled={pending}><Undo2 className="h-4 w-4" /> Withdraw to edit</Button>}
         {editable && <Button variant="outline" onClick={() => setImporting(true)} data-testid="import-model"><FileInput className="h-4 w-4" /> Import</Button>}

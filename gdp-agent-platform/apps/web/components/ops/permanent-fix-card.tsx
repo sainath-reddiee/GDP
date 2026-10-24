@@ -26,7 +26,7 @@ export function PermanentFixCard({ issueId, published, latest, canDraft, runs30d
     setError("");
     const r = await draftPermanentFix(issueId, instructions, replacing);
     if (!r.ok) { setError(r.error); return; }
-    router.push(`/ops/permanent-fixes/${encodeURIComponent(r.data.fix_id)}`);
+    router.push(`/os/run/ops/permanent-fixes/${encodeURIComponent(r.data.fix_id)}`);
   });
 
   return (
@@ -36,7 +36,7 @@ export function PermanentFixCard({ issueId, published, latest, canDraft, runs30d
         This fix repairs the failure after it happens{runs30d ? ` (${runs30d} times in 30 days)` : ""}. A permanent fix changes the pipeline&apos;s code so it stops failing.
       </p>
       {latest && (
-        <Link href={`/ops/permanent-fixes/${encodeURIComponent(latest.fix_id)}`} className="flex items-center gap-2 rounded-lg border p-2.5 text-xs transition hover:bg-muted/40">
+        <Link href={`/os/run/ops/permanent-fixes/${encodeURIComponent(latest.fix_id)}`} className="flex items-center gap-2 rounded-lg border p-2.5 text-xs transition hover:bg-muted/40">
           <PermanentFixStatusPill status={latest.status} />
           <span className="min-w-0 flex-1 truncate font-medium">{latest.title ?? "Permanent fix"}</span>
           <ArrowRight className="h-3 w-3 text-muted-foreground" />

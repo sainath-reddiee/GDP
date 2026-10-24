@@ -112,7 +112,7 @@ export default async function SodaPage({ params, searchParams }: {
             const Icon = t.icon;
             const active = t.key === tab;
             return (
-              <Link key={t.key} href={`/runs/${params.runId}/soda?tab=${t.key}`} role="tab" aria-selected={active} scroll={false}
+              <Link key={t.key} href={`/os/build/runs/${params.runId}/soda?tab=${t.key}`} role="tab" aria-selected={active} scroll={false}
                     className={`-mb-px flex items-center gap-2 border-b-2 px-3 py-2 text-sm font-medium transition-colors ${active ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}>
                 <Icon className="h-4 w-4" />{t.label}
                 {t.key === "results" && scans.scans.length > 0 && <span className="rounded-full bg-muted px-1.5 text-[11px] tabular-nums">{scans.scans.length}</span>}

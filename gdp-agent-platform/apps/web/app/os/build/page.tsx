@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ArrowRight, Bot, CheckCircle2, CircleDashed, ExternalLink, FileCode2, Hand, Hammer, ShieldAlert, ShieldCheck, Wrench, X } from "lucide-react";
+import { ArrowRight, Bot, CheckCircle2, CircleDashed, FileCode2, Hand, Hammer, ShieldAlert, ShieldCheck, Wrench, X } from "lucide-react";
 import { stateLabel } from "@/lib/run-labels";
 import { labelFor, pipelineOf } from "@/lib/stages";
 import type { StageStatusValue } from "@/lib/types";
@@ -7,8 +7,10 @@ import {
   artifactGroups, gatePassed, gateText, defaultRun, loadRunBundle, loadRuns, runOptions, scoreOf, tableOf,
 } from "@/lib/os/data";
 import { guard } from "@/lib/os/session";
+import { BuildEndToEnd } from "@/components/os/build-run";
+import { actMode } from "@/lib/os/access";
 import { Action } from "@/components/os/action";
-import { classicHref, currentStep, lifecycleOfRun } from "@/lib/os/lifecycle";
+import { currentStep, gateHref, lifecycleOfRun, osHref } from "@/lib/os/lifecycle";
 import { ActivityRow, Banner, Bar, Btn, Card, Empty, Field, PageHeader, SourceError, Stepper, Tag, ago, pretty, type Tone } from "@/components/os/ui";
 import { RunPicker } from "@/components/os/run-picker";
 
@@ -16,10 +18,14 @@ export const dynamic = "force-dynamic";
 export const metadata = { title: "Build workbench" };
 
 const STAGE_TONE: Record<StageStatusValue, { tone: Tone; label: string }> = {
-  COMPLETE: { tone: "green", label: "Completed" }, ACTIVE: { tone: "blue", label: "Running" }, REVIEW_REQUIRED: { tone: "amber", label: "Needs review" },
+  COMPLETE: { tone: "green", label: "Completed" }, ACTIVE: { tone: "blue", label: "Ready" }, REVIEW_REQUIRED: { tone: "amber", label: "Needs review" },
   LOCKED: { tone: "neutral", label: "Waiting" }, FAILED: { tone: "red", label: "Failed" }, BLOCKED: { tone: "red", label: "Blocked" },
   CANCELLED: { tone: "neutral", label: "Cancelled" },
 };
+// ACTIVE on the rail means the stage is open; only these states mean an agent is working on it right now
+const WORKING = new Set(["PROFILING_RUNNING", "DBT_GENERATING", "VALIDATION_RUNNING", "LANDING_RUNNING", "ACCESS_VALIDATION"]);
+const DONE: { tone: Tone; label: string } = { tone: "green", label: "Completed" };
+const FAIL: { tone: Tone; label: string } = { tone: "red", label: "Failed" };
 
 export default async function BuildWorkbench({ searchParams }: { searchParams: { run?: string } }) {
   const access = await guard("build");
@@ -32,8 +38,8 @@ export default async function BuildWorkbench({ searchParams }: { searchParams: {
       <>
         <PageHeader eyebrow={`${persona.label} / Build workbench`} title="Build workbench" />
         <SourceError what="Workflow runs" error={runs.error} />
-        <Empty icon={Hammer} title="No workflow to build yet" action={<Action access={access} id="startOnboarding" href="/os/intake" variant="primary" />}>
-          Once a run has an approved mapping, its generated code, tests and validation appear here.
+        <Empty icon={Hammer} title="No workflow to build yet" action={<Btn href="/os/build/ready" variant="primary">See what is ready to build</Btn>}>
+          Once a run's design is done, its generated code, tests and validation appear here.
         </Empty>
       </>
     );
@@ -50,12 +56,13 @@ export default async function BuildWorkbench({ searchParams }: { searchParams: {
   }
   const { run } = b;
   const pipeline = pipelineOf(run.run.pipeline);
-  const steps = lifecycleOfRun(run);
-  const now = currentStep(steps);
   const score = scoreOf(b.checks);
   // the code standards agent's areas in the latest validation (STANDARDS_<AREA>, or STANDARDS when it could not run)
   const standardsAreas = b.checks.filter((c) => c.validation_type.startsWith("STANDARDS"));
   const passed = gatePassed(score, b.gate);
+  const steps = lifecycleOfRun(run, { generated: !!b.generation, validated: score.total > 0, validationPassed: passed });
+  const now = currentStep(steps);
+  const domainId = run.run.domain_id ?? null;
   const stage = (s: string) => run.stages.find((x) => x.stage === s);
   const groups = artifactGroups(b.artifacts);
   const table = tableOf(run.run.target_model);
@@ -63,22 +70,38 @@ export default async function BuildWorkbench({ searchParams }: { searchParams: {
   const validationFailed = run.current_state === "VALIDATION_FAILED";
   const approvals = b.reviews.filter((r) => r.decision === "APPROVE");
 
+  const standardsRan = standardsAreas.filter((c) => c.status !== "SKIPPED");
+  // a card's status comes from what its agent produced; the rail's stage status is only the fallback before that
   const canvas = [
     { n: "01", title: "Profile", actor: "Deterministic tool", stage: "PROFILING", what: "Snowflake profiling and sampling" },
     { n: "02", title: "Design agent", actor: "Agent + approval", stage: "MAPPING", what: "Domain model and field mapping" },
-    { n: "03", title: "Build agent", actor: "Agent", stage: "DBT", what: b.generation ? `dbt v${b.generation.generation_version}: ${b.generation.files_generated} files` : "dbt models, tests and config" },
-    { n: "04", title: "Review agent", actor: "Independent agent", stage: "VALIDATION", what: score.total ? `${score.passed}/${score.total} checks · gate ${b.gate.min_score}%` : `Policy threshold ${b.gate.min_score}%` },
+    { n: "03", title: "Build agent", actor: "Agent", stage: "DBT", what: b.generation ? `dbt v${b.generation.generation_version}: ${b.generation.files_generated} files` : "dbt models, tests and config",
+      evidence: run.current_state === "DBT_GENERATING" ? null : b.generation ? DONE : null },
+    { n: "04", title: "Review agent", actor: "Independent agent", stage: "VALIDATION", what: score.total ? `${score.passed}/${score.total} checks · gate ${b.gate.min_score}%` : `Policy threshold ${b.gate.min_score}%`,
+      evidence: score.total ? (passed ? DONE : FAIL) : null },
     { n: "05", title: "Standards agent", actor: "Independent agent", stage: "VALIDATION",
       what: standardsAreas.length
-        ? `${standardsAreas.filter((c) => c.status === "PASSED").length}/${standardsAreas.filter((c) => c.status !== "SKIPPED").length} standard areas pass`
-        : b.gate.standards_review === false ? "Off for this domain" : "Reviews the code against the written standards at validation" },
+        ? `${standardsAreas.filter((c) => c.status === "PASSED").length}/${standardsRan.length} standard areas pass`
+        : b.gate.standards_review === false ? "Off for this domain" : "Reviews the code against the written standards at validation",
+      evidence: standardsRan.length ? (standardsRan.every((c) => c.status === "PASSED") ? DONE : FAIL)
+        : b.gate.standards_review === false ? { tone: "neutral" as Tone, label: "Off" } : null },
   ];
+  const cardStatus = (c: (typeof canvas)[number]) => {
+    if ("evidence" in c && c.evidence) return c.evidence;
+    const s = stage(c.stage)?.status;
+    if (!s) return { tone: "neutral" as Tone, label: "Not started" };
+    return s === "ACTIVE" && WORKING.has(run.current_state) ? { tone: "blue" as Tone, label: "Running" } : STAGE_TONE[s];
+  };
+  const autopilotDecisions = b.reviews.filter((r) => r.decision === "APPROVE" && /^Autopilot:/.test(r.business_justification ?? ""));
 
+  // design done and the code not yet approved: autopilot takes it end to end right here (the same as Ready to build)
+  const buildable = ["MAPPING_REVIEW", "STTM_REVIEW", "STTM_APPROVED", "SODA_PENDING", "SODA_REVIEW", "SODA_APPROVED", "DBT_PENDING",
+                     "VALIDATION_PENDING", "VALIDATION_PASSED", "DBT_REVIEW"].includes(run.current_state)
+    && pipeline !== "GOLD" && actMode(access, "RUN.OPERATE") === "do";
   const primary = validationFailed
     ? <Btn href={`/os/review?run=${runId}`} variant="red"><ShieldAlert className="h-3.5 w-3.5" /> See validation findings</Btn>
-    : run.current_state === "DBT_REVIEW"
-      ? <Action access={access} id="reviewCode" label="Review and decide" href={`/os/review?run=${runId}`} variant="primary" />
-      : <Action access={access} id="workStep" href={classicHref(runId, now)} label={`Open ${now.label.toLowerCase()}`} variant="primary" />;
+    : buildable ? <BuildEndToEnd runId={runId} previewing={!!access.preview} />
+    : <Action access={access} id="workStep" href={osHref(runId, now, domainId)} label={`Open ${now.label.toLowerCase()}`} variant="primary" />;
 
   return (
     <>
@@ -88,7 +111,6 @@ export default async function BuildWorkbench({ searchParams }: { searchParams: {
         subtitle="Deterministic tools, specialised agents, independent validation and the delivery handoff, in one workspace."
         actions={<>
           <RunPicker base="/os/build" current={runId} runs={runOptions(runs.data.runs)} />
-          <Btn href={`/runs/${runId}`}><ExternalLink className="h-3.5 w-3.5" /> Classic view</Btn>
           {primary}
         </>}
         meta={<>
@@ -109,16 +131,20 @@ export default async function BuildWorkbench({ searchParams }: { searchParams: {
         <Banner tone="red" icon={X}><b>The run stopped{run.failed_from_state ? ` at ${stateLabel(run.failed_from_state).toLowerCase()}` : ""}.</b> {run.failure_reason ?? ""}</Banner>
       )}
       {b.errors.length > 0 && <SourceError what="Part of this run" error={b.errors.join(" · ")} />}
+      {autopilotDecisions.length > 0 && (
+        <Banner icon={Bot} action={<Btn href={gateHref(runId, "soda")}>Open the DQ store</Btn>}>
+          <b>Autopilot decided {autopilotDecisions.length} gate{autopilotDecisions.length === 1 ? "" : "s"}</b> ({autopilotDecisions.map((r) => labelFor(r.stage, pipeline).toLowerCase()).join(", ")}). Review or reopen them from the stores and the Review page.
+        </Banner>
+      )}
 
-      <div className="mb-4"><Stepper steps={steps} hrefOf={(s) => s.status === "pending" ? null : classicHref(runId, s)} /></div>
+      <div className="mb-4"><Stepper steps={steps} hrefOf={(s) => s.status === "pending" ? null : osHref(runId, s, domainId)} /></div>
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)]">
         <Card title="Live workflow canvas" subtitle="Hybrid orchestration: deterministic tools plus agent decisions"
               action={<Btn href={`/os/review?run=${runId}`}>See validation details</Btn>}>
           <div className="grid gap-3 sm:grid-cols-2 2xl:grid-cols-3">
             {canvas.map((c) => {
-              const s = stage(c.stage)?.status;
-              const st = s ? STAGE_TONE[s] : { tone: "neutral" as Tone, label: "Not started" };
+              const st = cardStatus(c);
               return (
                 <div key={c.n} className="rounded-xl border border-[var(--os-line)] p-3.5">
                   <div className="os-faint text-[10.5px] font-bold tracking-wide">{c.n} · {c.actor.toUpperCase()}</div>
@@ -137,10 +163,11 @@ export default async function BuildWorkbench({ searchParams }: { searchParams: {
             <div className="os-divide mt-1">
               {events.map((e) => {
                 const human = e.actor_type === "HUMAN";
+                const auto = human && /^review: APPROVE/.test(e.reason ?? "") && autopilotDecisions.some((r) => r.to_state === e.to_state);
                 const bad = /FAILED|CANCELLED/.test(e.to_state);
                 return (
                   <ActivityRow key={e.event_id} tone={bad ? "red" : human ? "amber" : "green"} icon={bad ? X : human ? Hand : CheckCircle2}
-                               title={<>{stateLabel(e.to_state)} <span className="os-faint font-semibold">· {human ? `by ${e.actor}` : "system"}</span></>}
+                               title={<>{stateLabel(e.to_state)} <span className="os-faint font-semibold">· {auto ? `autopilot, as ${e.actor}` : human ? `by ${e.actor}` : "system"}</span></>}
                                sub={e.reason ?? undefined} when={ago(e.created_at)} />
                 );
               })}
@@ -150,7 +177,7 @@ export default async function BuildWorkbench({ searchParams }: { searchParams: {
 
         <div className="flex min-w-0 flex-col gap-4">
           <Card title="Generated artifacts" subtitle="Every file the build agent wrote, from the run's latest generation"
-                action={<Action access={access} id="openDbtStudio" href={`/runs/${runId}/dbt`} icon={<FileCode2 className="h-3.5 w-3.5" />} />} pad={false}>
+                action={<Action access={access} id="openDbtStudio" href={`/os/build/runs/${runId}/dbt`} icon={<FileCode2 className="h-3.5 w-3.5" />} />} pad={false}>
             {groups.length ? (
               <table className="os-table">
                 <thead><tr><th>Asset</th><th>Type</th><th className="text-right">Files</th><th>State</th></tr></thead>
@@ -199,7 +226,7 @@ export default async function BuildWorkbench({ searchParams }: { searchParams: {
         <div className="os-faint mt-1 text-right text-[10.5px]">Gate at {gateText(b.gate)}</div>
         <div className="os-divide mt-2">
           <ActivityRow tone={approvals.length ? "green" : "neutral"} icon={approvals.length ? CheckCircle2 : CircleDashed} title="Prerequisites"
-                       sub={approvals.length ? `Approved by a person: ${approvals.map((r) => `${labelFor(r.stage, pipeline).toLowerCase()} (${r.reviewer})`).join(", ")}` : "No design approval recorded yet"} />
+                       sub={approvals.length ? `Approved: ${approvals.map((r) => `${labelFor(r.stage, pipeline).toLowerCase()} (${autopilotDecisions.includes(r) ? "autopilot" : r.reviewer})`).join(", ")}` : "No design approval recorded yet"} />
           <ActivityRow tone={b.generation ? "green" : "neutral"} icon={b.generation ? CheckCircle2 : CircleDashed} title="Agent generation"
                        sub={b.generation ? `${b.generation.files_generated} files generated ${ago(b.generation.created_at)} by ${b.generation.model_version ?? "the build agent"}` : "Waiting on approved design"} />
           <ActivityRow tone={score.score === null ? "neutral" : passed ? "green" : "red"} icon={score.score === null ? CircleDashed : passed ? ShieldCheck : ShieldAlert} title="Validation gate"

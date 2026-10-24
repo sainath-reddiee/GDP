@@ -32,7 +32,7 @@ export function pageContext(pathname: string, search: string): PageContext {
   if (check) ctx.check_id = check;
   const test = pick("test_id", "test");
   if (test) ctx.test_id = test;
-  const codePath = pathname.startsWith("/code") ? q.get("path") : null;
+  const codePath = pathname.startsWith("/os/build/code") ? q.get("path") : null;
   const model = pick("model") ?? (codePath && /\.sql$/i.test(codePath) ? codePath.split("/").pop()!.replace(/\.sql$/i, "") : undefined);
   if (model) ctx.model = model;
   return ctx;

@@ -109,7 +109,7 @@ export function IntegrationsSection({ repos, domains, publishing, jira, airflow,
     <div className="space-y-4">
       <nav aria-label="Integrations" className="grid gap-2 md:grid-cols-3 2xl:grid-cols-6">
         {tabs.map((t) => (
-          <Link key={t.id} href={`/admin?section=integrations&view=${t.id}`} aria-current={view === t.id ? "page" : undefined}
+          <Link key={t.id} href={`/os/admin/settings?section=integrations&view=${t.id}`} aria-current={view === t.id ? "page" : undefined}
                 className={cn("flex items-start gap-3 rounded-xl border p-3 transition",
                   view === t.id ? "border-primary/40 bg-primary/5 shadow-card" : "bg-card hover:border-primary/30 hover:shadow-card")}>
             <span className={cn("grid h-9 w-9 shrink-0 place-items-center rounded-lg", view === t.id ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground")}>
@@ -156,7 +156,7 @@ function ReposTab({ repos, domains, may, onMsg, publishing }: {
         <div className="min-w-[16rem] flex-1">
           <h3 className="text-base font-semibold">Code repositories</h3>
           <p className="text-xs text-muted-foreground">{repos.length} connected · {files.toLocaleString()} files indexed · used by the dbt workspace and every AI step.
-            {" "}<Link href="/code" className="text-primary hover:underline">Browse code</Link></p>
+            {" "}<Link href="/os/build/code" className="text-primary hover:underline">Browse code</Link></p>
         </div>
         {repos.length > 3 && (
           <div className="relative">
@@ -231,7 +231,7 @@ function RepoRow({ repo: r, domains, may, onMsg, onOpen }: {
       <div className="flex shrink-0 items-center gap-1.5">
         <Button size="sm" variant="outline" disabled={pending || busy} onClick={refresh}>
           {busy || pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}{busy ? "Indexing" : "Refresh"}</Button>
-        <Link href={`/code?repo=${r.repo_id}`} className="inline-flex h-8 items-center gap-1.5 rounded-lg border bg-card px-3 text-xs font-medium hover:bg-muted"><FileCode2 className="h-3.5 w-3.5" />Browse</Link>
+        <Link href={`/os/build/code?repo=${r.repo_id}`} className="inline-flex h-8 items-center gap-1.5 rounded-lg border bg-card px-3 text-xs font-medium hover:bg-muted"><FileCode2 className="h-3.5 w-3.5" />Browse</Link>
         <Button size="sm" variant="ghost" onClick={() => onOpen(may ? "indexing" : "history")} aria-label={`Settings for ${r.name}`}><Settings2 className="h-4 w-4" />{may ? "Settings" : "History"}</Button>
       </div>
     </li>

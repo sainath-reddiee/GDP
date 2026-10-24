@@ -90,11 +90,11 @@ export function RunConsole({ state, onGatePage = false }: { state: RunState; onG
           <div className="flex flex-wrap items-center gap-2">
             {lanesOpen ? (
               <>
-                <Link href={`/runs/${state.run_id}/soda`} className={buttonVariants()}>Open Data Quality <ArrowRight className="h-4 w-4" /></Link>
-                <Link href={`/runs/${state.run_id}/dbt`} className={buttonVariants({ variant: "outline" })}>Open {labelFor("DBT", pipeline)}</Link>
+                <Link href={`/os/build/runs/${state.run_id}/soda`} className={buttonVariants()}>Open Data Quality <ArrowRight className="h-4 w-4" /></Link>
+                <Link href={`/os/build/runs/${state.run_id}/dbt`} className={buttonVariants({ variant: "outline" })}>Open {labelFor("DBT", pipeline)}</Link>
               </>
             ) : next && !gate && (
-              <Link href={`/runs/${state.run_id}/${next.slug}`} className={buttonVariants()}>
+              <Link href={`/os/build/runs/${state.run_id}/${next.slug}`} className={buttonVariants()}>
                 {next.label} <ArrowRight className="h-4 w-4" />
               </Link>
             )}
@@ -113,7 +113,7 @@ export function RunConsole({ state, onGatePage = false }: { state: RunState; onG
       {human.length > 0 && approveTo && (
         <DecisionBar runId={state.run_id} gate={gate?.name ?? stateLabel(state.current_state)} role={gate?.role}
                      approveTo={approveTo} sendBack={sendBack}
-                     reviewHref={gate && !onGatePage ? `/runs/${state.run_id}/${gate.slug}` : undefined} />
+                     reviewHref={gate && !onGatePage ? `/os/build/runs/${state.run_id}/${gate.slug}` : undefined} />
       )}
     </>
   );

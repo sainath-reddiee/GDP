@@ -106,7 +106,7 @@ export function ReliabilityView({ initialDays, initialTeam, initial, initialErro
                       <tr key={t.team_id ?? "unrouted"}>
                         <td className="px-4 py-2 text-xs">
                           {t.team_id
-                            ? <Link href={`/incidents?${new URLSearchParams({ team: t.team_id })}`} className="text-primary hover:underline">{teamName(t.team_id, t.name)}</Link>
+                            ? <Link href={`/os/run/incidents?${new URLSearchParams({ team: t.team_id })}`} className="text-primary hover:underline">{teamName(t.team_id, t.name)}</Link>
                             : <span className="text-amber-700">{teamName(t.team_id, t.name)}</span>}
                         </td>
                         <td className="px-3 py-2 text-right text-xs tabular-nums">{t.incidents}</td>
@@ -144,7 +144,7 @@ export function ReliabilityView({ initialDays, initialTeam, initial, initialErro
                 <ul className="divide-y text-xs">
                   {data.repeats.map((r) => (
                     <li key={r.fingerprint} className="flex items-center gap-3 px-4 py-2">
-                      <Link href={`/incidents?${new URLSearchParams({ q: r.title })}`} className="min-w-0 flex-1 truncate text-primary hover:underline" title={r.title}>{r.title}</Link>
+                      <Link href={`/os/run/incidents?${new URLSearchParams({ q: r.title })}`} className="min-w-0 flex-1 truncate text-primary hover:underline" title={r.title}>{r.title}</Link>
                       <span className="shrink-0 tabular-nums text-amber-700">{r.count}×</span>
                     </li>
                   ))}

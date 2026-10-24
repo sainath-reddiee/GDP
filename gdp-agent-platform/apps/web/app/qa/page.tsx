@@ -12,8 +12,8 @@ type DomainRow = { domain_id: string; domain_name: string; active_flag: boolean 
 
 /** Old QA workspace links to cases, the Jira inbox or a ticket's triage, as the matching Tickets page view. */
 function ticketsUrl(sp: Params): string | null {
-  if (sp.tab === "inbox") return "/tickets?tab=jira";
-  if (sp.tab === "triage" || (sp.key && !sp.tab)) return `/tickets${sp.key ? `?${new URLSearchParams({ tab: "ticket", key: sp.key })}` : "?tab=jira"}`;
+  if (sp.tab === "inbox") return "/os/run/tickets?tab=jira";
+  if (sp.tab === "triage" || (sp.key && !sp.tab)) return `/os/run/tickets${sp.key ? `?${new URLSearchParams({ tab: "ticket", key: sp.key })}` : "?tab=jira"}`;
   const caseKeys = ["status", "severity", "kind", "domain", "mine", "q", "sla"] as const;
   if (sp.tab !== "cases" && (sp.tab || !caseKeys.some((k) => sp[k]))) return null;
   const p = new URLSearchParams({ source: "case" });
@@ -25,7 +25,7 @@ function ticketsUrl(sp: Params): string | null {
   if (sp.mine === "1" || sp.mine === "true") p.set("assignee", "me");
   if (sp.q) p.set("q", sp.q);
   if (sp.sla === "breached") p.set("sla_breached", "true");
-  return `/tickets?${p}`;
+  return `/os/run/tickets?${p}`;
 }
 
 export default async function QaPage({ searchParams }: { searchParams?: Params }) {

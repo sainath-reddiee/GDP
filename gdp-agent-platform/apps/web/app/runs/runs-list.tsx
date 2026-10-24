@@ -45,7 +45,7 @@ export async function RunsList({ pipeline, searchParams }: { pipeline: Pipeline;
   const action = pipeline === "GOLD"
     ? <NewGoldRun domains={options} />
     : can(me, "SOURCE.CONNECT") ? (
-      <Link href="/dashboard/onboarding?type=source" className={cn("inline-flex h-9 items-center gap-1.5 rounded-lg px-3 text-sm font-medium hover:opacity-90", p.accent.solid)}>
+      <Link href="/os/enable/onboarding?type=source" className={cn("inline-flex h-9 items-center gap-1.5 rounded-lg px-3 text-sm font-medium hover:opacity-90", p.accent.solid)}>
         <Plus className="h-4 w-4" />New {PIPELINES.SILVER.run}</Link>
     ) : (
       <Link href="/os/intake" className="inline-flex h-9 items-center gap-1.5 rounded-lg border px-3 text-sm font-medium hover:bg-accent">

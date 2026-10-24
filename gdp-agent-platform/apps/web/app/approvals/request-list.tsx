@@ -59,7 +59,7 @@ function Row({ r, me, onResult }: { r: ChangeRequest; me: string; onResult: (m: 
       </button>
       {open && (
         <div className="space-y-3 border-t bg-muted/10 px-4 pb-4 pt-3 text-xs">
-          {r.run_id && <p><Link href={`/runs/${r.run_id}`} className="text-primary hover:underline">Open run</Link></p>}
+          {r.run_id && <p><Link href={`/os/build/runs/${r.run_id}`} className="text-primary hover:underline">Open run</Link></p>}
           <RequestPreviewPanel r={r} />
           {r.decision_note && <p><span className="text-muted-foreground">Note: </span>{r.decision_note}</p>}
           {r.status === "PENDING" && (r.can_decide || mine) && (

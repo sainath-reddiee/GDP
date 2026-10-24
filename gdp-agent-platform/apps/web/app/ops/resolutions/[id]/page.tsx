@@ -10,7 +10,7 @@ import { flowLabel, score } from "@/lib/resolve-labels";
 import type { FailureDetail } from "../../resolve-actions";
 
 function Crumb() {
-  return <p className="eyebrow"><Link href="/ops/resolutions" className="hover:underline">Resolutions</Link></p>;
+  return <p className="eyebrow"><Link href="/os/run/ops/resolutions" className="hover:underline">Resolutions</Link></p>;
 }
 
 type StepTone = "done" | "human" | "fail" | "skip";
@@ -48,7 +48,7 @@ export default async function FailurePage({ params }: { params: { id: string } }
         <h1 className="flex flex-wrap items-center gap-2 text-xl font-semibold">{f.dag_id} · {f.task_id} <FailureStatusPill status={f.status} /></h1>
         <p className="text-sm text-muted-foreground">
           Run {f.run_id}{f.try_number ? `, try ${f.try_number}` : ""} · {f.env_id}
-          {f.incident_id && <> · <Link href={`/incidents/${encodeURIComponent(f.incident_id)}`} className="text-primary hover:underline">incident</Link></>}
+          {f.incident_id && <> · <Link href={`/os/run/incidents/${encodeURIComponent(f.incident_id)}`} className="text-primary hover:underline">incident</Link></>}
           {f.ticket_id && <> · ticket {f.ticket_id}</>}
         </p>
       </div>
@@ -71,7 +71,7 @@ export default async function FailurePage({ params }: { params: { id: string } }
             {claimed && inScope && (
               <Step icon={Search} title="Known fix search" tone={f.flow_mode === "TICKET_ONLY" ? "skip" : f.issue_id ? "done" : "skip"}>
                 {f.flow_mode === "TICKET_ONLY" ? "Skipped: the pipeline is set to ticket only."
-                  : issue ? <>Matched <Link href={`/ops/fixes/${encodeURIComponent(issue.issue_id)}`} className="text-primary hover:underline">{issue.title}</Link> ({score(f.search_score)}).</>
+                  : issue ? <>Matched <Link href={`/os/run/ops/fixes/${encodeURIComponent(issue.issue_id)}`} className="text-primary hover:underline">{issue.title}</Link> ({score(f.search_score)}).</>
                     : `No published fix scored high enough (best ${score(f.search_score)}). A miss never invents a fix.`}
               </Step>
             )}
@@ -119,7 +119,7 @@ export default async function FailurePage({ params }: { params: { id: string } }
             <section className="surface space-y-2 p-4">
               <h2 className="text-sm font-semibold">Close the loop</h2>
               <p className="text-xs text-muted-foreground">When the ticket is solved, write the fix down. Once another person publishes it, the same failure is fixed automatically next time.</p>
-              <Link href={`/ops/fixes/new?incident=${encodeURIComponent(f.incident_id)}`} className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground hover:bg-primary/90">
+              <Link href={`/os/run/ops/fixes/new?incident=${encodeURIComponent(f.incident_id)}`} className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground hover:bg-primary/90">
                 <BookCheck className="h-3.5 w-3.5" />Write a known fix
               </Link>
             </section>

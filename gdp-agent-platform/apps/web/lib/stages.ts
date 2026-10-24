@@ -25,13 +25,13 @@ export const PIPELINES: Record<Pipeline, {
   accent: { text: string; bg: string; border: string; solid: string };
 }> = {
   SILVER: {
-    n: 1, name: "Silver Pipeline", from: "Source", to: "Silver (pre-MDM)", href: "/runs", run: "Silver run",
+    n: 1, name: "Silver Pipeline", from: "Source", to: "Silver (pre-MDM)", href: "/os/build/runs", run: "Silver run",
     tagline: "Source systems to governed Silver (pre-MDM) dbt, one hub per run.",
     flow: ["Source Ingestion", "Profiling", "Mapping", "STTM", "QA and DQ", "Silver code", "Validation", "Review"],
     accent: { text: "text-slate-600 dark:text-slate-300", bg: "bg-slate-500/10", border: "border-slate-400/40", solid: "bg-slate-600 text-white" },
   },
   GOLD: {
-    n: 2, name: "Gold Pipeline", from: "Silver", to: "Gold", href: "/gold", run: "Gold run",
+    n: 2, name: "Gold Pipeline", from: "Silver", to: "Gold", href: "/os/build/gold", run: "Gold run",
     tagline: "Mastered Silver to the governed Gold star schema, one domain slice per run.",
     flow: ["Silver Selection", "Profiling", "Gold model", "Mapping", "STTM", "QA and DQ", "Gold code", "Validation", "Review"],
     accent: { text: "text-slate-600 dark:text-slate-300", bg: "bg-slate-500/10", border: "border-slate-400/40", solid: "bg-slate-600 text-white" },

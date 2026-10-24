@@ -17,10 +17,10 @@ export async function GET(req: NextRequest) {
     return NextResponse.redirect(target);
   };
   const error = url.searchParams.get("error");
-  if (error) return back("/admin", { section: "integrations", view: "jira", jira: "denied", reason: url.searchParams.get("error_description") ?? error });
+  if (error) return back("/os/admin/settings", { section: "integrations", view: "jira", jira: "denied", reason: url.searchParams.get("error_description") ?? error });
   const code = url.searchParams.get("code");
   const state = url.searchParams.get("state");
-  if (!code || !state) return back("/admin", { section: "integrations", view: "jira", jira: "error", reason: "Atlassian did not return a sign-in code" });
+  if (!code || !state) return back("/os/admin/settings", { section: "integrations", view: "jira", jira: "error", reason: "Atlassian did not return a sign-in code" });
   try {
     const done = await api<{ return_to: string; display_name: string; site_url: string }>("/api/jira/callback", {
       method: "POST", body: JSON.stringify({ code, state }),
@@ -28,6 +28,6 @@ export async function GET(req: NextRequest) {
     return back(done.return_to || "/", { jira: "connected" });
   } catch (e) {
     if (isRedirectError(e)) throw e;  // signed out: api() sends the user to /login
-    return back("/admin", { section: "integrations", view: "jira", jira: "error", reason: e instanceof ApiError ? e.message : "sign-in failed" });
+    return back("/os/admin/settings", { section: "integrations", view: "jira", jira: "error", reason: e instanceof ApiError ? e.message : "sign-in failed" });
   }
 }

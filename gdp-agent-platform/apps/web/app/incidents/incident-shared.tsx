@@ -44,9 +44,9 @@ export function KindPill({ kind }: { kind: string }) {
 }
 
 export const dagRunHref = (envId: string, dagId: string, runId?: string | null) =>
-  `/ops/dag?${new URLSearchParams({ env: envId, dag: dagId, ...(runId ? { run: runId } : {}) })}`;
+  `/os/run/ops/dag?${new URLSearchParams({ env: envId, dag: dagId, ...(runId ? { run: runId } : {}) })}`;
 
-export const incidentHref = (id: string) => `/incidents/${encodeURIComponent(id)}`;
+export const incidentHref = (id: string) => `/os/run/incidents/${encodeURIComponent(id)}`;
 
 /** The datetime-local value of a date, in the viewer's time zone. */
 export function localInput(d: Date) {

@@ -57,7 +57,7 @@ function Steps({ steps }: { steps: Step[] }) {
 export function DemoPaths({ runs, requests }: { runs: RunSummary[]; requests: OnboardingRequest[] }) {
   const run = happyRun(runs);
   const happy: Step[] = run ? [
-    { who: "Forward Engineering Lead", title: "My Work", what: "the run and its gates in the queue", href: "/os", state: "done" },
+    { who: "Forward Engineering Lead", title: "Ready to build", what: "every run whose design is done, domain by domain; Build end to end", href: "/os/build/ready", state: "done" },
     { who: "Forward Engineering Lead", title: "Build workbench", what: `${run.domain_name ?? "run"} · ${run.run_name}: agents, generated dbt, tests`, href: `/os/build?run=${run.run_id}`, state: "done" },
     { who: "Review and standards agents", title: "Validation gate", what: "the score against the gate, each standards area, every attempt", href: `/os/review?run=${run.run_id}`, state: run.current_state === "VALIDATION_PASSED" ? "now" : "done" },
     { who: "Data Developer", title: "Pull request and code review", what: `publish the pull request, then review the code (${stateLabel(run.current_state).toLowerCase()})`, href: `/os/release?run=${run.run_id}`,
@@ -74,7 +74,7 @@ export function DemoPaths({ runs, requests }: { runs: RunSummary[]; requests: On
       href: req ? `/os/requests/${req.request_id}` : "/os/intake", state: req ? "done" : "now" },
     { who: "Data OS Administrator", title: "Onboard the sources", what: "skipped on its own when the sources are already onboarded", href: "/os/enable", state: state(1) },
     { who: "Data Designer", title: "Profile, model and map", what: "approved design kept in the stores", href: runId ? `/os/review?run=${runId}` : "/os/design", state: state(2) },
-    { who: "Forward Engineering Lead", title: "Build and validate", what: "generated code scored by the review and standards agents", href: runId ? `/os/build?run=${runId}` : "/os/build", state: flagged ? "done" : state(3) },
+    { who: "Forward Engineering Lead", title: "Build end to end", what: "from Ready to build: code generated and scored by the review and standards agents", href: "/os/build/ready", state: flagged ? "done" : state(3) },
     { who: "Skill owner", title: "If flagged: improve the skill, validate again", what: "a new skill version, then Validate again; the attempts show the trend",
       href: runId ? `/os/review?run=${runId}` : "/os/skills?skill=CODE-STANDARDS-REVIEW", state: flagged ? "now" : at > 3 ? "done" : "next" },
     { who: "QA & UAT Lead, Data Developer", title: "Pull request, QA and release", what: "publish, sign off QA, review the code", href: runId ? `/os/release?run=${runId}` : "/os/release", state: state(4) },

@@ -134,7 +134,7 @@ export function ProfileBrowser({ rows, total, facets, filters, view, page, pageS
                   <TD><Meter value={r.avg_null_pct == null ? null : Number(r.avg_null_pct)} label="Average null rate" warnAt={20} /></TD>
                   <TD className="text-right tabular-nums">{r.key_candidates ?? "-"}</TD>
                   <TD className="text-right tabular-nums">{r.pii_columns ?? "-"}</TD>
-                  <TD className="text-xs">{r.run_id ? <Link onClick={(e) => e.stopPropagation()} href={`/runs/${r.run_id}`} className="text-primary hover:underline">{r.run_id.slice(0, 8)}</Link> : "-"}</TD>
+                  <TD className="text-xs">{r.run_id ? <Link onClick={(e) => e.stopPropagation()} href={`/os/build/runs/${r.run_id}`} className="text-primary hover:underline">{r.run_id.slice(0, 8)}</Link> : "-"}</TD>
                   <TD className="whitespace-nowrap text-xs text-muted-foreground">{ago(r.profiled_at)}</TD>
                 </TR>
               ))}

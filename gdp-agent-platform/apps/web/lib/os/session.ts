@@ -8,9 +8,10 @@ import { DEFAULT_PERSONA, PERSONAS, PERSONA_COOKIE, personaById, personasFor, ty
 
 // Who is looking at /os and what they are shown. A person is offered the personas a super admin gave them (Admin,
 // People; V076); someone from before personas gets the ones their roles match, and a super admin all of them. The
-// grants are the person's own governance privileges, or, while a super admin previews a persona from Admin, People,
-// that persona's bundle (its roles' effective privileges, worked out by the API). A preview only changes what the UI
-// shows: the API still answers as the signed-in person.
+// persona they work as (top bar "View as") is real security: every API call carries it (lib/api, X-AIP-Persona) and
+// the API narrows the person's privileges to that persona's role bundle, never above their own. So the grants here
+// are the API's narrowed ones, and screens, tabs and actions follow them; `own` keeps the person's full privileges,
+// which decide the personas on offer. A super admin works as Super admin (everything) until they pick another one.
 
 export const PREVIEW_COOKIE = "ados_preview_persona";
 
@@ -35,7 +36,8 @@ const known = (ids: string[]) => PERSONAS.filter((p) => ids.includes(p.id));
 
 export const osAccess = cache(async (): Promise<OsAccess> => {
   const me = await whoami();
-  const own: Grants = { governance: Boolean(me?.governance), privileges: me?.privileges ?? [] };
+  const own: Grants = { governance: Boolean(me?.governance), privileges: me?.own_privileges ?? me?.privileges ?? [] };
+  const working: Grants = { governance: Boolean(me?.governance), privileges: me?.privileges ?? [] };
   const superAdmin = canPreview(own);
   const [mine, policies, catalogue, viewerRole] = await Promise.all([
     own.governance
@@ -57,7 +59,7 @@ export const osAccess = cache(async (): Promise<OsAccess> => {
   const previewed: PersonaInfo | null = wanted === "viewer" && viewerRole
     ? { persona_id: "viewer", label: "Viewer", description: null, roles: ["VIEWER"], effective: viewerRole.effective, holders: [] }
     : wanted ? catalogue.find((p) => p.persona_id === wanted && p.persona_id !== "super") ?? null : null;
-  const grants: Grants = previewed ? { governance: true, privileges: previewed.effective } : own;
+  const grants: Grants = previewed ? { governance: true, privileges: previewed.effective } : working;
 
   let personas: Persona[];
   let personaSource: OsAccess["personaSource"];
@@ -73,11 +75,12 @@ export const osAccess = cache(async (): Promise<OsAccess> => {
   } else {
     // nobody gave this person a persona yet: offer what their roles match (or, before V076, their privileges)
     const matched = known(mine.matching);
-    personas = matched.length ? matched : personasFor(grants);
+    personas = matched.length ? matched : personasFor(own);
     personaSource = "matched";
   }
   if (!personas.length) personas = [personaById("viewer")];
-  const chosen = cookies().get(PERSONA_COOKIE)?.value ?? DEFAULT_PERSONA;
+  // the persona the API narrowed to; without a choice a super admin is Super admin, anyone else their first persona
+  const chosen = me?.persona ?? cookies().get(PERSONA_COOKIE)?.value ?? (superAdmin ? "super" : DEFAULT_PERSONA);
   return {
     ...grants,
     user: me?.user ?? null,

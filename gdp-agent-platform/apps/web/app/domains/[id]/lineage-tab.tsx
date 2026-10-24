@@ -15,7 +15,7 @@ const TONE: Record<string, string> = {
   dbt: "#f97316", quality: "#22c55e", profiling: "#eab308", modeling: "#3b82f6", qa: "#ef4444", code: "#64748b",
   confluence: "#2563eb", document: "#0891b2", other: "#94a3b8",
 };
-const copilot = (prompt: string) => `/dashboard/copilot?q=${encodeURIComponent(prompt)}`;
+const copilot = (prompt: string) => `/os/work/copilot?q=${encodeURIComponent(prompt)}`;
 
 /** Loads a domain's provenance once (shared by the Overview card and the Lineage tab). */
 export function useProvenance(domainId: string) {
@@ -194,7 +194,7 @@ function BuiltWith({ m, onContract }: { m: DomainProvenance["manifest"]; onContr
                 <span className="w-24 shrink-0 font-medium">{st.stage.replace(/_/g, " ").toLowerCase()}</span>
                 <span className="flex flex-wrap gap-1">
                   {st.skills.map((k) => (
-                    <Link key={k.skill} href={`/skills/${encodeURIComponent(k.skill)}`} className={cn("rounded px-1.5 py-0.5 font-mono hover:text-primary", k.domain ? "bg-primary/10 text-primary" : "bg-muted")}
+                    <Link key={k.skill} href={`/os/skills/registry/${encodeURIComponent(k.skill)}`} className={cn("rounded px-1.5 py-0.5 font-mono hover:text-primary", k.domain ? "bg-primary/10 text-primary" : "bg-muted")}
                           title={(k.domain ? (k.replaces ? `This domain's skill, instead of ${k.replaces}. ` : "This domain's own skill. ") : "")
                             + (k.loaded.length ? k.loaded.map((l) => `v${l.version}: ${l.loads} loads in ${l.runs} runs, last ${l.last}`).join("; ") : "not loaded by this domain's runs yet")}>
                       {k.skill}{k.domain ? (k.replaces ? ` (domain, for ${k.replaces})` : " (domain)") : ""}{k.loaded.length ? ` · v${k.loaded.map((l) => l.version).join(", v")}` : ""}
@@ -231,7 +231,7 @@ function BuiltWith({ m, onContract }: { m: DomainProvenance["manifest"]; onContr
           <ul className="divide-y divide-border/60 text-xs">
             {m.runs.map((r) => (
               <li key={r.run_id} className="flex items-center gap-2 py-1.5">
-                <Link href={`/runs/${r.run_id}`} className="min-w-0 flex-1 truncate font-medium hover:text-primary">{r.run_name ?? r.run_id.slice(0, 8)}</Link>
+                <Link href={`/os/build/runs/${r.run_id}`} className="min-w-0 flex-1 truncate font-medium hover:text-primary">{r.run_name ?? r.run_id.slice(0, 8)}</Link>
                 <span className="text-muted-foreground">{r.items} items · {r.kinds.map((k) => prettyType(k)).join(", ")}</span>
               </li>
             ))}

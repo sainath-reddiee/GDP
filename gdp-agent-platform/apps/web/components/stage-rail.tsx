@@ -106,7 +106,7 @@ export function StageRail({ runId, stages, pipeline = "SILVER" }: { runId: strin
   const noteOf = (stage: string) => stages.find((s) => s.stage === stage)?.note;
   const href = (stage: string) => {
     const meta = byStage(stage);
-    return meta ? `/runs/${runId}/${meta.slug}` : undefined;
+    return meta ? `/os/build/runs/${runId}/${meta.slug}` : undefined;
   };
   const node = (stage: string, extra?: { status?: NodeStatus; href?: string; label?: string; note?: string }) => {
     const h = extra?.href ?? href(stage);
@@ -132,7 +132,7 @@ export function StageRail({ runId, stages, pipeline = "SILVER" }: { runId: strin
     return { status: "ACTIVE", note: m === "COMPLETE" ? "transformations" : "fields" };
   })();
   const spine = ["SOURCE", "PROFILING", "MODELING"];
-  const overview = path === `/runs/${runId}`;
+  const overview = path === `/os/build/runs/${runId}`;
   // shrink the whole rail to fit narrower screens instead of scrolling sideways (down to 75%, then scroll)
   const outer = useRef<HTMLElement>(null);
   const inner = useRef<HTMLDivElement>(null);
@@ -157,7 +157,7 @@ export function StageRail({ runId, stages, pipeline = "SILVER" }: { runId: strin
   return (
     <nav ref={outer} aria-label="Run lineage" className="surface overflow-x-auto px-4 py-3">
       <div ref={inner} className="flex min-w-max items-center" style={scale < 1 ? { zoom: scale } : undefined}>
-        <Link href={`/runs/${runId}`}
+        <Link href={`/os/build/runs/${runId}`}
               className={cn("flex items-center gap-2 rounded-xl px-2.5 py-2 text-sm font-semibold transition",
                 overview ? "bg-accent ring-1 ring-primary/20" : "hover:bg-muted")}>
           <LayoutGrid className="h-4 w-4 text-muted-foreground" /> Overview
@@ -168,8 +168,8 @@ export function StageRail({ runId, stages, pipeline = "SILVER" }: { runId: strin
           <div key={stage} className="flex items-center">
             {i > 0 && <Edge done={done(spine[i - 1])} active={done(spine[i - 1]) && (stage === "MODELING" ? ["ACTIVE", "REVIEW_REQUIRED"].includes(modeling.status) : live(stage))} />}
             {stage === "MODELING"
-              ? <Node id="MODELING" label={pipeline === "GOLD" ? "Modeling" : "Mapping"} status={modeling.status} note={modeling.note} href={`/runs/${runId}/modeling`}
-                      current={path === `/runs/${runId}/modeling` || path === `/runs/${runId}/mapping` || path === `/runs/${runId}/sttm`} />
+              ? <Node id="MODELING" label={pipeline === "GOLD" ? "Modeling" : "Mapping"} status={modeling.status} note={modeling.note} href={`/os/build/runs/${runId}/modeling`}
+                      current={path === `/os/build/runs/${runId}/modeling` || path === `/os/build/runs/${runId}/mapping` || path === `/os/build/runs/${runId}/sttm`} />
               : node(stage)}
           </div>
         ))}
@@ -179,7 +179,7 @@ export function StageRail({ runId, stages, pipeline = "SILVER" }: { runId: strin
         <div className="flex flex-col" style={{ gap: GAP }} role="group"
              aria-label={`Built in parallel from the approved model: QA tests, Data Quality, and ${labelFor("DBT", pipeline)} then Validation`}>
           <div className="flex items-center" style={{ height: LANE_H }}>
-            {node("QA", { status: qaStatus, href: qaStatus === "LOCKED" ? undefined : `/runs/${runId}/qa`, label: "QA tests",
+            {node("QA", { status: qaStatus, href: qaStatus === "LOCKED" ? undefined : `/os/build/runs/${runId}/qa`, label: "QA tests",
                           note: qaStatus === "AVAILABLE" ? "from the model" : qaLane?.note })}
             <Edge done={qaStatus === "COMPLETE"} grow />
           </div>

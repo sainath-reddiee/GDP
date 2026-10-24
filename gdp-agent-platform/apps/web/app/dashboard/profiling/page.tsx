@@ -50,7 +50,7 @@ export default async function ProfilingHub({ searchParams }: { searchParams: Par
       </div>
       <nav className="flex flex-wrap gap-1 border-b border-border/70" aria-label="Profiling sections">
         {SECTIONS.map(([id, label]) => (
-          <Link key={id} href={id === "profiles" ? "/dashboard/profiling" : `/dashboard/profiling?section=${id}`} aria-current={section === id ? "page" : undefined}
+          <Link key={id} href={id === "profiles" ? "/os/design/profiling" : `/os/design/profiling?section=${id}`} aria-current={section === id ? "page" : undefined}
                 className={cn("-mb-px flex items-center gap-1.5 border-b-2 px-3 py-2 text-sm transition", section === id ? "border-primary font-medium text-foreground" : "border-transparent text-muted-foreground hover:text-foreground")}>
             {label}{id === "annotations" && waiting > 0 && <span className="rounded-full bg-amber-100 px-1.5 text-[10px] font-semibold text-amber-800">{waiting}</span>}
           </Link>

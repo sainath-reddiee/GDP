@@ -33,7 +33,7 @@ export default async function PermanentFixesPage({ searchParams }: { searchParam
         <>
           <div className="flex flex-wrap gap-1.5" aria-label="Filter by status">
             {FILTERS.map((f) => (
-              <Link key={f || "all"} href={f ? `/ops/permanent-fixes?status=${f}` : "/ops/permanent-fixes"}
+              <Link key={f || "all"} href={f ? `/os/run/ops/permanent-fixes?status=${f}` : "/os/run/ops/permanent-fixes"}
                     className={cn("rounded-full border px-2.5 py-1 text-xs font-medium", status === f ? "border-primary bg-primary/10 text-primary" : "hover:bg-muted")}>
                 {f ? LABEL[f] : "All"}
               </Link>
@@ -56,11 +56,11 @@ export default async function PermanentFixesPage({ searchParams }: { searchParam
                   {items.map((f) => (
                     <tr key={f.fix_id} className="align-top hover:bg-muted/30">
                       <td className="px-4 py-2.5">
-                        <Link href={`/ops/permanent-fixes/${encodeURIComponent(f.fix_id)}`} className="font-medium hover:text-primary">{f.title ?? "Permanent fix"}</Link>
+                        <Link href={`/os/run/ops/permanent-fixes/${encodeURIComponent(f.fix_id)}`} className="font-medium hover:text-primary">{f.title ?? "Permanent fix"}</Link>
                         <p className="line-clamp-2 text-xs text-muted-foreground">{f.status === "UNAVAILABLE" ? f.unavailable_reason : f.summary}</p>
                       </td>
                       <td className="px-3 py-2.5 text-xs">
-                        <Link href={`/ops/fixes/${encodeURIComponent(f.issue_id)}`} className="hover:text-primary">{f.issue_title ?? f.issue_id}</Link>
+                        <Link href={`/os/run/ops/fixes/${encodeURIComponent(f.issue_id)}`} className="hover:text-primary">{f.issue_title ?? f.issue_id}</Link>
                       </td>
                       <td className="px-3 py-2.5 text-xs">{f.dag_id ?? "-"}{f.task_id ? ` · ${f.task_id}` : ""}</td>
                       <td className="px-3 py-2.5 text-xs">

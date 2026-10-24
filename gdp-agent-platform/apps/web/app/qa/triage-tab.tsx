@@ -25,7 +25,7 @@ export function TriageTab({ nav, go, access, jira, me }: { nav: Nav; go: Go; acc
   const [text, setText] = useState(nav.key);
   const key = text.trim().toUpperCase();
   return (
-    <JiraGate jira={jira} returnTo={`/tickets?tab=${nav.key ? `ticket&key=${encodeURIComponent(nav.key)}` : "jira"}`}>
+    <JiraGate jira={jira} returnTo={`/os/run/tickets?tab=${nav.key ? `ticket&key=${encodeURIComponent(nav.key)}` : "jira"}`}>
       <div className="space-y-4">
         <form className="flex max-w-lg gap-2" onSubmit={(e) => { e.preventDefault(); if (KEY.test(key)) go({ key }); }}>
           <div className="relative flex-1">
@@ -101,7 +101,7 @@ function IssueTriage({ issueKey, go, access, me }: { issueKey: string; go: Go; a
     await loadLinks();
   });
 
-  if (problem?.connect) return <ConnectJira returnTo={`/tickets?tab=ticket&key=${encodeURIComponent(issueKey)}`} text={problem.text} />;
+  if (problem?.connect) return <ConnectJira returnTo={`/os/run/tickets?tab=ticket&key=${encodeURIComponent(issueKey)}`} text={problem.text} />;
   if (problem && !issue) return <Empty title={`Could not open ${issueKey}`} text={<span role="alert">{problem.text}</span>} />;
   if (!issue) return <Pending text={`Opening ${issueKey}…`} />;
 
@@ -125,7 +125,7 @@ function IssueTriage({ issueKey, go, access, me }: { issueKey: string; go: Go; a
           {issue.url && <a href={issue.url} target="_blank" rel="noreferrer" className="ml-auto inline-flex items-center gap-1 text-primary hover:underline">Open in Jira<ExternalLink className="h-3 w-3" /></a>}
         </p>
         <h3 className="text-base font-semibold">{issue.summary}</h3>
-        <Link href={`/dashboard/copilot?jira=${encodeURIComponent(issue.key)}`} data-testid="work-in-copilot"
+        <Link href={`/os/work/copilot?jira=${encodeURIComponent(issue.key)}`} data-testid="work-in-copilot"
               className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-primary-foreground hover:opacity-90">
           <Bot className="h-3.5 w-3.5" /> Work on it in the Copilot
         </Link>
@@ -163,7 +163,7 @@ function IssueTriage({ issueKey, go, access, me }: { issueKey: string; go: Go; a
                 <span className="min-w-0 flex-1 truncate">
                   {l.target_table_id ? <button type="button" className="hover:text-primary" onClick={() => go({ tab: "suites", table: l.target_table_id!, suite: l.suite_id ?? "" })}>
                     {tables?.find((t) => t.target_table_id === l.target_table_id)?.fqn ?? l.target_table ?? "a table"}</button>
-                    : l.run_id ? <Link href={`/runs/${l.run_id}/qa?tab=jira`} className="hover:text-primary">a run</Link> : "QA"}
+                    : l.run_id ? <Link href={`/os/build/runs/${l.run_id}/qa?tab=jira`} className="hover:text-primary">a run</Link> : "QA"}
                   {l.qa_test_id && <span className="text-muted-foreground"> · {l.test_title ?? `test ${l.qa_test_id.slice(0, 8)}`}</span>}
                   {(l.linked_by ?? l.created_by) && <span className="text-muted-foreground"> · {l.linked_by ?? l.created_by}</span>}
                 </span>
@@ -214,7 +214,7 @@ function IssueTriage({ issueKey, go, access, me }: { issueKey: string; go: Go; a
           )}
           {resolved && resolved.runs.length > 0 && (
             <p className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">Linked runs:
-              {resolved.runs.map((r) => <Link key={r.run_id} href={`/runs/${r.run_id}/qa?tab=jira`} className="text-primary hover:underline">{r.name ?? r.run_id.slice(0, 8)}{r.state ? ` (${r.state.toLowerCase().replace(/_/g, " ")})` : ""}</Link>)}</p>
+              {resolved.runs.map((r) => <Link key={r.run_id} href={`/os/build/runs/${r.run_id}/qa?tab=jira`} className="text-primary hover:underline">{r.name ?? r.run_id.slice(0, 8)}{r.state ? ` (${r.state.toLowerCase().replace(/_/g, " ")})` : ""}</Link>)}</p>
           )}
           {table && (
             <div className="flex flex-wrap items-center gap-2 border-t pt-3">

@@ -36,7 +36,7 @@ export default async function SttmDetail({ params, searchParams }: { params: { c
     <div className="space-y-6">
       <StoreCrumb store="sttm" trail={[{ label: m.target_entity.split(".").pop() ?? m.target_entity }]} />
       <PageHeader title={<span className="font-mono">{m.target_entity}</span>}
-                  description={<>From {m.source_system ?? "source"} ({m.source_entities.join(", ") || "no source tables"}){m.domain_name ? ` · domain ${m.domain_name}` : ""}{m.run_id ? <> · <Link className="text-primary hover:underline" href={`/runs/${m.run_id}/sttm`}>producing run</Link></> : null} · changes go to STTM_APPROVER for approval</>}
+                  description={<>From {m.source_system ?? "source"} ({m.source_entities.join(", ") || "no source tables"}){m.domain_name ? ` · domain ${m.domain_name}` : ""}{m.run_id ? <> · <Link className="text-primary hover:underline" href={`/os/build/runs/${m.run_id}/sttm`}>producing run</Link></> : null} · changes go to STTM_APPROVER for approval</>}
                   actions={<StatusPill status={m.status} />} />
       <PendingChanges path={`/api/hub/sttm/${params.catalogId}/`} what="mapping change" />
       <SttmWorkbench entry={m} versions={data.versions} latest={latest} context={context ?? EMPTY_CONTEXT} graph={graph}

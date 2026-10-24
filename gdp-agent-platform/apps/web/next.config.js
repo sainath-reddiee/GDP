@@ -1,4 +1,5 @@
 const { execSync } = require("node:child_process");
+const { EXACT, PREFIXES } = require("./os-routes");
 
 /** The commit this build was made from, shown in the app (account menu, sidebar) and at /bff/version. */
 function buildSha() {
@@ -28,6 +29,22 @@ module.exports = {
       { source: "/dashboard/qa", destination: "/dashboard/qa-store", permanent: false },
       { source: "/dashboard/data-quality", destination: "/dashboard/dq-store", permanent: false },
       { source: "/dashboard/mapping", destination: "/dashboard/sttm", permanent: false },
+      // every screen lives under /os (os-routes.js): an old URL lands on its /os address
+      ...EXACT.map(([from, to]) => ({ source: from, destination: to, permanent: false })),
+      ...PREFIXES.flatMap(([from, to]) => [
+        { source: from, destination: to, permanent: false },
+        { source: `${from}/:path*`, destination: `${to}/:path*`, permanent: false },
+      ]),
+    ];
+  },
+  // ...and the /os address is served by the page that has always rendered it
+  async rewrites() {
+    return [
+      ...EXACT.map(([from, to]) => ({ source: to, destination: from })),
+      ...PREFIXES.flatMap(([from, to]) => [
+        { source: to, destination: from },
+        { source: `${to}/:path*`, destination: `${from}/:path*` },
+      ]),
     ];
   },
 };

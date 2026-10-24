@@ -43,7 +43,7 @@ function TestDrawer({ test, onClose, canCase }: { test: RunTest; onClose: () => 
     <Drawer open onClose={onClose} wide title={test.title} subtitle={[test.category?.toLowerCase(), test.severity?.toLowerCase(), test.scope === "TABLE" ? test.target_fqn : test.run_name].filter(Boolean).join(" · ")}>
       <div className="space-y-4 text-sm">
         <div className="flex flex-wrap items-center gap-2">{test.outcome ? <StatusPill status={test.outcome} /> : <StatusPill status="NEVER_RUN" />}<History points={test.history} />
-          {test.run_id && <Link href={`/runs/${test.run_id}/qa`} className="ml-auto inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline">Open in the run <ArrowUpRight className="h-3 w-3" /></Link>}</div>
+          {test.run_id && <Link href={`/os/build/runs/${test.run_id}/qa`} className="ml-auto inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline">Open in the run <ArrowUpRight className="h-3 w-3" /></Link>}</div>
         {test.objective && <p className="text-muted-foreground">{test.objective}</p>}
         <div><p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">SQL · expected {test.expected ?? "0 rows"}</p>
           <pre className="max-h-64 overflow-auto rounded-lg bg-muted p-2 font-mono text-[11px]">{test.sql_text}</pre></div>

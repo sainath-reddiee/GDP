@@ -80,7 +80,7 @@ export function ConversationList({ sessions, current, onNew, onHide, onDelete }:
               </div>
             ) : (
               <div key={s.session_id} className="group relative">
-              <Link href={`/dashboard/copilot/${s.session_id}`}
+              <Link href={`/os/work/copilot/${s.session_id}`}
                     aria-current={s.session_id === current ? "page" : undefined}
                     className={cn("flex items-start gap-2 rounded-lg py-2 pl-2 pr-8 text-sm transition",
                       s.session_id === current ? "bg-primary/10 text-foreground" : "text-foreground/80 hover:bg-muted")}>

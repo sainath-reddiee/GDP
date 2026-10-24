@@ -34,25 +34,25 @@ export default async function RunAndQuality() {
     <>
       <PageHeader eyebrow={`${persona.label} / Run and quality`} title="Production operations"
                   subtitle="Runtime health, data quality and incidents, connected back to the code, mapping and knowledge that produced them."
-                  actions={<><Btn href="/dashboard/quality">Quality center</Btn><Action access={access} id="viewOps" href="/ops" variant="primary" icon={<Activity className="h-3.5 w-3.5" />} /></>} />
+                  actions={<><Btn href="/os/run/quality">Quality center</Btn><Action access={access} id="viewOps" href="/os/run/ops" variant="primary" icon={<Activity className="h-3.5 w-3.5" />} /></>} />
       <SourceError what="Operations" error={ops.error} />
       <SourceError what="Quality" error={quality.error} />
       {open.length
-        ? <Banner tone="red" icon={Siren} action={<Action access={access} id="viewOps" label="Open incidents" href="/incidents" variant="red" />}><b>{open.length} open incident{open.length === 1 ? "" : "s"}</b> across {new Set(open.map((i) => i.dag_id)).size} pipeline{new Set(open.map((i) => i.dag_id)).size === 1 ? "" : "s"}. The RCA agent proposes a cause; a person approves any fix.</Banner>
+        ? <Banner tone="red" icon={Siren} action={<Action access={access} id="viewOps" label="Open incidents" href="/os/run/incidents" variant="red" />}><b>{open.length} open incident{open.length === 1 ? "" : "s"}</b> across {new Set(open.map((i) => i.dag_id)).size} pipeline{new Set(open.map((i) => i.dag_id)).size === 1 ? "" : "s"}. The RCA agent proposes a cause; a person approves any fix.</Banner>
         : <Banner icon={CheckCircle2}>No open incident. Pipelines and quality checks are within policy.</Banner>}
 
       <div className="mb-4 grid grid-cols-2 gap-3 xl:grid-cols-4">
-        <Kpi label="Monitored pipelines" value={ops.data?.dags ?? dags.data.length} hint={`${ops.data?.envs ?? 0} Airflow environment${ops.data?.envs === 1 ? "" : "s"} · polled ${ago(ops.data?.last_poll_at) || "never"}`} icon={Activity} tone="green" href="/ops" />
-        <Kpi label="Open incidents" value={open.length} hint={`${failingDags.length} pipelines last failed`} icon={Siren} tone={open.length ? "red" : "green"} href="/incidents" />
-        <Kpi label="Data quality health" value={q?.data_quality.avg_health === null || q?.data_quality.avg_health === undefined ? "–" : `${Math.round(q.data_quality.avg_health)}%`} hint={q ? `${q.data_quality.checks} checks · ${q.data_quality.failed_checks} failing` : ""} icon={BadgeCheck} tone="blue" href="/dashboard/dq-store" />
-        <Kpi label="QA pass rate (30d)" value={q?.qa.pass_rate === null || q?.qa.pass_rate === undefined ? "–" : `${Math.round(q.qa.pass_rate)}%`} hint={q ? `${q.qa.tests} tests · ${q.qa.failed} failed · ${q.qa.runs} runs` : ""} icon={FlaskConical} tone="purple" href="/qa" />
+        <Kpi label="Monitored pipelines" value={ops.data?.dags ?? dags.data.length} hint={`${ops.data?.envs ?? 0} Airflow environment${ops.data?.envs === 1 ? "" : "s"} · polled ${ago(ops.data?.last_poll_at) || "never"}`} icon={Activity} tone="green" href="/os/run/ops" />
+        <Kpi label="Open incidents" value={open.length} hint={`${failingDags.length} pipelines last failed`} icon={Siren} tone={open.length ? "red" : "green"} href="/os/run/incidents" />
+        <Kpi label="Data quality health" value={q?.data_quality.avg_health === null || q?.data_quality.avg_health === undefined ? "–" : `${Math.round(q.data_quality.avg_health)}%`} hint={q ? `${q.data_quality.checks} checks · ${q.data_quality.failed_checks} failing` : ""} icon={BadgeCheck} tone="blue" href="/os/design/dq-store" />
+        <Kpi label="QA pass rate (30d)" value={q?.qa.pass_rate === null || q?.qa.pass_rate === undefined ? "–" : `${Math.round(q.qa.pass_rate)}%`} hint={q ? `${q.qa.tests} tests · ${q.qa.failed} failed · ${q.qa.runs} runs` : ""} icon={FlaskConical} tone="purple" href="/os/release/qa" />
       </div>
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
         <div className="flex min-w-0 flex-col gap-4">
           {/* Airflow pipelines and their incidents are for people who hold OPS.VIEW */}
           {has(access, "OPS.VIEW") && (
-          <Card title="Operational pipeline health" subtitle="Every monitored DAG: last state, reliability and latency" action={<Action access={access} id="viewOps" label="All pipelines" href="/ops" />} pad={false}>
+          <Card title="Operational pipeline health" subtitle="Every monitored DAG: last state, reliability and latency" action={<Action access={access} id="viewOps" label="All pipelines" href="/os/run/ops" />} pad={false}>
             {dags.data.length ? (
               <div className="max-h-[440px] overflow-auto">
                 <table className="os-table">
@@ -62,7 +62,7 @@ export default async function RunAndQuality() {
                       const s = DAG_STATE[d.last_state ?? ""] ?? { tone: "neutral" as Tone, label: pretty(d.last_state) || "No runs" };
                       return (
                         <tr key={`${d.env_id}:${d.dag_id}`}>
-                          <td><Link href={`/ops/dag?${new URLSearchParams({ env: d.env_id, dag: d.dag_id })}`} className="font-bold hover:underline">{d.dag_id}</Link>
+                          <td><Link href={`/os/run/ops/dag?${new URLSearchParams({ env: d.env_id, dag: d.dag_id })}`} className="font-bold hover:underline">{d.dag_id}</Link>
                             <div className="os-faint text-[10.5px]">{d.env_id} · {d.schedule ?? "no schedule"}</div></td>
                           <td className="os-muted whitespace-nowrap">{ago(d.last_run_at) || "–"}</td>
                           <td className="w-28 text-right"><span className="tabular-nums">{pct(d.success_7d)}</span>
@@ -80,7 +80,7 @@ export default async function RunAndQuality() {
           </Card>
           )}
 
-          <Card title="Live data quality" subtitle="The latest Soda scans and QA runs, by target" action={<Btn href="/dashboard/quality">Quality center</Btn>} pad={false}>
+          <Card title="Live data quality" subtitle="The latest Soda scans and QA runs, by target" action={<Btn href="/os/run/quality">Quality center</Btn>} pad={false}>
             {executions.data.length ? (
               <table className="os-table">
                 <thead><tr><th>Target</th><th>Kind</th><th className="text-right">Passed</th><th className="text-right">Failed</th><th>Result</th><th>When</th></tr></thead>
@@ -115,12 +115,12 @@ export default async function RunAndQuality() {
                   <b>{pretty(worst.kind)}</b> first seen {ago(worst.first_seen)}{worst.assignee ? `, assigned to ${worst.assignee}` : ", unassigned"}. The RCA agent reads the task log, the DAG and the code that produced it, and drafts a resolution for approval.
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  <Action access={access} id="operateIncident" href={`/incidents/${worst.incident_id}`} variant="primary" icon={<Bot className="h-3.5 w-3.5" />} />
-                  <Action access={access} id="viewOps" label="Resolutions" href="/ops/resolutions" />
+                  <Action access={access} id="operateIncident" href={`/os/run/incidents/${worst.incident_id}`} variant="primary" icon={<Bot className="h-3.5 w-3.5" />} />
+                  <Action access={access} id="viewOps" label="Resolutions" href="/os/run/ops/resolutions" />
                 </div>
                 <div className="os-divide mt-3">
                   {open.slice(0, 5).map((i) => (
-                    <Link key={i.incident_id} href={`/incidents/${i.incident_id}`} className="flex items-center justify-between gap-2 py-2 hover:underline">
+                    <Link key={i.incident_id} href={`/os/run/incidents/${i.incident_id}`} className="flex items-center justify-between gap-2 py-2 hover:underline">
                       <span className="min-w-0"><span className="block truncate text-[12px] font-semibold">{i.dag_id}{i.task_id ? `.${i.task_id}` : ""}</span>
                         <span className="os-faint text-[10.5px]">{pretty(i.kind)} · {ago(i.first_seen)}</span></span>
                       <Tag tone={i.severity <= "P2" ? "red" : "amber"}>{i.severity}</Tag>
@@ -131,7 +131,7 @@ export default async function RunAndQuality() {
             ) : <Empty icon={CheckCircle2} title="Nothing to investigate" />}
           </Card>
 
-          <Card title="Learning from operations" subtitle="Runbooks, exceptions and fixes captured from runtime" action={<Action access={access} id="viewOps" label="Known fixes" href="/ops/fixes" />}>
+          <Card title="Learning from operations" subtitle="Runbooks, exceptions and fixes captured from runtime" action={<Action access={access} id="viewOps" label="Known fixes" href="/os/run/ops/fixes" />}>
             {opsLearning.length ? (
               <div className="os-divide">
                 {opsLearning.slice(0, 6).map((k) => (

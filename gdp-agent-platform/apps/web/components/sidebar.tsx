@@ -293,7 +293,7 @@ export function Sidebar({ privileges }: { privileges?: string[] | null }) {
     <nav aria-label="Main"
          className={cn("sticky top-0 flex h-screen shrink-0 flex-col overflow-y-auto overflow-x-hidden border-r border-white/[0.06] bg-sidebar text-sidebar-foreground transition-[width] duration-200",
            collapsed ? "w-[72px] px-2" : "w-[244px] px-3")}>
-      <Link href="/work" title={PRODUCT} className={cn("group/brand flex items-center gap-3 py-5", collapsed ? "justify-center" : "px-2")}>
+      <Link href="/os/work/inbox" title={PRODUCT} className={cn("group/brand flex items-center gap-3 py-5", collapsed ? "justify-center" : "px-2")}>
         <LogoMark size="sm" className="transition-transform duration-300 group-hover/brand:scale-105" />
         {!collapsed && (
           <div className="min-w-0">

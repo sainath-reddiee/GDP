@@ -14,7 +14,7 @@ import json
 from typing import Any, Mapping, Optional, Tuple
 
 FORBIDDEN = ("/api/copilot/", "/api/governance/", "/api/admin/", "/api/auth/")
-FORWARDED = ("x-aip-session", "x-aip-role")
+FORWARDED = ("x-aip-session", "x-aip-role", "x-aip-persona")
 TIMEOUT = 600
 
 

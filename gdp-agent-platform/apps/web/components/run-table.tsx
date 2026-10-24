@@ -58,7 +58,7 @@ export function RunTable({
   const [pending, start] = useTransition();
   const headerBox = useRef<HTMLInputElement>(null);
   const params = useSearchParams();
-  const listPath = usePathname() || "/runs";   // /runs (Silver Pipeline) or /gold (Gold Pipeline)
+  const listPath = usePathname() || "/os/build/runs";   // /runs (Silver Pipeline) or /gold (Gold Pipeline)
   // Status links keep the other filters (search, domain, sort...) and restart paging.
   const statusHref = (status: string) => {
     const next = new URLSearchParams(params?.toString() ?? "");
@@ -215,7 +215,7 @@ export function RunTable({
                 </TD>
               )}
               <TD>
-                <Link href={`/runs/${r.run_id}`} className="font-medium text-primary hover:underline">{r.run_name}</Link>
+                <Link href={`/os/build/runs/${r.run_id}`} className="font-medium text-primary hover:underline">{r.run_name}</Link>
                 <div className="flex flex-wrap items-center gap-1.5">
                   <span className="font-mono text-[11px] text-muted-foreground">{r.run_id.slice(0, 8)}</span>
                   <TagEditor entityType="RUN" entityKey={r.run_id} initial={r.tags ?? []} canEdit={!r.is_archived} compact />

@@ -155,7 +155,7 @@ export function ReferencesTab({ domainId, layer }: { domainId: string; layer: La
                 <td className="space-y-1 px-3 py-2 text-right">
                   {r.kind === "DATA_MODEL" && r.status === "READY" && (r.layer === "SILVER" || r.layer === "GOLD") && (
                     typeof r.applied?.model_id === "string"
-                      ? <Link href={`/dashboard/modeling/${encodeURIComponent(r.applied.model_id)}`} className="block text-[11px] font-medium text-primary hover:underline">Open draft v{String(r.applied.version ?? "")}</Link>
+                      ? <Link href={`/os/design/modeling/${encodeURIComponent(r.applied.model_id)}`} className="block text-[11px] font-medium text-primary hover:underline">Open draft v{String(r.applied.version ?? "")}</Link>
                       : canAct("MODEL.EDIT") && <button type="button" disabled={pending} title="Start the layer's domain model from it, or merge it into the open draft (reviewed in the Model Workbench)"
                                                         onClick={() => act(() => useReferenceAsModel(domainId, r.reference_id))}
                                                         className="block w-full text-right text-[11px] font-medium text-primary hover:underline">Use as the model</button>)}
@@ -233,7 +233,7 @@ export function Accuracy({ domainId, layer, scores, onScored, detailed = false }
           })}</ul>
         ) : <p className="mt-1 text-xs text-muted-foreground">Give this layer a reference model or Data Mapping: each proposal and mapping is then measured against it.</p>}
       {msg && <p role="status" className="mt-2 text-xs text-muted-foreground">{msg}</p>}
-      {!detailed && <Link href={`/domains/${domainId}?tab=references&layer=${layer}`} className="mt-2 inline-block text-xs text-primary hover:underline">References</Link>}
+      {!detailed && <Link href={`/os/knowledge/domains/${domainId}?tab=references&layer=${layer}`} className="mt-2 inline-block text-xs text-primary hover:underline">References</Link>}
     </section>
   );
 }

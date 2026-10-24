@@ -42,7 +42,7 @@ export function FailingCheckList({ checks, className }: { checks: FailingCheck[]
             </p>
           </Link>
           {c.incident && (
-            <Link href={`/incidents/${encodeURIComponent(c.incident.incident_id)}`} aria-label="Open the incident"
+            <Link href={`/os/run/incidents/${encodeURIComponent(c.incident.incident_id)}`} aria-label="Open the incident"
                   className="inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-rose-700 hover:bg-rose-500/10 dark:text-rose-400">
               <Siren className="h-3.5 w-3.5" />{c.incident.severity}{c.incident.assignee ? ` · ${c.incident.assignee.split("@")[0]}` : ""}
             </Link>
