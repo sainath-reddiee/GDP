@@ -5,7 +5,7 @@ import { useEffect, useRef, useState, useTransition } from "react";
 import { Loader2, Search, X } from "lucide-react";
 
 /** The boards' request search: filters as you type (the page matches ?q= on the server, by meaning through GET /api/search). */
-export function HomeSearch() {
+export function HomeSearch({ placeholder = "Search requests by meaning" }: { placeholder?: string }) {
   const router = useRouter();
   const path = usePathname();
   const params = useSearchParams();
@@ -27,10 +27,10 @@ export function HomeSearch() {
 
   return (
     <label className="relative block w-full sm:w-[280px]">
-      <span className="sr-only">Search requests by meaning</span>
+      <span className="sr-only">{placeholder}</span>
       {pending ? <Loader2 className="os-faint os-spin absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2" />
         : <Search className="os-faint absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2" />}
-      <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search requests by meaning" data-testid="home-search"
+      <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={placeholder} data-testid="home-search"
              className="os-input h-9 !py-0 !pl-8 !pr-8" />
       {q && (
         <button type="button" onClick={() => setQ("")} aria-label="Clear search" className="os-faint absolute right-2.5 top-1/2 -translate-y-1/2 hover:text-[var(--os-ink)]">

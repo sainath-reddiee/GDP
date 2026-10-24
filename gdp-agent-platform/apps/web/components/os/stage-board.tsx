@@ -14,12 +14,15 @@ import { cn } from "@/lib/utils";
 /** A segmented control of links: Home's views and filters live in the URL. */
 export function Segmented({ label, options, testId }: {
   label: string; testId?: string;
-  options: { key: string; label: string; href: string; active: boolean; count?: number; dot?: boolean }[];
+  options: { key: string; label: string; href: string; active: boolean; count?: number; dot?: boolean; disabled?: boolean; title?: string }[];
 }) {
   return (
     <nav aria-label={label} data-testid={testId} className="inline-flex max-w-full overflow-x-auto rounded-lg border border-[var(--os-line)] bg-[var(--os-subtle)] p-0.5">
-      {options.map((o) => (
-        <Link key={o.key} href={o.href} scroll={false} aria-current={o.active ? "page" : undefined}
+      {options.map((o) => o.disabled ? (
+        <span key={o.key} aria-disabled="true" title={o.title} data-testid={`${testId ?? "seg"}-${o.key}`}
+              className="os-faint inline-flex cursor-not-allowed items-center gap-1.5 whitespace-nowrap rounded-md px-3 py-1.5 text-[12px] font-bold opacity-60">{o.label}</span>
+      ) : (
+        <Link key={o.key} href={o.href} scroll={false} aria-current={o.active ? "page" : undefined} title={o.title} data-testid={testId ? `${testId}-${o.key}` : undefined}
               className={cn("relative inline-flex items-center gap-1.5 whitespace-nowrap rounded-md px-3 py-1.5 text-[12px] font-bold transition",
                             o.active ? "bg-[var(--os-surface)] text-[var(--os-ink)] shadow-[var(--os-shadow)]" : "os-muted hover:text-[var(--os-ink)]")}>
           {o.dot && <span className="h-1.5 w-1.5 rounded-full bg-[#d85b52]" aria-hidden />}
@@ -93,16 +96,22 @@ export function runTrack(run: Pick<RunSummary, "current_state" | "updated_at" | 
 }
 
 /** Selected, Action required, Active, Completed: links that keep the selection, so Selected stays one click away. */
-export function BoardTabs({ base, view, counts, selection, extra }: {
+export function BoardTabs({ base, view, counts, selection, fallback, extra }: {
   base: string; view: BoardView; counts: { action: number; active: number; completed: number };
-  /** the selected workflow's URL parameter, e.g. ["run", id]; Selected is off without one */
-  selection: [string, string] | null; extra?: Record<string, string>;
+  /** the selected workflow's URL parameter, e.g. ["run", id] */
+  selection: [string, string] | null;
+  /** what Selected opens when nothing is selected yet (the first item waiting on the viewer, else the first active);
+   *  Selected is always shown, and disabled only when the board has nothing at all */
+  fallback?: [string, string] | null; extra?: Record<string, string>;
 }) {
+  const pick = selection ?? fallback ?? null;
   const href = (v: BoardView) => `${base}?${new URLSearchParams({ view: v, ...(selection ? { [selection[0]]: selection[1] } : {}), ...(extra ?? {}) })}`;
+  const selectedHref = `${base}?${new URLSearchParams({ view: "selected", ...(pick ? { [pick[0]]: pick[1] } : {}), ...(extra ?? {}) })}`;
   return (
     <div className="flex flex-wrap items-center gap-2" data-testid="board-tabs">
-      <Segmented label="Workflows to show" options={[
-        ...(selection ? [{ key: "selected", label: "Selected", href: href("selected"), active: view === "selected" }] : []),
+      <Segmented label="Workflows to show" testId="board-view" options={[
+        { key: "selected", label: "Selected", href: selectedHref, active: view === "selected", disabled: !pick,
+          title: pick ? (selection ? "The selected item" : "Opens the first item waiting on you") : "Nothing to select yet" },
         { key: "action", label: "Action required", href: href("action"), active: view === "action", count: counts.action, dot: counts.action > 0 },
         { key: "active", label: "Active", href: href("active"), active: view === "active", count: counts.active },
         { key: "completed", label: "Completed", href: href("completed"), active: view === "completed", count: counts.completed },

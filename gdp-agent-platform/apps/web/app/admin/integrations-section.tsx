@@ -72,7 +72,7 @@ export function IntegrationsSection({ repos, domains, publishing, jira, airflow,
   base = "/os/admin/settings?section=integrations" }: {
   repos: CodeRepo[]; domains: Domain[]; publishing: PublishingStatus; jira: JiraStatus | null; airflow: AirflowEnv[] | null;
   airflowError: string | null; datadog: DatadogStatus | null; view: IntegrationView;
-  /** where the tabs link: Platform settings (super admins) or Enable, Integrations (the Data OS Administrator) */
+  /** where the tabs link (Platform settings, Integrations) */
   base?: string;
 }) {
   const router = useRouter();
@@ -136,7 +136,7 @@ export function IntegrationsSection({ repos, domains, publishing, jira, airflow,
       {view === "jira" && <JiraTab status={jira} may={canAct("INTEGRATION.MANAGE")} onMsg={setMsg} returnTo={`${base}${base.includes("?") ? "&" : "?"}view=jira`} />}
       {view === "incidents" && <IncidentsTab envs={airflow ?? []} may={canAct("INTEGRATION.MANAGE")} onMsg={setMsg} />}
       {view === "cases" && <CasesTab may={canAct("INTEGRATION.MANAGE")} onMsg={setMsg} />}
-      {view === "datadog" && <DatadogTab status={datadog} mayEdit={canAct("INTEGRATION.MANAGE") || canAct("CONFIG.EDIT")} mayTest={canAct("INTEGRATION.MANAGE")}
+      {view === "datadog" && <DatadogTab status={datadog} mayEdit={canAct("CONFIG.EDIT")} mayTest={canAct("INTEGRATION.MANAGE")}
                                          mayOperate={can("OPS.OPERATE")} onMsg={setMsg} />}
       {view === "airflow" && <AirflowTab envs={airflow} error={airflowError} may={canAct("INTEGRATION.MANAGE")} canPoll={can("OPS.OPERATE")} onMsg={setMsg} />}
     </div>
@@ -592,7 +592,7 @@ function PublishingStrip({ status, githubRepos, may, onMsg }: { status: Publishi
           <span className="w-full text-[11px] text-muted-foreground">A fine-grained token limited to the client&apos;s repositories, with Contents and Pull requests: read and write.</span>
         </div>
       )}
-      {!may && !status.ready && <p className="mt-1.5 text-muted-foreground">A super admin sets this up (it deploys a procedure and stores the GitHub token: ADMIN.DEPLOY).</p>}
+      {!may && !status.ready && <p className="mt-1.5 text-muted-foreground">A platform admin (ADMIN.DEPLOY) sets this up.</p>}
       {check && (
         <p className={cn("mt-2 flex items-center gap-2 rounded-md px-2.5 py-1.5", check.status === "OK" && check.push !== false ? "bg-success/10 text-success" : "bg-amber-50 text-amber-800")}>
           {check.status === "OK" ? `Connected to ${check.repository}; ${check.push === false ? "this token cannot push to it" : "push allowed"}.` : check.detail || check.status}

@@ -10,9 +10,9 @@ Every screen reads live platform data through the endpoints the classic pages al
 |---|---|
 | Home | Home (`/os`); Inbox (`/os/work/inbox`) and Overview (`/os/work/overview`) keep their addresses but are not tabs |
 | Intake | Requests board (`/os/intake`); the form is `/os/intake/new`; the older Requests and Request history lists keep their addresses |
-| Enable | Source readiness, Onboard source, Onboard domain, Integrations (the Data OS Administrator's alone) |
-| Design | Designer studio (the Design board), Domains, Stores (the six stores, with their own store tabs) |
-| Build | Ready to build, Workbench (the Build board; and every `/runs/[id]` workspace), Lineage, Code, Run history (with the Silver and Gold pipeline lists) |
+| Enable | Source readiness, Onboard source, Onboard domain (the Data OS Administrator's alone) |
+| Design | Design board, Domains, Stores (the six stores, with their own store tabs) |
+| Build | Build board (first, so the rail's Build opens it; and every `/runs/[id]` workspace), Ready to build, Lineage, Code, Run history (with the Silver and Gold pipeline lists) |
 | Review | Gates, Approvals, Audit |
 | Skills | Skill studio, Registry (including proposed skills) |
 | Release | Release, Source control, QA testing |
@@ -48,7 +48,7 @@ The studio at a glance, with no hero. Everything on it opens the stage it is at 
 
 ## Stage boards: Intake, Design, Build
 
-One pattern on each stage: tabs **Selected | Action required | Active | Completed** in the URL (`?view=&run=` or `&request=`), workflow cards with their step track and what the current step is doing, and the selected workflow below (`components/os/stage-board.tsx`, `lib/os/work.ts`).
+One pattern on each stage: tabs **Selected | Action required | Active | Completed** always shown (Selected with nothing selected opens the first item waiting on the viewer, else the first active one; it is disabled only when the board is empty), and on Design the steps **Profile | Model | Map** next to them (on the lists, the runs at that step with their counts; on a selected run, that step's view). All in the URL (`?view=&run=` or `&request=`), workflow cards with their step track and what the current step is doing, and the selected workflow below (`components/os/stage-board.tsx`, `lib/os/work.ts`).
 - **Intake** lists requests (Action required: waiting on a privilege the viewer holds; Completed: done, cancelled or rejected). Selected shows the request's steps, who acts now with a button in the step's own words (for an Enhance source request waiting on the Data Designer, "Start enhancement run" right there), its sources with what each should add, and the latest history. On the right: New or Enhance per kind, and "In flight: New N · Enhance M", each count filtering the board (`?intent=new|enhance`).
 - **The form** (`/os/intake/new`, source requests): the request details first (title, priority, needed by, business outcome), then the domain and the sources on the platform grouped by the domains their runs feed (the chosen domain's sources first, the others collapsed by domain, then "Not in a domain yet"), then Submit. New offers every registered source and a new one by name, and suggests Enhance for a source that already feeds the domain. Enhance offers only the sources feeding the domain and asks what to add from each. "Where this goes" on the right shows the route for what is picked: the New source flow or the Enhance flow, with a skipped step marked.
 - **Design** lists runs whose step is Design; Completed are past it. Selected shows the run's eight steps and **Profile | Model | Map** for its domain (opening on the one its state is at): the source profile, the domain model with open questions and artifacts, and the mapping proposals with the gate decision. `?domain=` still selects that domain's run.
@@ -194,7 +194,7 @@ People get **personas**, named bundles of the governance roles, instead of role 
 - People from before personas keep their roles. People lists the personas their roles match, with a one-click "Give the matching persona". Anyone without a persona is a Viewer.
 
 **Admin is a super admin's alone, enforced in the API** (`policy.SUPER_ONLY`)
-- These privileges are honoured only alongside `*`: `ADMIN.VIEW`, `ADMIN.DEPLOY`, `CONFIG.EDIT`, `ROLE.MANAGE`, `AUDIT.VIEW` and `APPROVAL.VIEW`. Whatever role lists them, `effective_privileges` drops them for everyone else. (`INTEGRATION.MANAGE` was among them until the Data OS Administrator took over integrations on Enable.)
+- These privileges are honoured only alongside `*`: `ADMIN.VIEW`, `ADMIN.DEPLOY`, `CONFIG.EDIT`, `INTEGRATION.MANAGE`, `ROLE.MANAGE`, `AUDIT.VIEW` and `APPROVAL.VIEW`. Whatever role lists them, `effective_privileges` drops them for everyone else.
 - A call that needs one of them is refused outright, never queued as a change request.
 - The Admin rail entry (People & personas, Platform settings, Audit) shows to super admins only.
 - Approvers still see their own Approvals queue.
@@ -273,7 +273,7 @@ Sourcing moved to Intake and Enable, and modelling and mapping to Design, so Bui
 
 ## Enable: one way in per object
 
-Onboarding a source or a domain is reached from Enable's tabs only (Onboard source, Onboard domain); Source readiness's header keeps just "Open Source Store". **Integrations** (`/os/enable/integrations`, `INTEGRATION.MANAGE`) is the Data OS Administrator's: code repositories, Jira, Airflow, Datadog, incident routing and cases, the same screen super admins have in Platform settings. `INTEGRATION.MANAGE` is no longer super-admin-only (`policy.SUPER_ONLY`); setting up GitHub publishing still needs a super admin (`ADMIN.DEPLOY`: it deploys a procedure and stores the token). Without the privilege a button shows disabled with the privilege it needs; with only `REQUEST.CHANGES` it reads "Request approval: ...". A source a request asks for has one "Onboard source for request" button (the wizard asks how it arrives: share, database or files), a registered one not landed "Resume landing" and an unreachable one "Recheck access", both on its run's source step ("Open in Source Store" when it has no run yet). A domain asked for reads "Onboard domain for request". The duplicate kind tiles, the second Source Store links and "Manage pipelines" were removed; the wizards use "Check configuration", "Save configuration", "Upload pack and contract", "Validate pack" and "Import domain pack". Every Enable page's eyebrow reads "Enable / Data OS Administrator".
+Onboarding a source or a domain is reached from Enable's tabs only (Onboard source, Onboard domain); Source readiness's header keeps just "Open Source Store". Integrations (code repositories, Jira, Airflow, Datadog, incident routing and cases) stay in Admin, Platform settings, for super admins only (`INTEGRATION.MANAGE` is in `policy.SUPER_ONLY`). Without the privilege a button shows disabled with the privilege it needs; with only `REQUEST.CHANGES` it reads "Request approval: ...". A source a request asks for has one "Onboard source for request" button (the wizard asks how it arrives: share, database or files), a registered one not landed "Resume landing" and an unreachable one "Recheck access", both on its run's source step ("Open in Source Store" when it has no run yet). A domain asked for reads "Onboard domain for request". The duplicate kind tiles, the second Source Store links and "Manage pipelines" were removed; the wizards use "Check configuration", "Save configuration", "Upload pack and contract", "Validate pack" and "Import domain pack". Every Enable page's eyebrow reads "Enable / Data OS Administrator".
 
 ## Domain packs of governed domains
 

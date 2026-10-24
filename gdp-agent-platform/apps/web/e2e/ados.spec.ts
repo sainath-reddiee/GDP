@@ -236,7 +236,7 @@ test("the rail is the package's ten entries and every page is a tab of one", asy
   await expect(railLinks(page).filter({ hasText: "Build" })).toHaveAttribute("aria-current", "page");
   const tabs = page.getByTestId("section-tabs");
   // the old Silver and Gold lists live on under Run history
-  await expect(tabs.getByRole("link")).toHaveText(["Ready to build", "Workbench", "Lineage", "Code", "Run history"]);
+  await expect(tabs.getByRole("link")).toHaveText(["Build board", "Ready to build", "Lineage", "Code", "Run history"]);
   await expect(tabs.getByRole("link", { name: "Run history" })).toHaveAttribute("aria-current", "page");
   await page.goto("/dashboard/sttm");
   await expect(railLinks(page).filter({ hasText: "Design" })).toHaveAttribute("aria-current", "page");
@@ -391,7 +391,7 @@ test("only the administrator onboards sources, from Enable; others request them"
   await page.goto("/dashboard/onboarding?type=source");
   await expect(page.getByRole("heading", { name: "Onboard source" })).toBeVisible();
   const tabs = page.getByTestId("section-tabs");
-  await expect(tabs.getByRole("link")).toHaveText(["Source readiness", "Onboard source", "Onboard domain", "Integrations"]);
+  await expect(tabs.getByRole("link")).toHaveText(["Source readiness", "Onboard source", "Onboard domain"]);
   await expect(railLinks(page).filter({ hasText: "Enable" })).toHaveAttribute("aria-current", "page");
   await page.goto("/os/intake/new?type=source");
   await expect(page.getByRole("link", { name: "Open the onboarding wizard" })).toHaveCount(0);
@@ -474,4 +474,17 @@ test("Ready to build shows each domain's design readiness and builds ready runs 
   await previewAs(page, "viewer");
   await page.goto("/os/build/ready").catch(() => undefined);
   await page.waitForURL(/\/os\?denied=ready$/);
+});
+
+test("Design and Build boards always show Selected, Action required, Active and Completed; Design also Profile, Model and Map", async ({ page }) => {
+  await page.goto("/os/design");
+  const views = page.getByTestId("board-view");
+  await expect(views.getByText("Selected")).toBeVisible();
+  for (const v of ["Action required", "Active", "Completed"]) await expect(views.getByRole("link", { name: new RegExp(v) })).toBeVisible();
+  const steps = page.getByTestId("design-steps");
+  for (const s of ["Profile", "Model", "Map"]) await expect(steps.getByRole("link", { name: new RegExp(s) })).toBeVisible();
+  // the rail's Build opens the Build board, not Ready to build
+  await railLinks(page).filter({ hasText: "Build" }).click();
+  await page.waitForURL(/\/os\/build(\?|$)/);
+  await expect(page.getByTestId("board-view").getByText("Selected")).toBeVisible();
 });

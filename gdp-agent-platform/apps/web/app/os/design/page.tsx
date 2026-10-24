@@ -17,8 +17,9 @@ import { DomainEr } from "@/components/os/client";
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Design" };
 
-// Design: the runs being profiled, modelled and mapped, by Selected, Action required, Active and Completed. A selected
-// run opens on Profile, Model or Map for its domain (the step it is at by default).
+// Design: the runs being profiled, modelled and mapped, by Selected, Action required, Active and Completed, and by
+// design step, Profile, Model and Map: on the lists the step keeps the runs at that step; a selected run opens on that
+// step for its domain (the step it is at by default).
 
 const TABS = [{ key: "profile", label: "Profile" }, { key: "model", label: "Model" }, { key: "map", label: "Map" }] as const;
 type Tab = (typeof TABS)[number]["key"];
@@ -33,15 +34,25 @@ export default async function DesignBoard({ searchParams }: { searchParams: Para
   const q = (searchParams.q ?? "").trim().toLowerCase();
   const live = runs.data.runs.filter((r) => !r.is_archived && r.current_state !== "CANCELLED");
   const listed = live.filter((r) => !q || r.run_name.toLowerCase().includes(q) || (r.domain_name ?? "").toLowerCase().includes(q));
-  const active = listed.filter((r) => stageOfRun(r) === "design");
+  const step = TABS.find((t) => t.key === searchParams.tab)?.key ?? null;
+  const atStep = (r: (typeof live)[number]) => !step || tabOf(r.current_state) === step;
+  const active = listed.filter((r) => stageOfRun(r) === "design" && atStep(r));
   const lists = { action: active.filter((r) => runNeedsMe(r, access)), active, completed: listed.filter((r) => pastStage(r, "design")) };
   // ?domain= (older links) selects that domain's newest run in design, else its newest run
   const byDomain = searchParams.domain ? domains.data.find((d) => d.domain_id === searchParams.domain)?.domain_name : null;
   const run = live.find((r) => r.run_id === searchParams.run)
     ?? (byDomain ? active.find((r) => r.domain_name === byDomain) ?? live.find((r) => r.domain_name === byDomain) : undefined) ?? null;
-  const view = boardView(searchParams.view ?? (byDomain && run ? "selected" : undefined), !!run, lists.action.length);
+  // Selected with nothing selected opens the first run waiting on the viewer, else the first in design
+  const fallback = lists.action[0] ?? lists.active[0] ?? lists.completed[0] ?? null;
+  const picked = run ?? (searchParams.view === "selected" ? fallback : null);
+  const view = boardView(searchParams.view ?? (byDomain && run ? "selected" : undefined), !!picked, lists.action.length);
   const rows = view === "selected" ? [] : lists[view];
-  const select = (id: string) => `/os/design?${new URLSearchParams({ view: "selected", run: id })}`;
+  const select = (id: string) => `/os/design?${new URLSearchParams({ view: "selected", run: id, ...(step ? { tab: step } : {}) })}`;
+  // Profile, Model, Map: on a selected run, its tab; on a list, the runs at that step (again to show every step)
+  const stepHref = (k: Tab) => view === "selected" && picked
+    ? `/os/design?${new URLSearchParams({ view: "selected", run: picked.run_id, tab: k })}`
+    : `/os/design?${new URLSearchParams({ view, ...(step === k ? {} : { tab: k }) })}`;
+  const shownStep = view === "selected" && picked ? (step ?? tabOf(picked.current_state)) : step;
 
   return (
     <div data-testid="design-board">
@@ -50,21 +61,27 @@ export default async function DesignBoard({ searchParams }: { searchParams: Para
           <div className="os-eyebrow">Design</div>
           <h1 className="text-[22px] font-extrabold tracking-[-0.03em]">Profile, model and map</h1>
         </div>
-        <HomeSearch />
+        <HomeSearch placeholder="Search runs by name or domain" />
       </div>
-      <div className="mb-4">
-        <BoardTabs base="/os/design" view={view} selection={run ? ["run", run.run_id] : null}
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <BoardTabs base="/os/design" view={view} selection={picked ? ["run", picked.run_id] : null}
+                   fallback={fallback ? ["run", fallback.run_id] : null} extra={step ? { tab: step } : undefined}
                    counts={{ action: lists.action.length, active: lists.active.length, completed: lists.completed.length }} />
+        <span className="mx-1 hidden h-5 w-px bg-[var(--os-line)] sm:block" aria-hidden />
+        <Segmented label="Design step" testId="design-steps" options={TABS.map((x) => ({
+          key: x.key, label: x.label, href: stepHref(x.key), active: x.key === shownStep,
+          ...(view !== "selected" ? { count: listed.filter((r) => stageOfRun(r) === "design" && tabOf(r.current_state) === x.key).length } : {}),
+        }))} />
       </div>
       <SourceError what="Workflow runs" error={runs.error} />
-      {view === "selected" && run ? (
-        <Selected run={run} tab={(TABS.find((t) => t.key === searchParams.tab)?.key) ?? tabOf(run.current_state)}
-                  domainId={domains.data.find((d) => d.domain_name === run.domain_name)?.domain_id ?? null}
+      {view === "selected" && picked ? (
+        <Selected run={picked} tab={shownStep ?? tabOf(picked.current_state)}
+                  domainId={domains.data.find((d) => d.domain_name === picked.domain_name)?.domain_id ?? null}
                   sources={sources.data.sources} access={access} />
       ) : (
         <BoardList count={rows.length} empty={view === "action"
           ? { title: "No design decision waits on you", body: "Field mappings, transformations and data quality checks your role decides show here." }
-          : view === "active" ? { title: "No run is in design" } : { title: "No run has finished design yet" }}>
+          : view === "active" ? { title: step ? `No run is at ${TABS.find((t) => t.key === step)?.label}` : "No run is in design" } : { title: "No run has finished design yet" }}>
           {rows.map((r) => <RunCard key={r.run_id} run={r} href={select(r.run_id)} mine={runNeedsMe(r, access)} />)}
         </BoardList>
       )}
@@ -78,7 +95,6 @@ async function Selected({ run, tab, domainId, sources, access }: {
 }) {
   const t = runTrack(run);
   const gate = GATES[run.current_state];
-  const tabHref = (k: Tab) => `/os/design?${new URLSearchParams({ view: "selected", run: run.run_id, tab: k })}`;
   return (
     <section className="flex flex-col gap-4" data-testid="design-selected">
       <div className="os-card os-rise p-5">
@@ -100,7 +116,7 @@ async function Selected({ run, tab, domainId, sources, access }: {
         <Track steps={t.steps} note={t.note} since={t.since} className="mt-5" />
       </div>
 
-      <Segmented label="Design step" options={TABS.map((x) => ({ key: x.key, label: x.label, href: tabHref(x.key), active: x.key === tab }))} />
+      <h3 className="os-eyebrow -mb-1">{TABS.find((x) => x.key === tab)?.label}</h3>
 
       {tab === "profile" && <ProfileTab run={run} sources={sources} />}
       {tab === "model" && <ModelTab domainId={domainId} access={access} />}

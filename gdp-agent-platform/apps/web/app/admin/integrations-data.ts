@@ -4,8 +4,8 @@ import type { CodeRepo, PublishingStatus } from "../code/actions";
 import type { JiraStatus } from "../jira/actions";
 import type { AirflowEnv } from "../ops/actions";
 
-/** What the Integrations screen shows (code repositories, GitHub publishing, Jira, Airflow, Datadog), for Platform
- *  settings and for Enable, Integrations. null when the API cannot be read; notReady before migration V024. */
+/** What Platform settings, Integrations shows (code repositories, GitHub publishing, Jira, Airflow, Datadog); super
+ *  admins only. null when the API cannot be read; notReady before migration V024. */
 export async function loadIntegrations() {
   const [repos, domains, publishing, jira, airflow, datadog] = await Promise.all([
     api<{ repos: CodeRepo[]; ready: boolean }>("/api/code/repos").catch(() => null),

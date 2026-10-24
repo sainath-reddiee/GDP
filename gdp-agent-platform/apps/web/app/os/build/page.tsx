@@ -42,9 +42,10 @@ export default async function BuildBoard({ searchParams }: { searchParams: Param
   const active = listed.filter((r) => stageOfRun(r) === "build");
   const lists = { action: active.filter((r) => runNeedsMe(r, access)), active, completed: listed.filter((r) => pastStage(r, "build")) };
   // a run named in the URL is selected, any run (older links name runs at every step); Selected alone opens the latest build
-  const run = live.find((r) => r.run_id === searchParams.run)
-    ?? (searchParams.view === "selected" ? defaultRun(live, ["DBT_REVIEW", "VALIDATION_FAILED", "VALIDATION_PASSED", "DBT_GENERATING", "DBT_PENDING", "DBT_APPROVED"]) : null)
-    ?? null;
+  // Selected with nothing selected opens the first build waiting on the viewer, else the first building, else the latest
+  const fallback = lists.action[0] ?? lists.active[0]
+    ?? defaultRun(live, ["DBT_REVIEW", "VALIDATION_FAILED", "VALIDATION_PASSED", "DBT_GENERATING", "DBT_PENDING", "DBT_APPROVED"]) ?? null;
+  const run = live.find((r) => r.run_id === searchParams.run) ?? (searchParams.view === "selected" ? fallback : null) ?? null;
   const view = boardView(searchParams.view ?? (searchParams.run && run ? "selected" : undefined), !!run, lists.action.length);
   const rows = view === "selected" ? [] : lists[view];
   const select = (id: string) => `/os/build?${new URLSearchParams({ view: "selected", run: id })}`;
@@ -56,10 +57,10 @@ export default async function BuildBoard({ searchParams }: { searchParams: Param
           <div className="os-eyebrow">Build</div>
           <h1 className="text-[22px] font-extrabold tracking-[-0.03em]">Generate, validate and hand off</h1>
         </div>
-        <HomeSearch />
+        <HomeSearch placeholder="Search runs by name or domain" />
       </div>
       <div className="mb-4">
-        <BoardTabs base="/os/build" view={view} selection={run ? ["run", run.run_id] : null}
+        <BoardTabs base="/os/build" view={view} selection={run ? ["run", run.run_id] : null} fallback={fallback ? ["run", fallback.run_id] : null}
                    counts={{ action: lists.action.length, active: lists.active.length, completed: lists.completed.length }} />
       </div>
       <SourceError what="Workflow runs" error={runs.error} />

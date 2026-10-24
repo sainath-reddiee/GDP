@@ -88,7 +88,7 @@ export function progressOf(run: Pick<RunSummary, "current_state">): number {
 /** The classic run workspace page for a step of a run (the detailed editors: mapping, checks, dbt studio). */
 export const classicHref = (runId: string, step: LifecycleStep) => `/os/build/runs/${runId}${step.slug ? `/${step.slug}` : ""}`;
 
-/** The /os page a step of a run is worked on. Design is per domain (Designer studio); decisions autopilot made are
+/** The /os page a step of a run is worked on. Design is per domain (Design board); decisions autopilot made are
  *  reviewed from the stores and Review. */
 export function osHref(runId: string, step: Pick<LifecycleStep, "key">, domainId?: string | null): string {
   const run = `run=${encodeURIComponent(runId)}`;

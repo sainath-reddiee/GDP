@@ -27,7 +27,7 @@ export type SectionKey = "work" | "intake" | "enable" | "design" | "build" | "re
 export type ScreenKey =
   | "work" | "inbox" | "overview" | "copilot"
   | "intake" | "intakeNew" | "requests" | "requestHistory" | "onboarding"
-  | "enable" | "integrations"
+  | "enable"
   | "design" | "newDomain" | "domains" | "stores"
   | "ready" | "build" | "pipelines" | "gold" | "lineage" | "code" | "history" | "runs"
   | "review" | "governance" | "audit"
@@ -81,11 +81,9 @@ export const SCREENS: Screen[] = [
     view: ["SOURCE.CONNECT"], why: "the Data OS Administrator (onboarding a source registers it, lands it and starts its run)" },
   { key: "newDomain", section: "enable", href: "/os/enable/new-domain", label: "Onboard domain", paths: ["/os/design/new-domain"], view: ["DOMAIN.ONBOARD"],
     why: "the Data OS Administrator (a domain's model, contract and memory); data owners request one on Intake" },
-  { key: "integrations", section: "enable", href: "/os/enable/integrations", label: "Integrations", view: ["INTEGRATION.MANAGE"],
-    why: "the Data OS Administrator (code repositories, Jira, Airflow, Datadog, incident routing and cases)" },
 
   // Design: the domain model and the stores the design is kept in
-  { key: "design", section: "design", href: "/os/design", label: "Designer studio",
+  { key: "design", section: "design", href: "/os/design", label: "Design board",
     view: ["MODEL.EDIT", "MODEL.APPROVE", "MAPPING.DECIDE", "MAPPING.APPROVE", "STTM.EDIT", "STTM.APPROVE", "DOMAIN.EDIT"], why: "people who model and map" },
   { key: "domains", section: "knowledge", href: "/os/knowledge?view=domains", label: "Domains", paths: ["/os/knowledge/domains"], rail: false, under: "knowledge", why: "everyone signed in (stewards edit)" },
   { key: "stores", section: "design", href: "/os/design/store", label: "Stores",
@@ -94,8 +92,9 @@ export const SCREENS: Screen[] = [
   // Build: what is ready to build (design done), one run's workbench, lineage, the code and every run's history. The
   // Silver and Gold pipeline lists live on under Run history (sourcing, modelling and mapping moved to Intake, Enable
   // and Design), still guarded and reachable from there.
+  // the board first, so the rail's Build opens Selected, Action required, Active and Completed
+  { key: "build", section: "build", href: "/os/build", label: "Build board", view: ["RUN.OPERATE", "DBT.EDIT", "REVIEW.APPROVE"], why: "people who build or review code" },
   { key: "ready", section: "build", href: "/os/build/ready", label: "Ready to build", view: BUILDERS, why: "people who build runs or decide their gates" },
-  { key: "build", section: "build", href: "/os/build", label: "Workbench", view: ["RUN.OPERATE", "DBT.EDIT", "REVIEW.APPROVE"], why: "people who build or review code" },
   { key: "pipelines", section: "build", href: "/os/build/runs", label: "Silver pipeline", paths: ["=/os/build/runs"], rail: false, under: "history", view: BUILDERS, why: "people who build runs or decide their gates" },
   { key: "gold", section: "build", href: "/os/build/gold", label: "Gold pipeline", paths: ["/os/build/gold"], rail: false, under: "history", view: BUILDERS, why: "people who build runs or decide their gates" },
   { key: "lineage", section: "build", href: "/os/build/lineage", label: "Lineage", view: BUILDERS, why: "people who build runs or decide their gates" },
