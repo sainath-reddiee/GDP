@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { AlertTriangle, Inbox } from "lucide-react";
 import { has, type Grants } from "@/lib/os/access";
-import { PRIORITY_TONE, overdue, type OnboardingRequest } from "@/lib/os/requests";
+import { PRIORITY_TONE, overdue, phaseOf, type OnboardingRequest } from "@/lib/os/requests";
 import { Btn, Card, Empty, SourceError, Tag, ago, pretty } from "./ui";
 import { RequestDots } from "./request-dots";
 
@@ -27,6 +27,7 @@ export function RequestQueue({ title, subtitle, requests, access, error, empty, 
                 </span>
                 <span className="flex shrink-0 items-center gap-2">
                   <RequestDots r={r} />
+                  <Tag tone={phaseOf(r).tone}>{phaseOf(r).label}</Tag>
                   <Tag tone={PRIORITY_TONE[r.priority] ?? "neutral"}>{pretty(r.priority)}</Tag>
                   {overdue(r) && <Tag tone="red">Overdue</Tag>}
                   {yours.length > 0 && <Tag tone="green">Your turn</Tag>}

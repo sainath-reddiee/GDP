@@ -168,6 +168,9 @@ def test_a_named_source_matches_its_registration_ignoring_case_and_spaces():
     sources = [{"source_system_id": "s1", "source_system_name": "ZOOMINFO_DEV"}, {"source_system_id": "s2", "source_system_name": "OLD", "active_flag": False}]
     assert rq.match_source("zoominfo_dev ", sources)["source_system_id"] == "s1"
     assert rq.match_source("old", sources) is None and rq.match_source("Yardi", sources) is None
+    # the name the wizard pre-fills for a request (YARDI_VOYAGER for "Yardi Voyager") matches back
+    assert rq.match_source("Yardi Voyager", [{"source_system_id": "y", "source_system_name": "YARDI_VOYAGER"}])["source_system_id"] == "y"
+    assert rq.match_source(" _- ", sources) is None
 
 
 def test_the_existing_run_is_picked_only_when_it_fits():
@@ -385,3 +388,63 @@ def test_a_multi_table_run_names_the_step_of_its_earliest_table_first():
     a = assess([item(run_id="run1")], runs={"run1": run("MAPPING_APPROVED")}, children=kids)
     assert a["stage"] == "DESIGN" and a["waiting_on"] == "STTM.APPROVE"
     assert [w["privilege"] for w in a["waits"]] == ["STTM.APPROVE", "REVIEW.APPROVE"]   # both roles still see their part
+
+
+# ---------------------------------------------------------------- phases and milestones (the owner's words)
+
+
+def test_phases_follow_a_source_from_the_administrator_to_done():
+    assert assess([item(source_system_id=None, source_name="Yardi")])["phase"] == "ENABLE"
+    assert assess([item()])["phase"] == "ONBOARDED"
+    assert assess([item(run_id="run1")], runs={"run1": run("MAPPING_REVIEW")})["phase"] == "DESIGN"
+    assert assess([item(run_id="run1")], runs={"run1": run("SODA_APPROVED")})["phase"] == "STORED"
+    assert assess([item(run_id="run1")], runs={"run1": run("VALIDATION_RUNNING")})["phase"] == "BUILD"
+    flagged = assess([item(run_id="run1")], runs={"run1": run("VALIDATION_FAILED")})
+    assert flagged["phase"] == "FLAGGED" and flagged["items"]["i1"]["phase"] == "FLAGGED"
+    assert assess([item(run_id="run1")], runs={"run1": run("DBT_REVIEW")})["phase"] == "REVIEW"
+    assert assess([item(run_id="run1")], runs={"run1": run("DBT_APPROVED")})["phase"] == "DONE"
+
+
+def test_the_request_phase_is_the_earliest_part_at_its_stage():
+    a = assess([item(), item(item_id="i2", source_system_id="s2", source_name="ZOOMINFO", run_id="run2")],
+               sources={"s1": HEALTHY, "s2": {**HEALTHY, "source_system_id": "s2"}},
+               runs={"run2": run("PROFILING_RUNNING", run_id="run2", source_system_id="s2")})
+    # both are in DESIGN: one onboarded and waiting for its run, one being profiled
+    assert a["stage"] == "DESIGN" and a["phase"] == "ONBOARDED"
+    assert a["items"]["i2"]["phase"] == "DESIGN"
+
+
+def test_phases_of_a_domain_still_to_design_a_product_and_a_closed_request():
+    unapproved = {**DOMAIN, "approved_version": None}
+    assert assess([], domain=unapproved)["phase"] == "DESIGN"
+    # the source is onboarded while the designer still models the domain: the earlier phase shows
+    assert assess([item()], domain=unapproved)["phase"] == "ONBOARDED"
+    assert assess([], domain=None, domain_id=None, proposed_domain="LEASE")["phase"] == "DOMAIN"
+    product = assess([item(source_system_id=None, source_name="Gold run: pipeline")], request_type="PRODUCT")
+    assert product["stage"] == "BUILD" and product["phase"] == "READY"
+    assert assess([item()], status="CANCELLED")["phase"] == "CLOSED"
+
+
+def test_a_multi_table_run_reads_the_phase_of_its_least_advanced_table():
+    kids = [run("SODA_APPROVED", run_id="c1", parent_run_id="run1"), run("STTM_REVIEW", run_id="c2", parent_run_id="run1")]
+    a = assess([item(run_id="run1")], runs={"run1": run("CREATED")}, children={"run1": kids})
+    assert a["stage"] == "DESIGN" and a["phase"] == "DESIGN"
+
+
+def test_milestones_mark_a_source_onboarded_and_a_design_stored():
+    onboarded = rq.milestones({"status": "MISSING", "source_name": "Yardi"}, {"stage": "DESIGN", "status": "NO_RUN"})
+    assert [k for k, _ in onboarded] == ["SOURCE_ONBOARDED"] and "Yardi is onboarded" in onboarded[0][1]
+    assert rq.milestones({"status": "NOT_LANDED"}, {"stage": "DESIGN", "status": "DESIGN"})[0][0] == "SOURCE_ONBOARDED"
+    stored = rq.milestones({"status": "DESIGN", "source_name": "Yardi"}, {"stage": "BUILD", "status": "BUILD"})
+    assert [k for k, _ in stored] == ["DESIGN_STORED"]
+    # a source last seen with the administrator and now already building: onboarded (its design was never seen open)
+    both = rq.milestones({"status": "UNREACHABLE"}, {"stage": "BUILD", "status": "BUILD"})
+    assert [k for k, _ in both] == ["SOURCE_ONBOARDED"]
+    assert [k for k, _ in rq.milestones({"status": "NO_RUN"}, {"stage": "REVIEW", "status": "REVIEW"})] == ["DESIGN_STORED"]
+
+
+def test_no_milestone_while_still_with_the_administrator_or_when_removed_or_first_seen():
+    assert rq.milestones({"status": "MISSING"}, {"stage": "ENABLE", "status": "NOT_LANDED"}) == []
+    assert rq.milestones({"status": "MISSING"}, {"stage": "DONE", "status": "REMOVED"}) == []
+    assert rq.milestones({"status": None}, {"stage": "DESIGN", "status": "NO_RUN"}) == []
+    assert rq.milestones({"status": "BUILD"}, {"stage": "REVIEW", "status": "REVIEW"}) == []

@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { ArrowRight, Bot, Boxes, CheckCircle2, CircleDashed, Crown, Database, GitMerge, Layers, Route, Wrench } from "lucide-react";
+import type { RunSummary, SourceOverviewItem } from "@/lib/types";
 import { stateLabel } from "@/lib/run-labels";
 import { loadDomainModel, loadDomains, loadRuns, loadSources } from "@/lib/os/data";
 import { guard } from "@/lib/os/session";
@@ -20,6 +21,25 @@ const TYPES = [
 
 const REQUEST_TYPE = { source: "SOURCE", domain: "DOMAIN", product: "PRODUCT" } as const;
 
+/** Registered, reachable and landed: attaching it skips the administrator. */
+const sourceReady = (s: SourceOverviewItem) => s.health === "HEALTHY" && (s.staged_tables > 0 || (s.landed_tables ?? 0) > 0);
+
+function SourceOption({ s, checked, feeding }: { s: SourceOverviewItem; checked: boolean; feeding?: RunSummary[] }) {
+  const ready = sourceReady(s);
+  return (
+    <label className={cn("flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-[12px] transition os-hover",
+      checked ? "border-[var(--os-emerald)] bg-[var(--os-green-bg)]" : "border-[var(--os-line)]")}>
+      <input type="checkbox" name="source" value={s.source_system_id} defaultChecked={checked} className="accent-[var(--os-forest)]" />
+      <span className="min-w-0 flex-1"><span className="block truncate font-bold">{s.source_system_name}</span>
+        <span className="os-faint block truncate text-[10.5px]">
+          {feeding?.length ? `${feeding.length} run${feeding.length === 1 ? "" : "s"} · latest ${stateLabel(feeding[0].current_state).toLowerCase()}`
+            : `${pretty(s.source_type)} · ${s.table_count ?? "?"} table${s.table_count === 1 ? "" : "s"}`} · {ready ? "ready" : pretty(s.health).toLowerCase()}
+        </span></span>
+      <span className={cn("h-2 w-2 shrink-0 rounded-full", ready ? "bg-[var(--os-leaf)]" : "bg-[#dfa94b]")} title={ready ? "Ready: registered, reachable and landed" : pretty(s.health)} />
+    </label>
+  );
+}
+
 export default async function Intake({ searchParams }: { searchParams: { type?: string; domain?: string; source?: string | string[] } }) {
   const access = await guard("intake");
   const persona = access.persona;
@@ -27,6 +47,17 @@ export default async function Intake({ searchParams }: { searchParams: { type?: 
   const [domains, sources, runs] = await Promise.all([loadDomains(), loadSources(), loadRuns("sort=updated&limit=150")]);
   const picked = new Set(([] as string[]).concat(searchParams.source ?? []));
   const domain = domains.data.find((d) => d.domain_id === searchParams.domain) ?? null;
+  // the sources already feeding the domain: those its runs read from, newest run first
+  const domainRuns = domain ? await loadRuns(`domain_id=${encodeURIComponent(domain.domain_id)}&sort=updated&limit=200`) : null;
+  const feeding = new Map<string, RunSummary[]>();
+  for (const r of domainRuns?.data.runs ?? []) {
+    if (r.is_archived || !r.source_system_name) continue;
+    feeding.set(r.source_system_name, [...(feeding.get(r.source_system_name) ?? []), r]);
+  }
+  const attached = sources.data.sources.filter((s) => feeding.has(s.source_system_name));
+  // every other registered source, the ready ones first: attaching one of them still skips the administrator
+  const elsewhere = sources.data.sources.filter((s) => !feeding.has(s.source_system_name))
+    .sort((a, b) => Number(sourceReady(b)) - Number(sourceReady(a)) || a.source_system_name.localeCompare(b.source_system_name));
   const chosen = sources.data.sources.filter((s) => picked.has(s.source_system_id));
   const model = domain ? await loadDomainModel(domain.domain_id) : null;
   const priorRuns = runs.data.runs.filter((r) => !r.is_archived && (!domain || r.domain_name === domain.domain_name)
@@ -63,20 +94,27 @@ export default async function Intake({ searchParams }: { searchParams: { type?: 
                 </select>
               </div>
               {type.key !== "domain" && (
-                <fieldset>
-                  <legend className="os-label">Source systems to link</legend>
-                  <div className="grid max-h-[300px] gap-1.5 overflow-auto pr-1 sm:grid-cols-2">
-                    {sources.data.sources.map((s) => (
-                      <label key={s.source_system_id} className={cn("flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-[12px] transition os-hover",
-                        picked.has(s.source_system_id) ? "border-[var(--os-emerald)] bg-[var(--os-green-bg)]" : "border-[var(--os-line)]")}>
-                        <input type="checkbox" name="source" value={s.source_system_id} defaultChecked={picked.has(s.source_system_id)} className="accent-[var(--os-forest)]" />
-                        <span className="min-w-0 flex-1"><span className="block truncate font-bold">{s.source_system_name}</span>
-                          <span className="os-faint block truncate text-[10.5px]">{pretty(s.source_type)} · {s.table_count ?? "?"} tables</span></span>
-                        <span className={cn("h-2 w-2 shrink-0 rounded-full", s.health === "HEALTHY" ? "bg-[var(--os-leaf)]" : "bg-[#dfa94b]")} title={pretty(s.health)} />
-                      </label>
-                    ))}
-                  </div>
-                </fieldset>
+                <div className="grid gap-3" data-testid="attach-sources">
+                  {domain && (
+                    <fieldset data-testid="sources-feeding">
+                      <legend className="os-label">Already feeding {domain.domain_name}</legend>
+                      {attached.length ? (
+                        <div className="grid gap-1.5 sm:grid-cols-2">
+                          {attached.map((s) => <SourceOption key={s.source_system_id} s={s} checked={picked.has(s.source_system_id)} feeding={feeding.get(s.source_system_name)} />)}
+                        </div>
+                      ) : <p className="os-faint text-[11.5px]">No registered source feeds {domain.domain_name} yet: attach one below, or request a new one.</p>}
+                    </fieldset>
+                  )}
+                  <fieldset data-testid="sources-registered">
+                    <legend className="os-label">{domain ? "Registered and could be attached" : "Registered sources"}</legend>
+                    {elsewhere.length ? (
+                      <div className="grid max-h-[260px] gap-1.5 overflow-auto pr-1 sm:grid-cols-2">
+                        {elsewhere.map((s) => <SourceOption key={s.source_system_id} s={s} checked={picked.has(s.source_system_id)} />)}
+                      </div>
+                    ) : <p className="os-faint text-[11.5px]">{sources.data.sources.length ? "Every registered source already feeds this domain." : "No source is registered on the platform yet."}</p>}
+                  </fieldset>
+                  <p className="os-faint text-[11px]">A ready source (green) is registered, reachable and landed, so the request goes straight to the Data Designer. None fits? Name it under Request a new source below and the Data OS Administrator onboards it.</p>
+                </div>
               )}
             </AutoForm>
           </Card>

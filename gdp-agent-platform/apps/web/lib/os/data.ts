@@ -192,6 +192,10 @@ export type RunBundle = {
   events: AuditEvent[];
   reviews: { review_id: string; stage: string; decision: string; business_justification: string | null; reviewer: string; reviewed_at: string }[];
   checks: ValidationCheck[];
+  /** every validation of the run, newest first: its score against the gate of the time */
+  attempts: ValidationAttempt[];
+  /** the gate VALIDATE_DBT enforces for this run (rules validation.*, by its domain and pipeline) */
+  gate: ValidationGate;
   generation: DbtGeneration | null;
   artifacts: DbtArtifact[];
   skills: RunSkill[];
@@ -226,7 +230,7 @@ export async function loadRunBundle(runId: string): Promise<Loaded<RunBundle | n
   catch (e) { return { data: null, error: e instanceof Error ? e.message : String(e) }; }
   const [audit, validation, dbt, skills] = await Promise.all([
     load(api<{ events: AuditEvent[]; reviews: RunBundle["reviews"] }>(`/api/runs/${runId}/audit`), { events: [], reviews: [] }),
-    load(api<{ runs: ValidationCheck[] }>(`/api/runs/${runId}/validation`).then((r) => r.runs ?? []), [] as ValidationCheck[]),
+    load(api<{ runs: ValidationCheck[]; gate?: ValidationGate }>(`/api/runs/${runId}/validation`), { runs: [] as ValidationCheck[], gate: undefined }),
     load(api<{ generation: DbtGeneration | null; artifacts: DbtArtifact[]; branch?: RunBundle["branch"]; publication?: RunBundle["publication"] }>(
       `/api/runs/${runId}/dbt`), { generation: null, artifacts: [] }),
     load(api<{ loaded: RunSkill[] }>(`/api/runs/${runId}/skills`).then((r) => r.loaded ?? []), [] as RunSkill[]),
@@ -236,7 +240,9 @@ export async function loadRunBundle(runId: string): Promise<Loaded<RunBundle | n
       run,
       events: audit.data.events ?? [],
       reviews: audit.data.reviews ?? [],
-      checks: latestChecks(validation.data),
+      checks: latestChecks(validation.data.runs ?? []),
+      attempts: attemptsOf(validation.data.runs ?? []),
+      gate: validation.data.gate ?? DEFAULT_GATE,
       generation: dbt.data.generation ?? null,
       // the file bodies are not needed on the overview screens
       artifacts: (dbt.data.artifacts ?? []).map(({ content: _content, ...a }) => a),
@@ -261,11 +267,40 @@ export function scoreOf(checks: ValidationCheck[]) {
   const passed = checks.filter(checkPassed).length;
   const critical = checks.reduce((n, c) => n + (c.error_count ?? 0), 0);
   const warnings = checks.reduce((n, c) => n + (c.warning_count ?? 0), 0);
-  return { score: total ? Math.round((passed / total) * 100) : null, passed, total, skipped, critical, warnings };
+  const exact = total ? (passed / total) * 100 : null;
+  return { score: exact === null ? null : Math.round(exact), exact, passed, total, skipped, critical, warnings };
 }
 
-/** The validation gate's threshold (guide: 80% AND no critical failure before a PR). */
-export const PASS_THRESHOLD = 80;
+export type ValidationGate = { min_score: number; block_on_errors: boolean };
+/** Only when the API does not say (services.common.rules DEFAULTS): the gate itself is a platform rule. */
+export const DEFAULT_GATE: ValidationGate = { min_score: 80, block_on_errors: true };
+
+/** Whether a score clears the gate: at least the minimum and, while errors block, no error. */
+export function gatePassed(score: ReturnType<typeof scoreOf>, gate: ValidationGate) {
+  return score.exact !== null && score.exact >= gate.min_score && (!gate.block_on_errors || score.critical === 0);
+}
+
+/** The gate in words: "80% with no errors" or, when errors do not block, "80%". */
+export const gateText = (gate: ValidationGate) => `${gate.min_score}%${gate.block_on_errors ? " with no errors" : ""}`;
+
+export type ValidationAttempt = { validation_id: string; at: string; status: string; score: number | null; errors: number;
+  warnings: number; min_score: number | null; reasons: string[] };
+
+/** One entry per validation the run had (its SUMMARY row), newest first, scored from the checks it recorded; the gate
+ *  of the time when the attempt recorded it (validations before the gate rule carry none). */
+export function attemptsOf(runs: ValidationCheck[]): ValidationAttempt[] {
+  return runs.filter((r) => r.validation_type === "SUMMARY")
+    .sort((a, b) => (b.started_at ?? "").localeCompare(a.started_at ?? ""))
+    .map((r) => {
+      let body: { results?: { validation_type: string; status: string; error_count: number; warning_count: number }[];
+        gate?: { score?: number | null; min_score?: number; reasons?: string[] } } = {};
+      try { body = r.result_json ? JSON.parse(r.result_json) : {}; } catch { body = {}; }
+      const checks = (body.results ?? []).map((c) => ({ ...c, validation_id: "", result_json: null, started_at: "", completed_at: null }));
+      const score = body.gate?.score ?? scoreOf(checks).score;
+      return { validation_id: r.validation_id, at: r.completed_at ?? r.started_at, status: r.status, score: score === null || score === undefined ? null : Math.round(score),
+        errors: r.error_count ?? 0, warnings: r.warning_count ?? 0, min_score: body.gate?.min_score ?? null, reasons: body.gate?.reasons ?? [] };
+    });
+}
 
 /** Artifacts grouped by what they are, for the "Generated artifacts" table. */
 export function artifactGroups(artifacts: Pick<DbtArtifact, "artifact_type" | "file_path">[]) {

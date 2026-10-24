@@ -17,6 +17,7 @@ const GROUPS: [string, string, string][] = [
   ["joins.", "Joins", "Join validation limits."],
   ["mapping.", "Mapping", "Confidence needed before a mapping is proposed."],
   ["domain.", "Domain detection", "How a run's domain is recognised."],
+  ["validation.", "Validation gate", "The minimum validation score a run needs before code review, and whether any error blocks it."],
   ["ui.", "Confidence bands", "Where pages draw the high, medium and low lines."],
   ["hints.", "Name hints", "Second-line evidence after the values."],
 ];

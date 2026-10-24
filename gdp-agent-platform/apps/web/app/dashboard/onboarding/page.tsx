@@ -11,6 +11,7 @@ import { DomainOnboarding } from "./domain-onboarding";
 import { FormatsMatrix } from "./domain-formats";
 import { KindPicker, type Kind } from "./kind-picker";
 import { PipelinePreview } from "./pipeline-preview";
+import { RequestHandoff, sourceNameFor } from "./request-handoff";
 import { OnboardingShell, RailStep, Reveal } from "./rail";
 
 type DomainRow = { domain_id: string; domain_name: string; active_flag?: boolean; target_tables?: number; knowledge_items?: number };
@@ -19,7 +20,7 @@ const KINDS: Kind[] = ["source", "domain", "application"];
 
 /** One place to bring something onto the platform: a source, a domain, or (soon) an application. The steps run down a
  *  rail like a pipeline: each is one choice, and once made the other options step away until Change brings them back. */
-export default async function Onboarding({ searchParams }: { searchParams: { type?: string; branch?: string; kind?: string; how?: string; import?: string } }) {
+export default async function Onboarding({ searchParams }: { searchParams: { type?: string; branch?: string; kind?: string; how?: string; import?: string; request?: string; item?: string; name?: string } }) {
   const kind = KINDS.find((k) => k === searchParams.type) ?? null;
   const branch = searchParams.branch === "share" || searchParams.branch === "external" ? searchParams.branch : null;
   const sourceKind = searchParams.kind === "database" || searchParams.kind === "file" ? searchParams.kind : null;
@@ -42,12 +43,14 @@ export default async function Onboarding({ searchParams }: { searchParams: { typ
     <OnboardingShell>
       <div className="space-y-8">
         <PageHeader eyebrow="Build" title="Onboarding" />
+        {kind === "source" && searchParams.request && <RequestHandoff requestId={searchParams.request} itemId={searchParams.item} />}
 
         <div>
           <KindPicker value={kind} />
 
           {kind === "source" && (
             <OnboardWizard key="source" initialBranch={branch} initialKind={sourceKind} shares={shares} databases={databases} landing={landing} user={me?.user ?? null}
+                           initialName={searchParams.name ? sourceNameFor(searchParams.name) : ""}
                            domains={active.map((d) => ({ domain_id: d.domain_id, domain_name: d.domain_name }))} />
           )}
 

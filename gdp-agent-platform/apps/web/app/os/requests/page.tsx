@@ -3,7 +3,7 @@ import { AlertTriangle, CalendarClock, Inbox, Plus } from "lucide-react";
 import { loadRequests } from "@/lib/os/data";
 import { guard } from "@/lib/os/session";
 import { has, hasAny } from "@/lib/os/access";
-import { PRIORITY_TONE, overdue, stageOwner } from "@/lib/os/requests";
+import { PRIORITY_TONE, overdue, phaseOf, stageOwner } from "@/lib/os/requests";
 import { RequestDots } from "@/components/os/request-dots";
 import { Btn, Card, Empty, Kpi, PageHeader, SourceError, Tag, ago, pretty } from "@/components/os/ui";
 import { cn } from "@/lib/utils";
@@ -59,7 +59,7 @@ export default async function Requests({ searchParams }: { searchParams: { view?
                       <div className="os-faint truncate text-[11px]">{pretty(r.request_type)} · {r.domain_name ?? (r.proposed_domain ? `new domain ${r.proposed_domain}` : "no domain")} ·{" "}
                         {r.items.length ? `${r.items.filter((i) => !i.removed_at).length} source${r.items.filter((i) => !i.removed_at).length === 1 ? "" : "s"}` : "no source"}</div>
                     </td>
-                    <td><RequestDots r={r} /><div className="os-faint mt-1 text-[10.5px]">{r.status === "OPEN" ? pretty(r.stage) : pretty(r.status)}</div></td>
+                    <td><RequestDots r={r} /><div className="os-faint mt-1 text-[10.5px]">{r.status === "OPEN" ? phaseOf(r).label : pretty(r.status)}</div></td>
                     <td className="max-w-[300px]">
                       {r.status === "OPEN" ? (
                         <>

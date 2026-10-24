@@ -2,16 +2,16 @@ import Link from "next/link";
 import { ArrowRight, CheckCircle2, CircleDashed, ClipboardList, Flag, Hand, ShieldAlert, ShieldCheck, Sparkles, TriangleAlert } from "lucide-react";
 import { GATES, stateLabel } from "@/lib/run-labels";
 import {
-  PASS_THRESHOLD, checkPassed, checkSkipped, defaultRun, findingsOf, loadRunBundle, loadRuns, runOptions, scoreOf, tableOf,
-  type ValidationCheck,
+  checkPassed, checkSkipped, defaultRun, findingsOf, gatePassed, gateText, loadRunBundle, loadRuns, runOptions, scoreOf, tableOf,
+  type ValidationAttempt, type ValidationCheck,
 } from "@/lib/os/data";
 import { guard } from "@/lib/os/session";
-import { actMode, has } from "@/lib/os/access";
+import { ACTIONS, actMode, has } from "@/lib/os/access";
 import { Action } from "@/components/os/action";
 import { lifecycleOfRun, classicHref } from "@/lib/os/lifecycle";
 import { ActivityRow, Banner, Bar, Btn, Card, Empty, Field, Kpi, PageHeader, SourceError, Stepper, Tag, ago, pretty } from "@/components/os/ui";
 import { RunPicker } from "@/components/os/run-picker";
-import { GateDecision } from "@/components/os/decide";
+import { GateDecision, ValidateAgain } from "@/components/os/decide";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Validation gate" };
@@ -79,8 +79,16 @@ export default async function ReviewGate({ searchParams }: { searchParams: { run
   const { run } = b;
   const score = scoreOf(b.checks);
   const steps = lifecycleOfRun(run);
-  const failed = run.current_state === "VALIDATION_FAILED" || score.critical > 0;
-  const passed = score.score !== null && score.score >= PASS_THRESHOLD && score.critical === 0;
+  const passed = gatePassed(score, b.gate);
+  const failed = run.current_state === "VALIDATION_FAILED" || (score.score !== null && !passed);
+  const min = b.gate.min_score;
+  // why the gate held the run: the reasons VALIDATE_DBT recorded on its latest attempt, else worked out here
+  const latest = b.attempts[0];
+  const reasons = latest?.reasons.length ? latest.reasons : [
+    ...(score.exact !== null && score.exact < min ? [`score ${score.score}% is below the ${min}% minimum`] : []),
+    ...(b.gate.block_on_errors && score.critical ? [`${score.critical} error${score.critical === 1 ? "" : "s"} must be fixed`] : []),
+  ];
+  const validateMode = actMode(access, ACTIONS.validateAgain.privilege);
   const gate = GATES[run.current_state];
   const rows = b.checks.map((c) => ({ c, sev: severity(c), findings: findingsOf(c) }))
     .sort((x, y) => ["Critical", "Warning", "Skipped", "Passed"].indexOf(x.sev.label) - ["Critical", "Warning", "Skipped", "Passed"].indexOf(y.sev.label));
@@ -112,7 +120,7 @@ export default async function ReviewGate({ searchParams }: { searchParams: { run
 
       {failed && (
         <Banner tone="red" icon={ShieldAlert}>
-          <b>Validation blocked.</b> Score {score.score ?? 0}% with {score.critical} critical error{score.critical === 1 ? "" : "s"}; the gate needs {PASS_THRESHOLD}% and no errors. The pull request is held until the failing checks pass.
+          <b>Validation flagged.</b> {reasons.length ? `${reasons.join("; ")}.` : `Score ${score.score ?? 0}%.`} The gate needs {gateText(b.gate)}, so the pull request is held: improve the failing checks at their source or the skill that produced them, then validate again.
         </Banner>
       )}
       {!failed && gate && (
@@ -123,7 +131,7 @@ export default async function ReviewGate({ searchParams }: { searchParams: { run
       <div className="mb-4"><Stepper steps={steps} hrefOf={(s) => s.status === "pending" ? null : classicHref(run.run_id, s)} /></div>
 
       <div className="mb-4 grid grid-cols-2 gap-3 xl:grid-cols-4">
-        <Kpi label="Validation score" value={score.score === null ? "–" : `${score.score}%`} hint={`Policy threshold ${PASS_THRESHOLD}%`} icon={passed ? ShieldCheck : ShieldAlert} tone={score.score === null ? "neutral" : passed ? "green" : "red"} />
+        <Kpi label="Validation score" value={score.score === null ? "–" : `${score.score}%`} hint={`Gate ${gateText(b.gate)}`} icon={passed ? ShieldCheck : ShieldAlert} tone={score.score === null ? "neutral" : passed ? "green" : "red"} />
         <Kpi label="Critical findings" value={score.critical} hint={score.critical ? "must be fixed" : "none blocking"} icon={Flag} tone={score.critical ? "red" : "green"} />
         <Kpi label="Warnings" value={score.warnings} hint="advisory, not blocking" icon={TriangleAlert} tone={score.warnings ? "amber" : "green"} />
         <Kpi label="Checks evaluated" value={`${score.passed}/${score.total}`} hint={score.skipped ? `${score.skipped} skipped` : "all evaluated"} icon={ClipboardList} tone="blue" />
@@ -181,11 +189,11 @@ export default async function ReviewGate({ searchParams }: { searchParams: { run
               <div className={`text-[34px] font-extrabold leading-none tracking-tight tabular-nums ${failed ? "text-[var(--os-red-ink)]" : passed ? "text-[var(--os-emerald)]" : "os-faint"}`}>
                 {score.score ?? "–"}<span className="text-[15px]">%</span>
               </div>
-              <span className="os-faint text-[11px]">required {PASS_THRESHOLD}%</span>
+              <span className="os-faint text-[11px]">required {min}%{b.gate.block_on_errors ? ", no errors" : ""}</span>
             </div>
             <div className="relative mt-2">
               <Bar className="h-2.5" value={score.score ?? 0} tone={failed ? "red" : "green"} />
-              <span className="absolute top-[-3px] h-4 w-0.5 bg-[var(--os-ink)]" style={{ left: `${PASS_THRESHOLD}%` }} title={`Gate ${PASS_THRESHOLD}%`} />
+              <span className="absolute top-[-3px] h-4 w-0.5 bg-[var(--os-ink)]" style={{ left: `${Math.min(100, Math.max(0, min))}%` }} title={`Gate ${min}%`} />
             </div>
             <div className="os-subtle mt-4 rounded-lg p-3 text-[12px] leading-relaxed">
               <b>Recommendation.</b>{" "}
@@ -194,22 +202,63 @@ export default async function ReviewGate({ searchParams }: { searchParams: { run
                 : "Validation has not run yet for this run."}
             </div>
             <div className="mt-4 flex flex-wrap gap-2">
-              <Action access={access} id="revalidate" href={`/runs/${run.run_id}/validation`} variant={failed ? "primary" : "default"} />
+              {b.generation && validateMode !== "none"
+                ? <ValidateAgain runId={run.run_id} mode={validateMode} previewing={!!access.preview} variant={failed ? "primary" : "default"} />
+                : null}
+              <Action access={access} id="revalidate" href={`/runs/${run.run_id}/validation`} />
               {run.current_state === "DBT_REVIEW" && <Action access={access} id="reviewCode" label="Review the code" href={`/runs/${run.run_id}/review`} variant="mint" />}
               {failed && validationSkill && <Action access={access} id="editSkill" label="Open skill studio" href={`/os/skills?skill=${encodeURIComponent(validationSkill.skill_name)}`} variant="warn" />}
             </div>
           </Card>
 
+          <Attempts attempts={b.attempts} min={min} />
           <Card title="What happens next" subtitle="Controlled recovery, no work redone">
             <div className="os-divide">
               <ActivityRow tone={failed ? "amber" : "green"} icon={Sparkles} title="Skill or source fix" sub="A versioned skill change or a corrected mapping, owned by a person" />
               <ActivityRow tone="blue" icon={ArrowRight} title="Regenerate affected outputs" sub="Only generation and validation rerun; approved mapping and DQ stay approved" />
-              <ActivityRow tone="green" icon={ShieldCheck} title="Independent validation" sub={`Must reach ${PASS_THRESHOLD}% with no critical error before code review`} />
+              <ActivityRow tone="green" icon={ShieldCheck} title="Independent validation" sub={`Must reach ${gateText(b.gate)} before code review`} />
             </div>
           </Card>
           {queue}
         </div>
       </div>
     </>
+  );
+}
+
+/** Every validation of the run, newest first: its score against the gate of the time, and how far the run came. */
+function Attempts({ attempts, min }: { attempts: ValidationAttempt[]; min: number }) {
+  if (!attempts.length) return null;
+  const scored = attempts.filter((a) => a.score !== null);
+  const first = scored[scored.length - 1];
+  const last = scored[0];
+  const from = scored.length > 1 ? first?.score ?? null : null;
+  const to = last?.score ?? null;
+  const trend = from === null || to === null ? `${attempts.length} attempt${attempts.length === 1 ? "" : "s"}`
+    : to > from ? `Improved ${from}% → ${to}% over ${attempts.length} attempts`
+    : to < from ? `Went from ${from}% to ${to}% over ${attempts.length} attempts`
+    : `Steady at ${to}% over ${attempts.length} attempts`;
+  return (
+    <Card title="Validation attempts" subtitle={trend} pad={false}>
+      <div className="os-divide" data-testid="validation-attempts">
+        {attempts.slice(0, 8).map((a, i) => {
+          const gate = a.min_score ?? min;
+          const ok = a.status === "PASSED";
+          return (
+            <div key={a.validation_id} className="flex items-start justify-between gap-3 px-5 py-2.5">
+              <div className="min-w-0">
+                <div className="text-[12.5px] font-bold tabular-nums">
+                  {a.score === null ? "No score" : `${a.score}%`}
+                  <span className="os-faint ml-1.5 text-[10.5px] font-normal">gate {gate}% · {a.errors} error{a.errors === 1 ? "" : "s"} · {a.warnings} warning{a.warnings === 1 ? "" : "s"}{i === 0 ? " · latest" : ""}</span>
+                </div>
+                {a.reasons.length > 0 && <div className="os-muted text-[11px]">{a.reasons.join("; ")}</div>}
+                <div className="os-faint text-[10.5px]">{ago(a.at)}</div>
+              </div>
+              <Tag tone={ok ? "green" : "red"}>{ok ? "Passed" : "Flagged"}</Tag>
+            </div>
+          );
+        })}
+      </div>
+    </Card>
   );
 }

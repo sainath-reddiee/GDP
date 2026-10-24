@@ -89,7 +89,7 @@ function Toggle({ id, checked, onChange, label, help, col }: { id: string; check
  * SharePoint), each kind with its own questions (the onboarding configuration workbook): one page with the defaults
  * filled in, checked as a whole by the API (every problem shown where it is, the review once nothing is); saving writes one catalog row for the source and one control row per table
  * (CORE.INGESTION_CONTROL_CONFIG) under one master ID, and SnapLogic's AODS rows when the sync is on. */
-export function IngestionWizard({ kind, domains, user }: { kind: SourceKind; domains: DomainOption[]; user: string | null }) {
+export function IngestionWizard({ kind, domains, user, initialName = "" }: { kind: SourceKind; domains: DomainOption[]; user: string | null; initialName?: string }) {
   const toast = useToast();
   const files = kind === "file";
   // the form as it was when Check last passed; any change after that hides the review until the next check
@@ -97,7 +97,7 @@ export function IngestionWizard({ kind, domains, user }: { kind: SourceKind; dom
   // whether Check has run at all (sections without problems then show as done), and the section in view
   const [checkedOnce, setCheckedOnce] = useState(false);
   const [active, setActive] = useState<string>("source");
-  const [source, setSource] = useState({ source_name: "", source_type: KIND_TYPES[kind][0].value, domain_id: "", source_account: "",
+  const [source, setSource] = useState({ source_name: initialName, source_type: KIND_TYPES[kind][0].value, domain_id: "", source_account: "",
                                          source_database_path: "", source_schema_file: "", source_file_type: files ? "CSV" : "TABLE",
                                          source_sheet_name: "", source_system_desc: "", airflow_source_system: "", silver_command_name: "" });
   const [tables, setTables] = useState<Table[]>([{ ...EMPTY_TABLE }]);

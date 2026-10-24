@@ -4209,7 +4209,21 @@ def get_validation(run_id: str, db: Db = Depends(current_db)):
          ORDER BY STARTED_AT DESC
         """,
         (run_id,),
-    )}
+    ), "gate": _validation_gate(db, run_id)}
+
+
+def _validation_gate(db: Db, run_id: Optional[str] = None) -> dict:
+    """The validation gate's rules for a run (its domain and pipeline), or the platform's without a run: what
+    VALIDATE_DBT enforces, so the pages draw the same line."""
+    from services.common.rules import DEFAULTS
+    from services.common.standard import run_pipeline
+
+    try:
+        run = db.query("SELECT DOMAIN_ID, PIPELINE FROM CORE.WORKFLOW_RUN WHERE RUN_ID = %s", (run_id,)) if run_id else []
+        rules = _rules(db, run[0].get("domain_id") if run else None, run_pipeline(run[0]) if run else "SILVER")
+    except Exception:
+        rules = DEFAULTS
+    return {"min_score": rules["validation.min_score"], "block_on_errors": rules["validation.block_on_errors"]}
 
 
 @app.post("/api/knowledge/search")

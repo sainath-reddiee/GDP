@@ -4,7 +4,7 @@ import { stateLabel } from "@/lib/run-labels";
 import { loadDomains, loadRequest, loadRuns, loadSources } from "@/lib/os/data";
 import { guard } from "@/lib/os/session";
 import { has } from "@/lib/os/access";
-import { PRIORITY_TONE, overdue, requestSteps, type RequestEvent, type RequestItem, type Wait } from "@/lib/os/requests";
+import { PRIORITY_TONE, overdue, phaseOf, requestSteps, type RequestEvent, type RequestItem, type Wait } from "@/lib/os/requests";
 import { ActivityRow, Banner, Btn, Card, Empty, Field, PageHeader, SourceError, Tag, ago, pretty, type Tone } from "@/components/os/ui";
 import { AddSource, ItemControls, LinkDomain, RequestControls } from "@/components/os/request-ui";
 import { cn } from "@/lib/utils";
@@ -36,10 +36,12 @@ const EVENT: Record<string, (e: RequestEvent) => string> = {
   REJECTED: () => "Rejected the request",
   REOPENED: () => "Reopened the request",
   DONE: () => "Every part is done: the request is complete",
+  SOURCE_ONBOARDED: () => "Source onboarded",
+  DESIGN_STORED: () => "Design approved and stored",
 };
 
 /** Where the person a wait names does the work. */
-function actHref(w: Wait, item: RequestItem | undefined, domainId: string | null, product: boolean): string | null {
+function actHref(w: Wait, item: RequestItem | undefined, domainId: string | null, product: boolean, requestId: string): string | null {
   if (w.privilege === "DOMAIN.EDIT") return "/dashboard/onboarding?type=domain";
   if (w.privilege === "MODEL.APPROVE" || w.privilege === "MODEL.EDIT") return domainId ? `/domains/${domainId}` : "/domains";
   if (item?.run_id) {
@@ -47,7 +49,13 @@ function actHref(w: Wait, item: RequestItem | undefined, domainId: string | null
       ? `/os/review?run=${item.run_id}` : `/os/build?run=${item.run_id}`;
   }
   if (w.privilege === "RUN.CREATE") return product ? "/gold" : "/dashboard/onboarding?type=source";
-  if (w.privilege === "SOURCE.CONNECT" || w.privilege === "PROFILE.RUN") return "/dashboard/onboarding?type=source";
+  if (w.privilege === "SOURCE.CONNECT" || w.privilege === "PROFILE.RUN") {
+    // a source to register opens the wizard for this request (Enable shows the same); one registered goes to the store
+    if (item && !item.source_system_id) {
+      return `/dashboard/onboarding?type=source&${new URLSearchParams({ request: requestId, item: item.item_id, name: item.source_name })}`;
+    }
+    return item?.source_system_id ? "/dashboard/sources" : "/os/enable";
+  }
   return null;
 }
 
@@ -84,7 +92,7 @@ export default async function RequestPage({ params }: { params: { id: string } }
         subtitle={r.business_outcome ?? undefined}
         actions={<Btn href="/os/requests">All requests</Btn>}
         meta={<>
-          <Tag tone={r.status === "OPEN" ? "blue" : r.status === "DONE" ? "green" : "neutral"}>{r.status === "OPEN" ? pretty(r.stage) : pretty(r.status)}</Tag>
+          <Tag tone={r.status === "OPEN" ? phaseOf(r).tone : r.status === "DONE" ? "green" : "neutral"}>{r.status === "OPEN" ? phaseOf(r).label : pretty(r.status)}</Tag>
           <span className="os-muted">Domain: <b className="os-ink">{r.domain_name ?? (r.proposed_domain ? `${r.proposed_domain} (to create)` : "none")}</b></span>
           <Tag tone={PRIORITY_TONE[r.priority] ?? "neutral"}>{pretty(r.priority)} priority</Tag>
           {r.needed_by && <span className={cn("inline-flex items-center gap-1", overdue(r) ? "text-[var(--os-red-ink)]" : "os-muted")}><CalendarClock className="h-3.5 w-3.5" />Needed by {r.needed_by.slice(0, 10)}{overdue(r) ? " (overdue)" : ""}</span>}
@@ -130,7 +138,8 @@ export default async function RequestPage({ params }: { params: { id: string } }
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="text-[13.5px] font-extrabold">{i.source_name}</span>
-                        <Tag tone={ITEM_TONE[i.status] ?? "neutral"}>{ITEM_LABEL[i.status] ?? pretty(i.status)}</Tag>
+                        <Tag tone={i.status === "ATTENTION" ? "red" : phaseOf(i).tone}>{phaseOf(i).label}</Tag>
+                        {["MISSING", "UNREACHABLE", "NOT_LANDED", "ATTENTION"].includes(i.status) && <Tag tone={ITEM_TONE[i.status] ?? "neutral"}>{ITEM_LABEL[i.status] ?? pretty(i.status)}</Tag>}
                         {!i.source_system_id && !product && <Tag tone="amber">named only</Tag>}
                       </div>
                       {i.source_note && <div className="os-muted mt-0.5 text-[11.5px]">{i.source_note}</div>}
@@ -177,7 +186,7 @@ export default async function RequestPage({ params }: { params: { id: string } }
               <div className="os-divide">
                 {r.waits.map((w) => {
                   const item = r.items.find((i) => i.item_id === w.item_id);
-                  const href = actHref(w, item, r.domain_id, product);
+                  const href = actHref(w, item, r.domain_id, product, r.request_id);
                   const you = has(access, w.privilege);
                   return (
                     <div key={`${w.privilege}-${w.label}-${w.item_id ?? ""}`} className="flex items-start justify-between gap-3 py-2.5">

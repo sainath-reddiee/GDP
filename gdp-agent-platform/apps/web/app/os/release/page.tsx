@@ -2,7 +2,7 @@ import Link from "next/link";
 import { ArrowRight, CheckCircle2, CircleDashed, FileCode2, FlaskConical, GitPullRequest, Hand, Rocket, ShieldCheck, Sparkles, X } from "lucide-react";
 import { stateLabel } from "@/lib/run-labels";
 import {
-  PASS_THRESHOLD, defaultRun, loadKnowledgeFeed, loadPrs, loadRunBundle, loadRunQa, loadRuns, runOptions, scoreOf, tableOf,
+  defaultRun, gatePassed, loadKnowledgeFeed, loadPrs, loadRunBundle, loadRunQa, loadRuns, runOptions, scoreOf, tableOf,
 } from "@/lib/os/data";
 import { guard } from "@/lib/os/session";
 import { Action } from "@/components/os/action";
@@ -44,7 +44,7 @@ export default async function CodeAndRelease({ searchParams }: { searchParams: {
 
   const { run } = b;
   const score = scoreOf(b.checks);
-  const validated = score.score !== null && score.score >= PASS_THRESHOLD && score.critical === 0;
+  const validated = gatePassed(score, b.gate);
   const runPrs = prs.data.prs.filter((p) => (p.href ?? "").includes(run.run_id) || (p.asset_name && run.run.target_model?.includes(p.asset_name)));
   const reviewed = AFTER_REVIEW.includes(run.current_state);
   const released = ["COMPLETED", "DEPLOYED", "PIPELINE_ENABLED"].includes(run.current_state);

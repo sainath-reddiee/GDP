@@ -107,7 +107,7 @@ export function SubmitRequest({ type, domainId, domainName, picked, previewing }
       )}
       {type !== "PRODUCT" && (
         <div>
-          <span className="os-label">Sources not registered yet</span>
+          <span className="os-label">Request a new source</span>
           <div className="flex flex-wrap gap-2">
             <input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder="Source name, e.g. Yardi" maxLength={256}
                    aria-label="Unregistered source name" disabled={previewing} className="os-input min-w-[160px] flex-1" />
@@ -126,7 +126,7 @@ export function SubmitRequest({ type, domainId, domainName, picked, previewing }
               ))}
             </div>
           )}
-          <p className="os-faint mt-1 text-[11px]">A name that matches a registered source is linked to it automatically; anything else goes to the Data OS Administrator to register.</p>
+          <p className="os-faint mt-1 text-[11px]">For a source not on the platform yet. A name that matches a registered source is attached to it automatically; anything else goes to the Data OS Administrator to onboard, and the request reads "Source onboarded" once it is registered, reachable and landed.</p>
         </div>
       )}
       {dupes && (

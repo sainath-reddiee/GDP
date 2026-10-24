@@ -200,3 +200,52 @@ test("a super admin gives personas in People and the header has no role picker",
   await page.getByRole("button", { name: "Stop preview" }).click();
   await page.waitForURL(/\/os\/people$/);
 });
+
+// Phase 12: the administrator onboards sources as configuration, owners attach what exists, the gate has a minimum score.
+test("Enable is configuration first: requests on top, the wizard's ways in, no table catalog", async ({ page }) => {
+  await page.goto("/os/enable");
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Source readiness");
+  await expect(page.getByText("Requests waiting on a source")).toBeVisible();
+  const ways = page.getByTestId("onboard-ways").getByRole("link");
+  await expect(ways).toHaveCount(3);
+  await expect(ways.nth(0)).toHaveAttribute("href", /\/dashboard\/onboarding\?type=source&branch=share$/);
+  await expect(ways.nth(1)).toHaveAttribute("href", /branch=external&kind=database$/);
+  await expect(ways.nth(2)).toHaveAttribute("href", /branch=external&kind=file$/);
+  // configuration cards, never a table catalog or a secret value
+  await expect(page.getByTestId("source-config").first()).toBeVisible();
+  await expect(page.getByRole("columnheader", { name: "Staged" })).toHaveCount(0);
+  await expect(page.getByText(/password\s*:/i)).toHaveCount(0);
+  // a source a request asks for opens the wizard for that request
+  const ask = page.getByTestId("enable-asks").getByRole("link", { name: /^Onboard as/ }).first();
+  if (await ask.count()) await expect(ask).toHaveAttribute("href", /request=[0-9a-f-]+&item=[0-9a-f-]+&name=/);
+});
+
+test("the wizard opened for a request says so and starts from the request's source name", async ({ page }) => {
+  await page.goto("/dashboard/onboarding?type=source&branch=external&kind=database&request=00000000-0000-0000-0000-000000000000&item=x&name=Yardi%20Voyager");
+  await expect(page.getByRole("status").filter({ hasText: "could not be read" })).toBeVisible();
+  await expect(page.locator("#source_name")).toHaveValue("YARDI_VOYAGER");
+});
+
+test("Intake offers the sources already feeding the domain, the other registered ones and a new one", async ({ page }) => {
+  await page.goto("/os/intake?type=source");
+  await expect(page.getByTestId("sources-feeding")).toHaveCount(0);
+  await expect(page.getByTestId("sources-registered")).toBeVisible();
+  const domain = page.locator("#domain");
+  const first = await domain.locator("option").nth(1).getAttribute("value");
+  test.skip(!first, "no domain is onboarded");
+  await page.goto(`/os/intake?type=source&domain=${first}`);
+  await expect(page.getByTestId("sources-feeding")).toBeVisible();
+  await expect(page.getByTestId("sources-registered")).toBeVisible();
+  await expect(page.getByText("Request a new source", { exact: true })).toBeVisible();
+});
+
+test("the validation gate shows the minimum from the rules and validates again in place", async ({ page }) => {
+  await page.goto("/os/review");
+  await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+  const required = page.getByText(/^required \d+(\.\d+)?%/);
+  test.skip(!(await required.count()), "no run to show");
+  await expect(required).toBeVisible();
+  // never submitted here: validating is a real write on the platform
+  const again = page.getByTestId("validate-again-button");
+  if (await again.count()) await expect(again).toHaveText(/Validate again|Request validation/);
+});

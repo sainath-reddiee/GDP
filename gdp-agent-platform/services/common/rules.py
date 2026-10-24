@@ -36,6 +36,11 @@ DEFAULTS: Dict[str, Any] = {
     # domain detection
     "domain.inferred_min_confidence": 0.3,
     "domain.inherited_min_confidence": 0.2,
+    # the validation gate: a generated project reaches code review only when this share of its evaluated checks
+    # (skipped ones are not evaluated, warnings count as passed) passes, and, while block_on_errors holds, no check
+    # reports an error; below it the run is VALIDATION_FAILED with the reason, to be improved and validated again
+    "validation.min_score": 80.0,
+    "validation.block_on_errors": True,
     # confidence bands the UI shows (read from the API, never hardcoded in pages)
     "ui.confident": 0.8,
     "ui.weak": 0.45,

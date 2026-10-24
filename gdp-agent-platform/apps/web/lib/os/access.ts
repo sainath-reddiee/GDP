@@ -159,6 +159,7 @@ export const ACTIONS = {
   manageIngestion: { privilege: "SOURCE.CONNECT", label: "Manage pipelines" },
   workStep: { privilege: "RUN.OPERATE", label: "Work this step" },
   revalidate: { privilege: "RUN.OPERATE", label: "Open validation" },
+  validateAgain: { privilege: "RUN.OPERATE", label: "Validate again" },
   openDbtStudio: { privilege: "DBT.EDIT", label: "Open dbt studio" },
   publishPr: { privilege: "DBT.EDIT", label: "Publish from dbt studio" },
   reviewCode: { privilege: "REVIEW.APPROVE", label: "Review code" },

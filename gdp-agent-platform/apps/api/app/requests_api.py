@@ -234,8 +234,9 @@ def refresh(db: Db, requests: List[Dict[str, Any]], write: bool = True) -> List[
         out.append({
             **_out(r), "domain_name": domain.get("domain_name") if domain else None,
             "stage": a["stage"], "status": a["status"], "waiting_on": a["waiting_on"], "waiting_label": a["waiting_label"],
-            "attention": a["attention"], "waits": a["waits"],
+            "attention": a["attention"], "waits": a["waits"], "phase": a["phase"],
             "items": [{**_out(i), "status": a["items"][i["item_id"]]["status"], "status_detail": a["items"][i["item_id"]].get("detail"),
+                       "phase": a["items"][i["item_id"]]["phase"],
                        "stage": a["items"][i["item_id"]]["stage"], "waits": a["items"][i["item_id"]]["waits"],
                        "attention": a["items"][i["item_id"]].get("attention"),
                        "run_name": runs.get(i.get("run_id") or "", {}).get("run_name"),
@@ -250,6 +251,8 @@ def _persist(db: Db, r: Dict[str, Any], items: List[Dict[str, Any]], a: Dict[str
         if (i.get("status"), i.get("status_detail")) != (s["status"], (s.get("detail") or "")[:1000] or None):
             db.execute("UPDATE CORE.ONBOARDING_REQUEST_ITEM SET STATUS = %s, STATUS_DETAIL = %s, UPDATED_AT = CURRENT_TIMESTAMP() WHERE ITEM_ID = %s",
                        (s["status"], (s.get("detail") or "")[:1000] or None, i["item_id"]))
+            for kind, note in rq.milestones(i, s):
+                _event(db, r["request_id"], kind, note, item_id=i["item_id"], frm=i.get("status"), to=s["status"], automatic=True)
     if r.get("status") == rq.OPEN and a["status"] == rq.DONE:
         db.execute("UPDATE CORE.ONBOARDING_REQUEST SET STATUS = 'DONE', STAGE = 'DONE', WAITING_ON = NULL, WAITING_LABEL = NULL, ATTENTION = NULL, "
                    "CLOSED_BY = 'PLATFORM', CLOSED_AT = CURRENT_TIMESTAMP(), UPDATED_AT = CURRENT_TIMESTAMP(), STAGE_CHANGED_AT = CURRENT_TIMESTAMP() "

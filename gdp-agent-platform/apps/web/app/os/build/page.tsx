@@ -4,7 +4,7 @@ import { stateLabel } from "@/lib/run-labels";
 import { labelFor, pipelineOf } from "@/lib/stages";
 import type { StageStatusValue } from "@/lib/types";
 import {
-  PASS_THRESHOLD, artifactGroups, defaultRun, loadRunBundle, loadRuns, runOptions, scoreOf, tableOf,
+  artifactGroups, gatePassed, gateText, defaultRun, loadRunBundle, loadRuns, runOptions, scoreOf, tableOf,
 } from "@/lib/os/data";
 import { guard } from "@/lib/os/session";
 import { Action } from "@/components/os/action";
@@ -53,7 +53,7 @@ export default async function BuildWorkbench({ searchParams }: { searchParams: {
   const steps = lifecycleOfRun(run);
   const now = currentStep(steps);
   const score = scoreOf(b.checks);
-  const passed = score.score !== null && score.score >= PASS_THRESHOLD && score.critical === 0;
+  const passed = gatePassed(score, b.gate);
   const stage = (s: string) => run.stages.find((x) => x.stage === s);
   const groups = artifactGroups(b.artifacts);
   const table = tableOf(run.run.target_model);
@@ -65,7 +65,7 @@ export default async function BuildWorkbench({ searchParams }: { searchParams: {
     { n: "01", title: "Profile", actor: "Deterministic tool", stage: "PROFILING", what: "Snowflake profiling and sampling" },
     { n: "02", title: "Design agent", actor: "Agent + approval", stage: "MAPPING", what: "Domain model and field mapping" },
     { n: "03", title: "Build agent", actor: "Agent", stage: "DBT", what: b.generation ? `dbt v${b.generation.generation_version}: ${b.generation.files_generated} files` : "dbt models, tests and config" },
-    { n: "04", title: "Review agent", actor: "Independent agent", stage: "VALIDATION", what: score.total ? `${score.passed}/${score.total} checks · gate ${PASS_THRESHOLD}%` : `Policy threshold ${PASS_THRESHOLD}%` },
+    { n: "04", title: "Review agent", actor: "Independent agent", stage: "VALIDATION", what: score.total ? `${score.passed}/${score.total} checks · gate ${b.gate.min_score}%` : `Policy threshold ${b.gate.min_score}%` },
   ];
 
   const primary = validationFailed
@@ -190,7 +190,7 @@ export default async function BuildWorkbench({ searchParams }: { searchParams: {
           </div>
         </div>
         <Bar className="mt-2 h-2.5" value={score.score ?? 0} tone={score.score === null ? "green" : passed ? "green" : "red"} />
-        <div className="os-faint mt-1 text-right text-[10.5px]">Gate at {PASS_THRESHOLD}% with no errors</div>
+        <div className="os-faint mt-1 text-right text-[10.5px]">Gate at {gateText(b.gate)}</div>
         <div className="os-divide mt-2">
           <ActivityRow tone={approvals.length ? "green" : "neutral"} icon={approvals.length ? CheckCircle2 : CircleDashed} title="Prerequisites"
                        sub={approvals.length ? `Approved by a person: ${approvals.map((r) => `${labelFor(r.stage, pipeline).toLowerCase()} (${r.reviewer})`).join(", ")}` : "No design approval recorded yet"} />

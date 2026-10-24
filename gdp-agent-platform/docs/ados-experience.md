@@ -47,7 +47,7 @@ A data owner files a request on Intake: a source, a new domain, or a data produc
 | Done | every source's run is approved or completed | nobody; the request closes itself |
 
 **Edge cases covered (unit tested, `tests/unit/test_onboarding_requests.py`)**
-- **Sources by name.** A named source matches its registration, ignoring case and spaces. A name with no registration waits on the administrator, who links it to the registration once it exists. A source that is deleted or retired after filing needs attention.
+- **Sources by name.** A named source matches its registration, ignoring case, spacing and punctuation. A name with no registration waits on the administrator, who links it to the registration once it exists. A source that is deleted or retired after filing needs attention.
 - **Linking runs.**
   - The existing run that onboards a source into the domain is linked automatically. It must be top level, not archived, cancelled or failed, and in the same domain; the most advanced one is chosen.
   - Linking by hand refuses a run of another source, a run of another domain, and a table run of a multi-table run.
@@ -77,6 +77,28 @@ A data owner files a request on Intake: a source, a new domain, or a data produc
 - **Reject:** `SOURCE.CONNECT`, `DOMAIN.EDIT` or `ROLE.MANAGE`.
 
 Reads follow domain membership (`domains.can_see`). Requests waiting on a role appear in that role's My Work, in Enable (sources to enable) and in Design (the domain's requests). Notifications stay in-app.
+
+**Phases, in the owner's words.** Next to the stage, a request and each of its sources carry a phase (`requests.phase`):
+
+| Phase | When |
+|---|---|
+| Waiting on the domain | the domain does not exist yet |
+| Waiting on admin | a source is not registered, reachable or landed |
+| Source onboarded | the source is ready and waits for the designer's run |
+| Ready to build | a data product, waiting for its Gold run |
+| Designer profiling and modelling | the run is being profiled, mapped and approved, or the domain model is not approved |
+| Design stored | the design is approved (profiles, model, mapping and checks in the stores) and waits for code generation |
+| Building | code generation and validation |
+| Validation flagged | validation failed the gate; improve and validate again |
+| In review, Done, Closed | code review, finished, cancelled or rejected |
+
+A request shows the earliest phase of the parts at its stage. Two milestones are recorded as automatic events when a source's status changes: `SOURCE_ONBOARDED` when a source the administrator had (missing, unreachable or not landed) becomes ready, and `DESIGN_STORED` when its design is approved and the build can start. Attaching a source that is already onboarded records only `SOURCE_ADDED`.
+
+**Who does what.**
+- The **data owner** files the request on Intake. Intake lists the sources already feeding the domain (from its runs), then the other registered sources, ready ones first. A source not on the platform is named under "Request a new source" and goes to the administrator.
+- The **Data OS Administrator** works from Enable. Enable is configuration only, with no table catalog. Each source shows its connection, credential reference (only whether one is set), landing target, schedule, SnapLogic master and child pipelines, and status. Sources asked for by requests come first, with "Onboard as" buttons for the wizard's three ways in (Snowflake share, relational database, files). The wizard opens with the request named and the source name filled in (`YARDI_VOYAGER` for "Yardi Voyager"); a source registered under that name is attached to the request on its own (names match ignoring case, spacing and punctuation).
+- The **Data Designer** profiles and models; the approved design is kept in the stores.
+- The **Forward Engineering Lead** builds end to end and must pass the validation gate.
 
 ## Where things live
 
@@ -167,7 +189,7 @@ How these behave:
 | Enable `/os/enable` | `/api/sources/overview`, `/api/hub/ingestion-control` (secrets never shown), `/api/hub/pipelines` |
 | Design `/os/design` | domain data model (shared `ErCanvas`), `/api/runs/{id}/mapping`, domain questions and contract |
 | Build `/os/build?run=` | run state, `/audit`, `/validation`, `/dbt`, `/skills` of one run |
-| Review `/os/review?run=` | the same bundle, with the gate at 80% and no errors; every human gate across domains |
+| Review `/os/review?run=` | the same bundle, the gate from `/validation` (`gate`), every attempt's score, Validate again in place; every human gate across domains |
 | Skills `/os/skills?skill=` | `/api/skills`, `/api/skills/{name}`, `/api/skills/{name}/diff`, skill proposals |
 | Release `/os/release?run=` | run bundle, `/api/runs/{id}/qa*`, `/api/source-control/prs`, knowledge feed |
 | Knowledge `/os/knowledge` | `/api/knowledge*` (overview, list, versions, usage) |
@@ -175,9 +197,16 @@ How these behave:
 
 Actions such as approving, editing a mapping, publishing a PR or versioning a skill are not duplicated. Each one links to the classic page that already performs it.
 
-## Validation score
+## Validation gate
 
-The score is the share of the latest evaluated checks that passed (`SUMMARY` is excluded; `SKIPPED` checks are not evaluated). A run passes the gate at 80% or higher with zero errors. A check with an error blocks the run whatever the score.
+The score is the share of the evaluated checks that passed (`SUMMARY` is excluded, `SKIPPED` checks are not evaluated, warnings count as passed). The gate is two platform rules (`services/common/rules.py`), editable in Admin, Rules, under "Validation gate", and per domain and pipeline like every rule:
+
+- `validation.min_score` (default 80): the minimum score.
+- `validation.block_on_errors` (default true): any error also blocks, whatever the score.
+
+`VALIDATE_DBT` enforces it (`checks.gate`): below the minimum, or with an error while errors block, the run moves to `VALIDATION_FAILED` with the reasons ("score 72% is below the 80% minimum") in its event, its tool call and the `SUMMARY` row (`RESULT_JSON.gate`). The comparison uses the exact score, so 79.96% does not pass an 80% gate. `GET /api/runs/{id}/validation` returns the run's gate, so the pages draw the same line. Review shows every attempt's score ("Improved 72% → 93% over 3 attempts") and "Validate again" runs the checks on the current generation in place (`RUN.OPERATE`; others can request it).
+
+Until the code package and procedures are redeployed, `VALIDATE_DBT` still passes on zero errors alone; the pages already show the rule.
 
 ## Gaps for a later backend step
 

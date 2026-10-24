@@ -60,6 +60,28 @@ RUN_STATES: Dict[str, tuple] = {
 DONE_STATES = {"DBT_APPROVED", "COMPLETED", "DEPLOYMENT_PENDING", "DEPLOYED", "PIPELINE_ENABLED"}
 _ORDER = list(RUN_STATES) + sorted(DONE_STATES)
 
+# what a request (or one of its sources) is doing, in the words its owner uses; the stage says whose turn it is, the
+# phase what has happened: the domain is awaited, the admin is onboarding the source, the source is onboarded and
+# waits for the designer's run, the designer profiles and models, the approved design is stored (profiles, model,
+# mapping and checks in the stores) and waits for the build, the build runs, validation flagged it, review, done
+PHASES = ("DOMAIN", "ENABLE", "ONBOARDED", "READY", "DESIGN", "STORED", "BUILD", "FLAGGED", "REVIEW", "DONE", "CLOSED")
+_STORED_STATES = {"SODA_APPROVED", "DBT_PENDING"}
+# item statuses that mean the Data OS Administrator still has the source; leaving them is "source onboarded"
+ENABLE_STATUSES = {"MISSING", "UNREACHABLE", "NOT_LANDED"}
+
+
+def phase(part: Dict[str, Any], product: bool = False) -> str:
+    """The phase of one part of a request (an item's status, or the domain's part) from its stage, status and the
+    state of its run."""
+    stage, status, state = part.get("stage"), part.get("status"), _up(part.get("state"))
+    if stage in ("DOMAIN", "ENABLE", "REVIEW", "DONE"):
+        return stage
+    if status == "NO_RUN":
+        return "READY" if product else "ONBOARDED"
+    if stage == "BUILD":
+        return "FLAGGED" if state == "VALIDATION_FAILED" else "STORED" if state in _STORED_STATES else "BUILD"
+    return "DESIGN"
+
 
 def stage_index(stage: str) -> int:
     return STAGES.index(stage) if stage in STAGES else len(STAGES)
@@ -105,12 +127,12 @@ def run_status(run: Dict[str, Any], children: Iterable[Dict[str, Any]] = ()) -> 
                 "attention": f"Run {name} failed: {reason}"}
     if state in DONE_STATES:
         return {"stage": "DONE", "status": "DONE", "detail": "Code approved" if state == "DBT_APPROVED" else "Completed",
-                "waits": [], "attention": None}
+                "waits": [], "attention": None, "state": state}
     stage, privilege, label = RUN_STATES.get(state, ("DESIGN", "RUN.OPERATE", f"{_DESIGN}: continue the run ({state.lower()})"))
     status = {"ENABLE": "NOT_LANDED", "DESIGN": "DESIGN", "BUILD": "BUILD", "REVIEW": "REVIEW"}[stage]
     attention = f"Validation failed on {name}" if state == "VALIDATION_FAILED" else None
     return {"stage": stage, "status": "ATTENTION" if attention else status, "detail": label, "waits": [_wait(privilege, label)],
-            "attention": attention}
+            "attention": attention, "state": state}
 
 
 def _dedupe(waits: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -177,10 +199,13 @@ def assess(request: Dict[str, Any], items: List[Dict[str, Any]], domain: Optiona
     it is gone). A closed request keeps its status and stage CLOSED (DONE when it was completed)."""
     children = children or {}
     status = _up(request.get("status")) or OPEN
+    product = _up(request.get("request_type")) == "PRODUCT"
     per_item = {i["item_id"]: item_status(i, request, sources, runs, children) for i in items}
+    for st in per_item.values():
+        st["phase"] = "DONE" if st["status"] == "REMOVED" else phase(st, product)
     if status != OPEN:
         return {"stage": "DONE" if status == DONE else "CLOSED", "status": status, "waiting_on": None, "waiting_label": None,
-                "waits": [], "attention": None, "items": per_item}
+                "waits": [], "attention": None, "items": per_item, "phase": "DONE" if status == DONE else "CLOSED"}
 
     parts: List[Dict[str, Any]] = []
     kind = _up(request.get("request_type"))
@@ -200,27 +225,56 @@ def assess(request: Dict[str, Any], items: List[Dict[str, Any]], domain: Optiona
     if not parts:
         # nothing left to do: the domain is ready and every source is onboarded (or none were asked for)
         return {"stage": "DONE", "status": DONE, "waiting_on": None, "waiting_label": None, "waits": [], "attention": None,
-                "items": per_item}
+                "items": per_item, "phase": "DONE"}
     if all(p["stage"] == "DONE" for p in parts):
         return {"stage": "DONE", "status": DONE, "waiting_on": None, "waiting_label": None, "waits": [], "attention": None,
-                "items": per_item}
+                "items": per_item, "phase": "DONE"}
     stage = min((p["stage"] for p in parts if p["stage"] != "DONE"), key=stage_index)
     waits = _dedupe([w for p in parts for w in p["waits"]])
     now = [w for p in parts if p["stage"] == stage for w in p["waits"]]
     first = now[0] if now else (waits[0] if waits else None)
     attention = "; ".join(dict.fromkeys(p["attention"] for p in parts if p.get("attention"))) or None
+    # the phase of the part that holds the request at its stage (the earliest one: a source still with the admin
+    # before one already onboarded)
+    at = [p for p in parts if p["stage"] == stage]
+    shown = min((phase(p, product) for p in at), key=PHASES.index)
     return {"stage": stage, "status": OPEN, "waiting_on": first["privilege"] if first else None,
-            "waiting_label": first["label"] if first else None, "waits": waits, "attention": attention, "items": per_item}
+            "waiting_label": first["label"] if first else None, "waits": waits, "attention": attention, "items": per_item,
+            "phase": shown}
+
+
+def milestones(item: Dict[str, Any], now: Dict[str, Any]) -> List[tuple]:
+    """The events an item's new status earns, as (kind, note): SOURCE_ONBOARDED when a source the administrator had
+    (missing, unreachable or not landed) is registered, reachable and landed, so the designer can start; DESIGN_STORED
+    when its run's design is approved and the build can start. `item` is the stored row (its last status), `now` the
+    assessment. A status seen for the first time (no stored status) earns nothing: attaching an onboarded source is
+    its own event (SOURCE_ADDED)."""
+    before, after = _up(item.get("status")), _up(now.get("status"))
+    name = item.get("source_name") or "the source"
+    out = []
+    if before in ENABLE_STATUSES and now.get("stage") != "ENABLE" and after != "REMOVED":
+        out.append(("SOURCE_ONBOARDED", f"{name} is onboarded: registered, reachable and landed. {_DESIGN}: profile and model it"))
+    if before in ("NO_RUN", "DESIGN") and now.get("stage") in ("BUILD", "REVIEW", "DONE") and after != "REMOVED":
+        out.append(("DESIGN_STORED", f"The design for {name} is approved: its profiles, model, mapping and checks are in the "
+                                     f"stores for reuse. {_BUILD}: build it"))
+    return out
 
 
 def match_source(name: str, sources: Iterable[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """A registered source with exactly this name (case and spacing ignored), so a requester who names an existing
-    source gets it linked without the admin's help."""
-    want = "".join(_up(name).split())
+    """A registered source with this name (case, spacing, underscores and punctuation ignored), so a requester who
+    names an existing source, or an administrator who registers it under the name the request gave (the wizard
+    pre-fills it as YARDI_VOYAGER for "Yardi Voyager"), gets it linked without anyone's help."""
+    want = _key(name)
+    if not want:
+        return None
     for s in sources:
-        if "".join(_up(s.get("source_system_name")).split()) == want and s.get("active_flag") is not False:
+        if _key(s.get("source_system_name")) == want and s.get("active_flag") is not False:
             return s
     return None
+
+
+def _key(name: Optional[str]) -> str:
+    return "".join(ch for ch in _up(name) if ch.isalnum())
 
 
 def pick_run(source_id: str, domain_id: Optional[str], runs: Iterable[Dict[str, Any]]) -> Optional[Dict[str, Any]]:

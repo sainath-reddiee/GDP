@@ -2,10 +2,10 @@
 
 import { useRouter } from "next/navigation";
 import { useState, useTransition, type ReactNode } from "react";
-import { BadgeCheck, Check, GitPullRequest, Loader2, Send, ShieldCheck, Undo2, X } from "lucide-react";
+import { BadgeCheck, Check, GitPullRequest, Loader2, RefreshCw, Send, ShieldCheck, Undo2, X } from "lucide-react";
 import { approveStage } from "@/app/runs/[runId]/actions";
 import { signOffQa } from "@/app/runs/[runId]/qa/qa-actions";
-import { publishDbt } from "@/app/runs/[runId]/pipeline-actions";
+import { publishDbt, validateDbt } from "@/app/runs/[runId]/pipeline-actions";
 import { moveLabel } from "@/app/skills/actions";
 import { decideInbox, verifyKnowledge } from "@/app/knowledge/actions";
 import { stateLabel } from "@/lib/run-labels";
@@ -165,6 +165,27 @@ export function PublishPr({ runId, mode, previewing, repo, base, cut }: {
           <input type="checkbox" checked={draft} onChange={(e) => setDraft(e.target.checked)} disabled={previewing} className="accent-[var(--os-forest)]" /> Draft PR
         </label>
       </div>
+      {previewing && <PreviewNote />}
+      <OutcomeLine outcome={outcome} />
+    </div>
+  );
+}
+
+/* validate the current generation again (after a fix at the source or a better skill): VALIDATE_DBT scores it
+   against the gate, and the attempt joins the run's history */
+
+export function ValidateAgain({ runId, mode, previewing, variant = "primary" }: {
+  runId: string; mode: Mode; previewing: boolean; variant?: "primary" | "default";
+}) {
+  const { pending, outcome, run } = useDecision();
+  return (
+    <div data-testid="validate-again">
+      <Btn variant={mode === "do" ? variant : "warn"} disabled={pending || previewing} testId="validate-again-button"
+           onClick={() => run(() => validateDbt(runId), "Validated again: the new score and the gate's verdict are below.")}
+           title="Runs the independent checks on the current generated code and scores them against the gate">
+        {pending ? <Loader2 className="h-3.5 w-3.5 os-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+        {pending ? "Validating" : mode === "do" ? "Validate again" : "Request validation"}
+      </Btn>
       {previewing && <PreviewNote />}
       <OutcomeLine outcome={outcome} />
     </div>

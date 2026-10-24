@@ -7,6 +7,7 @@ from typing import Any, Dict, List
 
 from services.common.audit import tool_call
 from services.common.platform_schema import fqn, resolve
+from services.common.rules import rule
 from services.common.sql import clip, insert_rows, rows, scalar, variant
 from services.common.stage import Stage
 from services.common.standard import run_pipeline, run_standard
@@ -156,7 +157,9 @@ def validate_dbt(session, run_id: str) -> Dict[str, Any]:
             results.append({"validation_type": "SKILL", "status": "PASSED", "error_count": 0,
                             "warning_count": 0, "findings": [{"severity": "INFO", "message": guidance[:500]}],
                             "query_id": None})
-            status, errors, warnings = checks.summary(results)
+            # the gate (rules validation.*, active for this run's domain and pipeline since Stage loaded them)
+            verdict = checks.gate(results, float(rule("validation.min_score")), bool(rule("validation.block_on_errors")))
+            status, errors, warnings = verdict["status"], verdict["errors"], verdict["warnings"]
             validation_id = str(uuid.uuid4())
 
             def write(_event_id: str) -> None:
@@ -169,9 +172,11 @@ def validate_dbt(session, run_id: str) -> Dict[str, Any]:
                               r["status"], r["error_count"], r["warning_count"],
                               {"findings": r.get("findings", [])}] for r in results] +
                             [[validation_id, run_id, generation["GENERATION_ID"], "SUMMARY", status,
-                              errors, warnings, {"results": results}]])
+                              errors, warnings, {"results": results, "gate": verdict}]])
 
-            call.summary = f"{status}: {errors} errors, {warnings} warnings across {len(results)} checks"
+            scored = "no score" if verdict["score"] is None else f"score {verdict['score']:g}% (minimum {verdict['min_score']:g}%)"
+            call.summary = (f"{status}: {scored}, {errors} errors, {warnings} warnings across {len(results)} checks"
+                            + (f"; {'; '.join(verdict['reasons'])}" if verdict["reasons"] else ""))
         except Exception as exc:
             call.status, call.error = "FAILED", clip(exc)
             stage.fail(exc)
@@ -180,9 +185,13 @@ def validate_dbt(session, run_id: str) -> Dict[str, Any]:
     if status == "PASSED":
         _remember_fixed(session, stage.run, run_id)
     if walked:
-        stage.move(next_state, call.summary, {"errors": errors, "warnings": warnings}, in_transaction=write)
+        stage.move(next_state, call.summary, {"errors": errors, "warnings": warnings, "score": verdict["score"],
+                                              "min_score": verdict["min_score"], "reasons": verdict["reasons"]},
+                   in_transaction=write)
         if next_state == "VALIDATION_PASSED":
             stage.move("DBT_REVIEW", "validation passed; ready for code review", {"validation_id": validation_id})
     else:
         write("")
-    return {"status": status, "errors": errors, "warnings": warnings, "results": results, "state": stage.payload()}
+    return {"status": status, "errors": errors, "warnings": warnings, "score": verdict["score"],
+            "min_score": verdict["min_score"], "reasons": verdict["reasons"], "results": results,
+            "state": stage.payload()}

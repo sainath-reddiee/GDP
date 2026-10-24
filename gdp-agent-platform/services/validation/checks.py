@@ -6,7 +6,7 @@ ephemeral models today, marts in older projects), and the model YAML is any mode
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 LAYER_PREFIX = (
     ("models/staging/", "stg_"),
@@ -31,6 +31,36 @@ def summary(results: List[Dict[str, Any]]) -> Tuple[str, int, int]:
     errors = sum(r["error_count"] for r in results)
     warnings = sum(r["warning_count"] for r in results)
     return ("PASSED" if errors == 0 else "FAILED", errors, warnings)
+
+
+PASSING = ("PASSED", "WARNING", "WARN")
+
+
+def score(results: List[Dict[str, Any]]) -> Optional[float]:
+    """The share of evaluated checks that passed, 0..100 unrounded (warnings pass; skipped checks are not evaluated),
+    or None when nothing was evaluated. The pages compute the same number (lib/os/data.ts scoreOf)."""
+    evaluated = [r for r in results if r.get("validation_type") != "SUMMARY" and r.get("status") != "SKIPPED"]
+    if not evaluated:
+        return None
+    return 100.0 * sum(1 for r in evaluated if r.get("status") in PASSING) / len(evaluated)
+
+
+def gate(results: List[Dict[str, Any]], min_score: float, block_on_errors: bool = True) -> Dict[str, Any]:
+    """The validation gate: PASSED when the score reaches min_score and, while block_on_errors holds, no check
+    reported an error. A FAILED gate carries the reasons, so the run says what to improve before validating again."""
+    errors = sum(r["error_count"] for r in results)
+    warnings = sum(r["warning_count"] for r in results)
+    exact = score(results)
+    value = None if exact is None else round(exact, 1)
+    reasons = []
+    if exact is None:
+        reasons.append("no check was evaluated")
+    elif exact < min_score:
+        reasons.append(f"score {value:g}% is below the {min_score:g}% minimum")
+    if block_on_errors and errors:
+        reasons.append(f"{errors} error{'' if errors == 1 else 's'} must be fixed")
+    return {"status": "FAILED" if reasons else "PASSED", "errors": errors, "warnings": warnings, "score": value,
+            "min_score": min_score, "block_on_errors": block_on_errors, "reasons": reasons}
 
 
 def _check(kind: str, findings: List[Dict[str, Any]]) -> Dict[str, Any]:

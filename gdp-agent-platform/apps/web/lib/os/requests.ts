@@ -5,10 +5,12 @@ export type RequestStage = "NEW" | "DOMAIN" | "ENABLE" | "DESIGN" | "BUILD" | "R
 export type RequestStatus = "OPEN" | "DONE" | "CANCELLED" | "REJECTED";
 export type RequestType = "SOURCE" | "DOMAIN" | "PRODUCT";
 export type Wait = { privilege: string; label: string; item_id?: string | null };
+/** What a request (or one of its sources) is doing, in its owner's words (services/onboarding/requests.py PHASES). */
+export type RequestPhase = "DOMAIN" | "ENABLE" | "ONBOARDED" | "READY" | "DESIGN" | "STORED" | "BUILD" | "FLAGGED" | "REVIEW" | "DONE" | "CLOSED";
 
 export type RequestItem = {
   item_id: string; source_system_id: string | null; source_name: string; source_note: string | null; run_id: string | null;
-  status: string; status_detail: string | null; stage: RequestStage; waits: Wait[]; attention: string | null;
+  status: string; status_detail: string | null; stage: RequestStage; phase?: RequestPhase; waits: Wait[]; attention: string | null;
   run_name?: string | null; run_state?: string | null; added_by: string; added_at: string; removed_at: string | null;
 };
 export type RequestEvent = { event_id: string; item_id: string | null; kind: string; from_value: string | null; to_value: string | null;
@@ -19,7 +21,7 @@ export type OnboardingRequest = {
   status: RequestStatus; stage: RequestStage; waiting_on: string | null; waiting_label: string | null; attention: string | null;
   requested_by: string; created_at: string; updated_at: string; stage_changed_at: string | null;
   closed_by: string | null; closed_at: string | null; close_reason: string | null;
-  waits: Wait[]; items: RequestItem[];
+  phase?: RequestPhase; waits: Wait[]; items: RequestItem[];
 };
 export type RequestDetail = OnboardingRequest & {
   events: RequestEvent[];
@@ -50,6 +52,27 @@ export function requestSteps(r: Pick<OnboardingRequest, "stage" | "status" | "at
     state: r.status === "CANCELLED" || r.status === "REJECTED" ? (i < at ? "done" : "closed")
       : r.status === "DONE" || i < at ? "done" : i === at ? (r.attention ? "attention" : "current") : "pending",
   }));
+}
+
+export const PHASE: Record<RequestPhase, { label: string; tone: "neutral" | "blue" | "amber" | "green" | "red" | "purple" }> = {
+  DOMAIN: { label: "Waiting on the domain", tone: "amber" },
+  ENABLE: { label: "Waiting on admin", tone: "amber" },
+  ONBOARDED: { label: "Source onboarded", tone: "blue" },
+  READY: { label: "Ready to build", tone: "blue" },
+  DESIGN: { label: "Designer profiling and modelling", tone: "blue" },
+  STORED: { label: "Design stored", tone: "purple" },
+  BUILD: { label: "Building", tone: "purple" },
+  FLAGGED: { label: "Validation flagged", tone: "red" },
+  REVIEW: { label: "In review", tone: "amber" },
+  DONE: { label: "Done", tone: "green" },
+  CLOSED: { label: "Closed", tone: "neutral" },
+};
+
+/** The phase of a request or item in words, falling back to its stage (an API from before phases). */
+export function phaseOf(r: { phase?: RequestPhase; stage: RequestStage; status?: string }) {
+  if (r.phase && PHASE[r.phase]) return PHASE[r.phase];
+  const stage = r.status === "CANCELLED" || r.status === "REJECTED" ? "CLOSED" : r.stage;
+  return PHASE[stage as RequestPhase] ?? { label: stage.charAt(0) + stage.slice(1).toLowerCase(), tone: "neutral" as const };
 }
 
 export const PRIORITY_TONE = { HIGH: "red", MEDIUM: "amber", LOW: "neutral" } as const;
