@@ -6,8 +6,9 @@ import { useState, useTransition, type ReactNode } from "react";
 import { Ban, Check, Link2, Loader2, MessageSquare, Play, Plus, RotateCcw, Send, Trash2, Unlink, X } from "lucide-react";
 import {
   addRequestSource, cancelRequest, commentRequest, createRequest, linkRequestDomain, linkRequestRun, linkRequestSource, rejectRequest,
-  removeRequestSource, reopenRequest, startEnhancementRun, type NewRequestInput, type RequestResult,
+  removeRequestSource, reopenRequest, startEnhancementRun, uploadRequestFiles, type NewRequestInput, type RequestResult,
 } from "@/app/os/requests/actions";
+import { FilePicker, formOf } from "@/components/os/request-files";
 import type { Duplicate, RequestDetail, RequestItem } from "@/lib/os/requests";
 import { cn } from "@/lib/utils";
 
@@ -81,6 +82,7 @@ export function SubmitRequest({ type, intent = "NEW", domainId, domainName, pick
   const [named, setNamed] = useState<{ name: string; note: string }[]>([]);
   const [draft, setDraft] = useState({ name: "", note: "" });
   const [dupes, setDupes] = useState<Duplicate[] | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
   const { pending, outcome: result, run } = useRequestCall();
 
   const sources = [...picked.map((p) => ({ source_system_id: p.source_system_id })), ...named.map((n) => ({ source_name: n.name, note: n.note || undefined }))];
@@ -103,8 +105,11 @@ export function SubmitRequest({ type, intent = "NEW", domainId, domainName, pick
     run(async () => {
       const r = await createRequest(body);
       if (!r.ok && r.duplicates) setDupes(r.duplicates);
+      // the files go up once the request exists; one that fails can be attached again from the request
+      if (r.ok && files.length) await uploadRequestFiles(r.data.request_id, formOf(files));
       return r;
-    }, "Request filed. Routing it now...", (r) => router.push(`/os/requests/${r.data.request_id}`));
+    }, files.length ? "Request filed with its files. Routing it now..." : "Request filed. Routing it now...",
+    (r) => router.push(`/os/requests/${r.data.request_id}`));
   };
 
   return (
@@ -131,6 +136,7 @@ export function SubmitRequest({ type, intent = "NEW", domainId, domainName, pick
           <input id="rq-domain" value={proposed} onChange={(e) => setProposed(e.target.value)} maxLength={128} disabled={previewing}
                  placeholder="e.g. TENANT" className="os-input" /></div>
       )}
+      {type === "DOMAIN" && <FilePicker files={files} onChange={setFiles} disabled={previewing || pending} />}
       {type !== "PRODUCT" && !(type === "SOURCE" && enhance) && (
         <div>
           <span className="os-label">Request a new source</span>

@@ -25,12 +25,14 @@ export const LIFECYCLE: LifecycleStep[] = [
     states: ["SOURCE_REGISTERED", "ACCESS_VALIDATION", "ACCESS_APPROVED"], slug: "source" },
   { key: "ingest", label: "Ingest", owner: "Data OS Administrator", actor: "Tool", what: "Land to bronze",
     states: ["LANDING_PENDING", "LANDING_RUNNING", "LANDING_COMPLETE"], slug: "source" },
-  { key: "design", label: "Design", owner: "Data Designer", actor: "Agent", what: "Profile, map, DQ contract",
+  // the design ends at the approved transformations; the Forward Engineering Lead builds end to end from there, the
+  // data quality checks included (Build end to end generates and approves them)
+  { key: "design", label: "Design", owner: "Data Designer", actor: "Agent", what: "Profile, model, map, transformations",
     states: ["PROFILING_PENDING", "PROFILING_RUNNING", "PROFILING_COMPLETE", "DOMAIN_IDENTIFIED", "MAPPING_PENDING", "MAPPING_REVIEW",
-             "MAPPING_APPROVED", "STTM_PENDING", "STTM_REVIEW", "STTM_APPROVED", "SODA_PENDING", "SODA_REVIEW", "SODA_APPROVED"],
+             "MAPPING_APPROVED", "STTM_PENDING", "STTM_REVIEW"],
     slug: "modeling?tab=mapping" },
-  { key: "generate", label: "Generate", owner: "Forward Engineering Lead", actor: "Agent", what: "dbt, tests, config",
-    states: ["DBT_PENDING", "DBT_GENERATING"], slug: "dbt" },
+  { key: "generate", label: "Generate", owner: "Forward Engineering Lead", actor: "Agent", what: "DQ checks, dbt, tests, config",
+    states: ["STTM_APPROVED", "SODA_PENDING", "SODA_REVIEW", "SODA_APPROVED", "DBT_PENDING", "DBT_GENERATING"], slug: "dbt" },
   { key: "validate", label: "Validate", owner: "Independent Review Agent", actor: "Agent", what: "Policy checks",
     states: ["VALIDATION_PENDING", "VALIDATION_RUNNING", "VALIDATION_PASSED", "VALIDATION_FAILED"], slug: "validation" },
   { key: "pr", label: "PR", owner: "Data Developer", actor: "Person", what: "Code review", states: ["DBT_REVIEW", "DBT_APPROVED"], slug: "review" },

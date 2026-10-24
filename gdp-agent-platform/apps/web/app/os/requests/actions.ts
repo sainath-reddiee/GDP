@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { ApiError, api } from "@/lib/api";
+import { ApiError, api, apiForm } from "@/lib/api";
 import type { Duplicate, RequestDetail } from "@/lib/os/requests";
 
 // Onboarding request writes, each one call to the API (apps/api/app/requests_api.py), which checks who may make it.
@@ -47,3 +47,17 @@ export const commentRequest = async (id: string, note: string) => call(`/api/onb
 export const cancelRequest = async (id: string, note: string) => call(`/api/onboarding-requests/${id}/cancel`, { note });
 export const rejectRequest = async (id: string, note: string) => call(`/api/onboarding-requests/${id}/reject`, { note });
 export const reopenRequest = async (id: string, note: string) => call(`/api/onboarding-requests/${id}/reopen`, { note });
+
+/** Files of any format on a request (a data dictionary, a model export, a sample domain JSON, a PDF). Once the
+ *  request's domain exists the API hands them to the domain's documents, where they are read for review. */
+export type UploadedRequestFile = { file_name: string; file_id?: string; bytes?: number; duplicate?: boolean; error?: string; note?: string };
+export async function uploadRequestFiles(id: string, form: FormData): Promise<{ ok: true; files: UploadedRequestFile[] } | { ok: false; error: string }> {
+  try {
+    const r = await apiForm<{ files: UploadedRequestFile[] }>(`/api/onboarding-requests/${encodeURIComponent(id)}/files`, form);
+    revalidatePath("/os", "layout");
+    return { ok: true, files: r.files };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+export const removeRequestFile = async (id: string, fileId: string) => call(`/api/onboarding-requests/${id}/files/${fileId}/remove`, {});

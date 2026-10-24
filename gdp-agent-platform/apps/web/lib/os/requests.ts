@@ -25,10 +25,17 @@ export type OnboardingRequest = {
   closed_by: string | null; closed_at: string | null; close_reason: string | null;
   phase?: RequestPhase; waits: Wait[]; items: RequestItem[];
 };
+/** A file attached to a request (V079); domain_source_id once it was handed to the domain's documents. */
+export type RequestFile = {
+  file_id: string; file_name: string; content_type: string | null; bytes: number | null; added_by: string | null; added_at: string | null;
+  domain_source_id: string | null; handed_over_at: string | null;
+};
+
 export type RequestDetail = OnboardingRequest & {
   events: RequestEvent[];
+  files?: RequestFile[];
   may: { add_source: boolean; link_source: boolean; link_run: boolean; link_domain: boolean; remove_source: boolean;
-         cancel: boolean; reject: boolean; reopen: boolean; comment: boolean };
+         cancel: boolean; reject: boolean; reopen: boolean; comment: boolean; add_files?: boolean };
   duplicates: { request_id: string; title: string; stage: string; requested_by: string; source_name: string }[];
 };
 export type Duplicate = RequestDetail["duplicates"][number];

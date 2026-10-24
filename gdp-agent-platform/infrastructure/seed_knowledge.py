@@ -385,10 +385,118 @@ def governed_domains(cur, database: str) -> Dict[str, Any]:
         return {}  # before V039
 
 
+def _shape(spec: Dict[str, Any]) -> Dict[str, List[str]]:
+    from services.modeling import spec_v2
+
+    return {str(e["entity_name"]).upper(): sorted(str(a["name"]).upper() for a in e.get("attributes") or []
+                                                   if str(a.get("status") or "").upper() != "RETIRED")
+            for e in spec_v2.active(spec)["design"]["entities"]}
+
+
+def pack_changes(approved: Dict[str, Any], pack: Dict[str, Any], model_id: str) -> Optional[Dict[str, Any]]:
+    """The approved model with the pack applied, when the pack adds, drops or reshapes a table; None when its tables
+    and columns are what the approved model has (pure). Tables the pack no longer has are retired in the result
+    (shown in the review, never deleted). Descriptions alone do not count: a deploy would otherwise open a draft for
+    every wording difference between a pack and the model people approved."""
+    from services.modeling import importers, spec_v2
+
+    base = spec_v2.normalize_v2(approved, model_id)
+    incoming = spec_v2.spec_from_pack(pack, model_id)
+    if _shape(base) == _shape(incoming):
+        return None
+    return importers.merge(base, incoming, model_id, replace=True)
+
+
+def pack_digest(pack: Dict[str, Any]) -> str:
+    return hashlib.sha256(json.dumps(pack.get("targets") or [], sort_keys=True, default=str).encode()).hexdigest()[:12]
+
+
+def pack_drafts(cur, database: str, governed: Dict[str, Any]) -> List[str]:
+    """A changed pack of a governed domain becomes a draft model version for review in the Model Workbench (its
+    tables are not re-applied directly, see drop_governed). Skipped while another version is open, and for a pack
+    already proposed once (its digest is in a version's change note), so a rejected draft is not reopened."""
+    if not governed:
+        return []
+    from services.knowledge.packs import domain_id
+    from services.modeling import domain_model as dm
+
+    try:
+        cur.execute(f"USE DATABASE {database}")
+    except Exception as exc:
+        return [f"pack drafts: skipped ({str(exc)[:120]})"]
+    session = dm.CursorSession(cur)
+    log: List[str] = []
+    for pack in load_domain_packs():
+        name = pack["domain"]["name"]
+        did = domain_id(name)
+        if did not in governed or name == "GDP":
+            continue
+        model_id = dm.model_id_for(did)
+        digest = pack_digest(pack)
+        note = f"Pack update from domain/{name.lower()}/domain_pack.json ({digest})"
+        try:
+            versions = dm._versions(session, model_id)
+            if any(digest in str(v.get("change_note") or "") for v in versions):
+                continue
+            merged = pack_changes(dm._spec(session, model_id, int(governed[did])), pack, model_id)
+            if merged is None:
+                continue
+            opened = dm._open(versions)
+            if opened:
+                log.append(f"domain {name}: pack changed but version {opened['version']} is already open; "
+                           "pack not applied (import it into that draft in the Model Workbench)")
+                continue
+            draft = dm.open_draft(session, model_id, "SYSTEM_DEPLOY", note=note)
+            saved = dm.save_draft(session, model_id, json.dumps({"etag": draft["etag"], "spec": merged, "change_note": note},
+                                                                default=str), "SYSTEM_DEPLOY")
+        except Exception as exc:
+            log.append(f"domain {name}: pack not saved as a draft ({str(exc)[:160]})")
+            continue
+        counts = ", ".join(f"{v} {k.lower().replace('_', ' ')}" for k, v in (saved.get("counts") or {}).items() if v)
+        log.append(f"domain {name}: pack saved as draft v{draft['version']}" + (f" ({counts})" if counts else "")
+                   + "; approve it in the Model Workbench")
+    return log
+
+
+def retired_knowledge(current: List[Dict[str, Any]], packs: List[Dict[str, Any]]) -> List[Tuple[str, str]]:
+    """(domain id, source reference) of seeded pack knowledge a pack no longer has (pure). Only items the deploy
+    wrote and nobody edited: origin and author SEED, version 1, with the pack's own key prefix (QA pack and runbook
+    items have their own seeders)."""
+    from services.knowledge.packs import domain_id
+
+    keys = {domain_id(p["domain"]["name"]): (p["domain"]["name"].lower() + ".", {k["key"] for k in p.get("knowledge") or []})
+            for p in packs}
+    out = []
+    for r in current:
+        r = {k.lower(): v for k, v in r.items()}
+        found = keys.get(r.get("domain_id"))
+        ref = str(r.get("source_reference") or "")
+        if (found and ref.startswith(found[0]) and ref not in found[1] and str(r.get("origin") or "").upper() == "SEED"
+                and str(r.get("created_by") or "").upper() == "SEED" and int(r.get("version") or 0) == 1):
+            out.append((r["domain_id"], ref))
+    return out
+
+
+def retire_dropped_knowledge(cur, database: str) -> List[str]:
+    try:
+        cur.execute(f"""SELECT DOMAIN_ID, SOURCE_REFERENCE, ORIGIN, CREATED_BY, VERSION FROM {database}.CORE.DOMAIN_KNOWLEDGE
+                         WHERE IS_CURRENT AND STATUS = 'ACTIVE' AND ORIGIN = 'SEED'""")
+        names = [d[0] for d in cur.description]
+        current = [dict(zip(names, row)) for row in cur.fetchall()]
+    except Exception as exc:
+        return [f"knowledge retire: skipped ({str(exc)[:120]})"]
+    gone = retired_knowledge(current, load_domain_packs())
+    for did, ref in gone:
+        cur.execute(f"UPDATE {database}.CORE.DOMAIN_KNOWLEDGE SET IS_CURRENT = FALSE, STATUS = 'RETIRED', "
+                    f"UPDATED_AT = CURRENT_TIMESTAMP() WHERE DOMAIN_ID = %s AND SOURCE_REFERENCE = %s AND IS_CURRENT",
+                    (did, ref))
+    return [f"knowledge: {len(gone)} item(s) no longer in their domain pack retired"] if gone else []
+
+
 def drop_governed(data: Dict[str, Any], governed: Dict[str, Any]) -> List[str]:
     """Leave the target tables and columns of governed domains alone: their approved model version is the source of
     truth, and re-applying the repository pack would undo approved changes. A pack change reaches such a domain by
-    importing the pack into a draft in the Model Workbench."""
+    a draft version (pack_drafts, run by the deploy before this) approved in the Model Workbench."""
     if not governed:
         return []
     names = {row[0]: row[1] for row in data["domains"]}
@@ -398,7 +506,7 @@ def drop_governed(data: Dict[str, Any], governed: Dict[str, Any]) -> List[str]:
     data["columns"] = [row for row in data["columns"] if row[1] not in skipped]
     data["drift"] = [d for d in data["drift"] if d.get("domain") not in {names.get(i) for i in hit}]
     return [f"domain {names.get(i, i)}: target tables follow its approved model v{governed[i]}; pack tables not "
-            "re-applied (import the pack into a draft in the Model Workbench to change the model)" for i in hit]
+            "re-applied (a changed pack is saved as a draft version to approve in the Model Workbench)" for i in hit]
 
 
 def load_dq_suite_files() -> List[Tuple[str, str, Path]]:
@@ -523,7 +631,9 @@ def seed_platform(cur, database: str) -> List[str]:
     Target tables of domains governed by an approved model are not re-applied from the packs."""
     live, log = fetch_live_columns(cur)
     data = domain_rows(database, live)
-    log.extend(drop_governed(data, governed_domains(cur, database)))
+    governed = governed_domains(cur, database)
+    log.extend(pack_drafts(cur, database, governed))
+    log.extend(drop_governed(data, governed))
     for d in data["drift"]:
         if d["live"] and (d["missing_in_silver"] or d["not_in_contract"]):
             log.append(f"drift {d['domain']}.{d['table']}: contract-only {d['missing_in_silver'][:6]}, "
@@ -532,6 +642,7 @@ def seed_platform(cur, database: str) -> List[str]:
             log.append(f"{d['domain']}.{d['table']}: no live silver table; {d['columns']} contract columns used"
                        + ("" if d["columns"] else " (registered inactive, knowledge only)"))
     merge(cur.execute, database, data, query=_cursor_query(cur))  # keeps domain edits made in the app
+    log.extend(retire_dropped_knowledge(cur, database))
     log.extend(snapshot_domains(cur, database))
     log.extend(seed_qa_packs(cur, database))
     log.extend(check_pack_bindings(cur, database))

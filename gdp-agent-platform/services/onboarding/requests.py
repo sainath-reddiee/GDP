@@ -37,19 +37,21 @@ RUN_STATES: Dict[str, tuple] = {
     "ACCESS_APPROVED": ("ENABLE", "SOURCE.CONNECT", f"{_ENABLE}: land the tables"),
     "LANDING_PENDING": ("ENABLE", "SOURCE.CONNECT", f"{_ENABLE}: land the tables"),
     "LANDING_RUNNING": ("ENABLE", "SOURCE.CONNECT", f"{_ENABLE}: tables are landing"),
-    "LANDING_COMPLETE": ("DESIGN", "RUN.OPERATE", f"{_DESIGN}: profile the landed tables"),
-    "PROFILING_PENDING": ("DESIGN", "RUN.OPERATE", f"{_DESIGN}: profile the landed tables"),
-    "PROFILING_RUNNING": ("DESIGN", "RUN.OPERATE", f"{_DESIGN}: profiling is running"),
-    "PROFILING_COMPLETE": ("DESIGN", "RUN.OPERATE", f"{_DESIGN}: match the domain"),
-    "DOMAIN_IDENTIFIED": ("DESIGN", "RUN.OPERATE", f"{_DESIGN}: generate the field mapping"),
+    "LANDING_COMPLETE": ("DESIGN", "PROFILE.RUN", f"{_DESIGN}: profile the landed tables"),
+    "PROFILING_PENDING": ("DESIGN", "PROFILE.RUN", f"{_DESIGN}: profile the landed tables"),
+    "PROFILING_RUNNING": ("DESIGN", "PROFILE.RUN", f"{_DESIGN}: profiling is running"),
+    "PROFILING_COMPLETE": ("DESIGN", "MAPPING.DECIDE", f"{_DESIGN}: match the domain"),
+    "DOMAIN_IDENTIFIED": ("DESIGN", "MAPPING.DECIDE", f"{_DESIGN}: generate the field mapping"),
     "MAPPING_PENDING": ("DESIGN", "MAPPING.DECIDE", f"{_DESIGN}: decide the field mapping"),
     "MAPPING_REVIEW": ("DESIGN", "MAPPING.APPROVE", "Model approver: approve the field mapping"),
-    "MAPPING_APPROVED": ("DESIGN", "RUN.OPERATE", f"{_DESIGN}: generate the transformations and joins"),
+    "MAPPING_APPROVED": ("DESIGN", "MAPPING.DECIDE", f"{_DESIGN}: generate the transformations and joins"),
     "STTM_PENDING": ("DESIGN", "STTM.EDIT", f"{_DESIGN}: complete the transformations and joins"),
     "STTM_REVIEW": ("DESIGN", "STTM.APPROVE", "Data Mapping approver: approve the transformations and joins"),
-    "STTM_APPROVED": ("DESIGN", "RUN.OPERATE", f"{_DESIGN}: generate the data quality checks"),
-    "SODA_PENDING": ("DESIGN", "SODA.EDIT", f"{_DESIGN}: decide the data quality checks"),
-    "SODA_REVIEW": ("DESIGN", "SODA.APPROVE", "DQ approver: approve the data quality checks"),
+    # the design is done once the transformations are approved: the Forward Engineering Lead builds end to end from
+    # here (Build end to end generates and approves the data quality checks, the code, validation and the PR)
+    "STTM_APPROVED": ("BUILD", "RUN.OPERATE", f"{_BUILD}: build end to end (checks, code, validation, pull request)"),
+    "SODA_PENDING": ("BUILD", "RUN.OPERATE", f"{_BUILD}: build end to end: the data quality checks are being generated"),
+    "SODA_REVIEW": ("BUILD", "RUN.OPERATE", f"{_BUILD}: build end to end approves the data quality checks"),
     "SODA_APPROVED": ("BUILD", "RUN.OPERATE", f"{_BUILD}: generate the code"),
     "DBT_PENDING": ("BUILD", "RUN.OPERATE", f"{_BUILD}: generate the code"),
     "DBT_GENERATING": ("BUILD", "RUN.OPERATE", f"{_BUILD}: code is being generated"),
@@ -69,7 +71,7 @@ _ORDER = list(RUN_STATES) + sorted(DONE_STATES)
 # checks in the stores) and waits for the build, the build runs, validation flagged it, review, done. An Enhance source
 # request (V078) has its own design phase: IMPACT, the designer mapping only what the enhancement adds
 PHASES = ("DOMAIN", "ENABLE", "ONBOARDED", "READY", "IMPACT", "DESIGN", "STORED", "BUILD", "FLAGGED", "REVIEW", "DONE", "CLOSED")
-_STORED_STATES = {"SODA_APPROVED", "DBT_PENDING"}
+_STORED_STATES = {"STTM_APPROVED", "SODA_PENDING", "SODA_REVIEW", "SODA_APPROVED", "DBT_PENDING"}
 # a run the administrator started, landed and waiting for the designer to profile it
 _ONBOARDED_STATES = {"LANDING_COMPLETE", "PROFILING_PENDING"}
 # item statuses that mean the Data OS Administrator still has the source (NO_RUN: registered and landed, its run in
@@ -219,7 +221,7 @@ def item_status(item: Dict[str, Any], request: Dict[str, Any], sources: Dict[str
         if product:
             return {"stage": "BUILD", "status": "NO_RUN", "detail": "Ready; no run yet (start the Gold run for this product)",
                     "waits": [_wait("RUN.CREATE", f"{_BUILD}: start the Gold run for this product", iid)], "attention": None}
-        return {"stage": "ENABLE", "status": "NO_RUN", "detail": f"Registered and landed; its run in the domain is not started yet",
+        return {"stage": "ENABLE", "status": "NO_RUN", "detail": "Registered and landed; its run in the domain is not started yet",
                 "waits": [_wait("SOURCE.CONNECT", f"{_ENABLE}: start the run that onboards {name} into the domain", iid)],
                 "attention": None}
     run = runs.get(rid)
@@ -310,7 +312,7 @@ def milestones(item: Dict[str, Any], now: Dict[str, Any], product: bool = False,
     if before in ENABLE_STATUSES and now.get("stage") != "ENABLE" and after != "REMOVED":
         out.append(("SOURCE_ONBOARDED", f"{name} is onboarded: registered, reachable, landed and its run started. {_DESIGN}: profile and model it"))
     if before in ("NO_RUN", "DESIGN") and now.get("stage") in ("BUILD", "REVIEW", "DONE") and after != "REMOVED":
-        out.append(("DESIGN_STORED", f"The design for {name} is approved: its profiles, model, mapping and checks are in the "
+        out.append(("DESIGN_STORED", f"The design for {name} is approved: its profiles, model, mapping and transformations are in the "
                                      f"stores for reuse. {_BUILD}: build it"))
     return out
 

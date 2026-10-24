@@ -164,7 +164,7 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("POST", r"/api/governance/requests/[^/]+/(approve|reject|cancel)", None, ""),  # checked by the endpoint
     # onboarding requests (apps/api/app/requests_api.py): who may file, link, cancel or reject depends on the request
     # (its requester, the domain's owners) as much as on privileges, so every write is checked by the endpoint
-    ("POST", r"/api/onboarding-requests(/[^/]+/(sources(/[^/]+/(source|run|remove|enhance-run))?|domain|comment|cancel|reject|reopen))?", None, ""),
+    ("POST", r"/api/onboarding-requests(/[^/]+/(sources(/[^/]+/(source|run|remove|enhance-run))?|files(/[^/]+/remove)?|domain|comment|cancel|reject|reopen))?", None, ""),
     ("POST", r"/api/governance/roles", "ROLE.MANAGE", "Create a role"),
     ("POST", r"/api/governance/roles/[^/]+/members", "ROLE.MANAGE", "Change role members"),
     ("PUT", r"/api/governance/(users|roles|policies)/[^/]+", "ROLE.MANAGE", "Change access or an approval policy"),
@@ -447,6 +447,10 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("POST", rf"{R}/model/\d+/approve", "MODEL.APPROVE", "Approve a data model"),
     ("POST", rf"{R}/model/\d+/propose", "MODEL.EDIT", "Propose a run's model to the domain model"),
     ("PUT", rf"{R}/(target|intent|domain)", "MODEL.EDIT", "Change the run's target"),
+    # the design steps of a run are the Data Designer's (who has no RUN.OPERATE) as much as the builder's: profile,
+    # identify the domain, propose the mapping and generate the transformations
+    ("POST", rf"{R}/profile", "PROFILE.RUN", "Profile the run's source tables"),
+    ("POST", rf"{R}/(domain|mapping|sttm)", "MAPPING.DECIDE", ""),
     ("POST", rf"{R}/mapping/decisions", "MAPPING.DECIDE", ""),
     ("POST", rf"{R}/sttm/apply", "STTM.EDIT", "Change an STTM transformation"),
     ("PUT", rf"{R}/sttm/joins", "STTM.EDIT", "Change the STTM join plan"),

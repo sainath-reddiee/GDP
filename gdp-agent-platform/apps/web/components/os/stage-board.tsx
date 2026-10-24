@@ -79,7 +79,9 @@ export function runTrack(run: Pick<RunSummary, "current_state" | "updated_at" | 
   const at = steps.find((s) => s.status !== "done");
   const gate = GATES[run.current_state];
   const failed = run.current_state === "FAILED" || run.current_state === "VALIDATION_FAILED";
-  const note = gate ? `Waiting on ${gate.role}` : failed ? `Needs ${FIXER}: fix and retry`
+  // the data quality checks are approved by Build end to end (AUTOPILOT_APPROVES_DQ), not by a person
+  const note = run.current_state === "SODA_REVIEW" ? `Waiting on ${FIXER}: Build end to end approves the checks`
+    : gate ? `Waiting on ${gate.role}` : failed ? `Needs ${FIXER}: fix and retry`
     : at && run.lifecycle === "RUNNING" ? `${at.actor === "Agent" ? "Agent working" : "In progress"} · ${at.owner}`
     : at ? `Waiting on ${at.owner}` : null;
   return {

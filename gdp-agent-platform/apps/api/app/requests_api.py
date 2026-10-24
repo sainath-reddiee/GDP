@@ -16,7 +16,13 @@ routes as checked by the endpoint):
 - link the domain once it exists: DOMAIN.ONBOARD or DOMAIN.EDIT, or the requester;
 - remove a source: the requester or SOURCE.CONNECT;
 - cancel: the requester, or ROLE.MANAGE; reject (with a reason): SOURCE.CONNECT, DOMAIN.ONBOARD, DOMAIN.EDIT or ROLE.MANAGE;
-- reopen: the requester or ROLE.MANAGE; comment: anyone who may see it.
+- reopen: the requester or ROLE.MANAGE; comment: anyone who may see it;
+- add or remove files (V079): the requester, the domain's owners and stewards, or DOMAIN.ONBOARD or DOMAIN.EDIT;
+  read and download them: anyone who may see the request.
+Files: any format (a data dictionary, a model export, a glossary, a sample domain JSON, a PDF), at most 10 files of
+50 MB per upload, kept in @CORE.DOCUMENT_FILES under requests/<request id>/. Once the request's domain exists, each
+file is handed to the domain's documents (domain_sources_api.register_upload): read there, its knowledge proposed for
+the steward's review.
 Notifications stay in-app: a request waiting on a role is in that role's My Work queue.
 """
 
@@ -27,8 +33,10 @@ import uuid
 from datetime import date
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
 from app.db import Db
 from app.main import _snowflake_error, current_db
@@ -212,6 +220,7 @@ def refresh(db: Db, requests: List[Dict[str, Any]], write: bool = True) -> List[
                            "AND DOMAIN_ID IS NULL", (hit["domain_id"], r["request_id"]))
                 _event(db, r["request_id"], "DOMAIN_LINKED", f"The {hit['domain_name']} domain now exists", to=hit["domain_id"], automatic=True)
                 r["domain_id"] = hit["domain_id"]
+                hand_over(db, r["request_id"], hit["domain_id"])
 
     run_ids = sorted({i["run_id"] for i in all_items if i.get("run_id")})
     source_ids = sorted({i["source_system_id"] for i in all_items if i.get("source_system_id")})
@@ -316,7 +325,7 @@ def _detail(db: Db, request_id: str) -> Dict[str, Any]:
     r = refresh(db, _load(db, "REQUEST_ID = %s", (request_id,)))[0]
     events = db.query("SELECT EVENT_ID, ITEM_ID, KIND, FROM_VALUE, TO_VALUE, NOTE, ACTOR, AUTOMATIC, CREATED_AT "
                       "FROM CORE.ONBOARDING_REQUEST_EVENT WHERE REQUEST_ID = %s ORDER BY CREATED_AT", (request_id,))
-    return {**r, "events": [_out(e) for e in events]}
+    return {**r, "events": [_out(e) for e in events], "files": _files(db, request_id)}
 
 
 # ---------------------------------------------------------------- reads
@@ -368,6 +377,7 @@ def get_request(request_id: str, db: Db = Depends(current_db)):
         # a finished request stays finished (a new need is a new request); a cancelled or rejected one can reopen
         "reopen": d["status"] in (rq.CANCELLED, rq.REJECTED) and (mine or _holds(who, "ROLE.MANAGE")),
         "comment": True,
+        "add_files": d["status"] == rq.OPEN and _may_add_files(db, who, r),
     }
     d["duplicates"] = _duplicates(db, d.get("domain_id"), [i["source_system_id"] for i in d["items"] if i.get("source_system_id")],
                                   [i["source_name"] for i in d["items"]], exclude=request_id)
@@ -651,6 +661,7 @@ def link_domain(request_id: str, body: LinkDomain, db: Db = Depends(current_db))
         raise HTTPException(422, "No such active domain.")
     db.execute("UPDATE CORE.ONBOARDING_REQUEST SET DOMAIN_ID = %s, UPDATED_AT = CURRENT_TIMESTAMP() WHERE REQUEST_ID = %s", (body.domain_id, request_id))
     _event(db, request_id, "DOMAIN_LINKED", f"Linked to the {domain['domain_name']} domain", to=body.domain_id)
+    hand_over(db, request_id, body.domain_id)
     return _detail(db, request_id)
 
 
@@ -718,4 +729,176 @@ def reopen(request_id: str, body: Note, db: Db = Depends(current_db)):
     db.execute("UPDATE CORE.ONBOARDING_REQUEST SET STATUS = 'OPEN', CLOSED_BY = NULL, CLOSED_AT = NULL, CLOSE_REASON = NULL, "
                "UPDATED_AT = CURRENT_TIMESTAMP(), STAGE_CHANGED_AT = CURRENT_TIMESTAMP() WHERE REQUEST_ID = %s", (request_id,))
     _event(db, request_id, "REOPENED", body.note, frm=r.get("status"), to="OPEN")
+    return _detail(db, request_id)
+
+
+# ---------------------------------------------------------------- files (V079)
+
+
+FILE_COLS = "FILE_ID, REQUEST_ID, FILE_NAME, CONTENT_TYPE, BYTES, SHA256, STAGE_PATH, ADDED_BY, ADDED_AT, DOMAIN_SOURCE_ID, HANDED_OVER_AT"
+FILES_V079 = ("Files on requests are not deployed yet: apply migration V079 "
+              "(python infrastructure/deploy_snowflake.py --database DEV_AI_PLATFORM).")
+
+
+def _files_missing(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return "onboarding_request_file" in text and ("does not exist" in text or "not authorized" in text)
+
+
+def _file_rows(db: Db, request_id: str, extra: str = "", params: tuple = ()) -> List[Dict[str, Any]]:
+    return db.query(f"SELECT {FILE_COLS} FROM CORE.ONBOARDING_REQUEST_FILE WHERE REQUEST_ID = %s AND REMOVED_AT IS NULL{extra} "
+                    "ORDER BY ADDED_AT", (request_id, *params))
+
+
+def _files(db: Db, request_id: str) -> List[Dict[str, Any]]:
+    """The request's files (without where they are kept); empty before V079."""
+    try:
+        rows = _file_rows(db, request_id)
+    except Exception as exc:
+        if _files_missing(exc):
+            return []
+        raise
+    return [{k: v for k, v in _out(f).items() if k != "stage_path"} for f in rows]
+
+
+def _may_add_files(db: Db, who: Dict[str, Any], r: Dict[str, Any]) -> bool:
+    return (str(r.get("requested_by") or "").upper() == who["user"].upper() or _owner(db, who, r.get("domain_id"))
+            or _holds(who, "DOMAIN.ONBOARD", "DOMAIN.EDIT"))
+
+
+def hand_over(db: Db, request_id: str, domain_id: str) -> int:
+    """Each file not handed over yet becomes a document of the domain: read there and its knowledge proposed for the
+    steward's review. Returns how many were handed over; quietly none before V079 or V052."""
+    from app import domain_sources_api as ds
+
+    try:
+        rows = _file_rows(db, request_id, " AND DOMAIN_SOURCE_ID IS NULL")
+        if not rows or not ds._files_ready(db):
+            return 0
+    except Exception as exc:
+        if _files_missing(exc):
+            return 0
+        raise
+    done = []
+    for f in rows:
+        try:
+            out = ds.register_upload(db, domain_id, f["file_name"], ds._get(db, f["stage_path"]))
+        except Exception:
+            continue   # stays on the request; the next link or upload tries again
+        if out.get("source_id"):
+            db.execute("UPDATE CORE.ONBOARDING_REQUEST_FILE SET DOMAIN_SOURCE_ID = %s, HANDED_OVER_AT = CURRENT_TIMESTAMP() "
+                       "WHERE FILE_ID = %s AND DOMAIN_SOURCE_ID IS NULL", (out["source_id"], f["file_id"]))
+            done.append(f["file_name"])
+    if done:
+        _event(db, request_id, "FILES_HANDED_OVER", (f"{len(done)} file(s) added to the domain's documents for review: "
+                                                      + ", ".join(done))[:4000], to=domain_id, automatic=True)
+    return len(done)
+
+
+@router.post("/api/onboarding-requests/{request_id}/files")
+async def add_files(request_id: str, files_in: List[UploadFile] = File(..., alias="files"), db: Db = Depends(current_db)):
+    """Attach files of any format to the request. The same file twice is kept once."""
+    from app import domain_sources_api as ds
+    from services.knowledge import document_files as df
+
+    files = []
+    for f in files_in[: df.MAX_FILES]:
+        files.append(((f.filename or "file")[:512], await f.read(df.MAX_FILE_BYTES + 1)))
+    skipped = len(files_in) - len(files)
+
+    def store() -> List[Dict[str, Any]]:
+        who = _who(db)
+        r = _one(db, who, request_id)
+        _open(r)
+        _need(_may_add_files(db, who, r), "adding files",
+              "being the requester or one of the domain's owners or stewards, or DOMAIN.ONBOARD or DOMAIN.EDIT")
+        known = {f["sha256"] for f in _file_rows(db, request_id)}
+        out: List[Dict[str, Any]] = []
+        for name, data in files:
+            if len(data) > df.MAX_FILE_BYTES:
+                out.append({"file_name": name, "error": f"larger than {df.MAX_FILE_BYTES // (1024 * 1024)} MB"})
+                continue
+            if not data:
+                out.append({"file_name": name, "error": "the file is empty"})
+                continue
+            digest = df.sha256(data)
+            if digest in known:
+                out.append({"file_name": name, "duplicate": True, "note": "Already on this request; not kept twice."})
+                continue
+            file_id = str(uuid.uuid4())
+            path = f"requests/{request_id}/{file_id}/{df.safe_name(name)}"
+            ds._put(db, path, data)
+            db.execute("INSERT INTO CORE.ONBOARDING_REQUEST_FILE (FILE_ID, REQUEST_ID, FILE_NAME, CONTENT_TYPE, BYTES, SHA256, STAGE_PATH) "
+                       "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                       (file_id, request_id, name, df.content_type(name), len(data), digest, path))
+            known.add(digest)
+            out.append({"file_name": name, "file_id": file_id, "bytes": len(data)})
+        added = [o["file_name"] for o in out if o.get("file_id")]
+        if added:
+            _event(db, request_id, "FILE_ADDED", ", ".join(added)[:4000])
+            db.execute("UPDATE CORE.ONBOARDING_REQUEST SET UPDATED_AT = CURRENT_TIMESTAMP() WHERE REQUEST_ID = %s", (request_id,))
+            if r.get("domain_id"):
+                hand_over(db, request_id, r["domain_id"])
+        return out
+
+    try:
+        out = await run_in_threadpool(store)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        if _files_missing(exc):
+            raise HTTPException(503, FILES_V079) from exc
+        if _missing_table(exc):
+            raise HTTPException(503, "Onboarding requests are not deployed yet: apply migration V075.") from exc
+        raise _snowflake_error(exc) from exc
+    return {"files": out, "skipped": skipped}
+
+
+@router.get("/api/onboarding-requests/{request_id}/files")
+@_guard_deployed
+def list_files(request_id: str, db: Db = Depends(current_db)):
+    _one(db, _who(db), request_id)
+    return {"files": _files(db, request_id)}
+
+
+def _file(db: Db, request_id: str, file_id: str) -> Dict[str, Any]:
+    try:
+        found = _file_rows(db, request_id, " AND FILE_ID = %s", (file_id,))
+    except Exception as exc:
+        if _files_missing(exc):
+            raise HTTPException(503, FILES_V079) from exc
+        raise
+    if not found:
+        raise HTTPException(404, "No such file on this request.")
+    return found[0]
+
+
+@router.get("/api/onboarding-requests/{request_id}/files/{file_id}")
+@_guard_deployed
+def download_file(request_id: str, file_id: str, db: Db = Depends(current_db)):
+    """The original file, always as a download."""
+    from app import domain_sources_api as ds
+    from services.knowledge import document_files as df
+
+    _one(db, _who(db), request_id)
+    f = _file(db, request_id, file_id)
+    return Response(content=ds._get(db, f["stage_path"]), media_type="application/octet-stream",
+                    headers={"Content-Disposition": f'attachment; filename="{df.safe_name(f["file_name"])}"',
+                             "X-Content-Type-Options": "nosniff", "Cache-Control": "private, no-store"})
+
+
+@router.post("/api/onboarding-requests/{request_id}/files/{file_id}/remove")
+@_guard_deployed
+def remove_file(request_id: str, file_id: str, db: Db = Depends(current_db)):
+    """Take a file off the request. One already handed to the domain stays there (remove it from the domain's
+    documents)."""
+    who = _who(db)
+    r = _one(db, who, request_id)
+    _open(r)
+    _need(_may_add_files(db, who, r), "removing files",
+          "being the requester or one of the domain's owners or stewards, or DOMAIN.ONBOARD or DOMAIN.EDIT")
+    f = _file(db, request_id, file_id)
+    db.execute("UPDATE CORE.ONBOARDING_REQUEST_FILE SET REMOVED_BY = CURRENT_USER(), REMOVED_AT = CURRENT_TIMESTAMP() "
+               "WHERE FILE_ID = %s", (file_id,))
+    _event(db, request_id, "FILE_REMOVED", f["file_name"])
     return _detail(db, request_id)

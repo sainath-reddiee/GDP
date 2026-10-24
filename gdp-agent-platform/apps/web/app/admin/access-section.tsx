@@ -379,6 +379,12 @@ function Settings({ settings, roles }: { settings: GovSettings; roles: GovRole[]
         </span>
         <input type="checkbox" checked={s.MODEL_WORKBENCH_ENFORCED ?? true} onChange={(e) => setS({ ...s, MODEL_WORKBENCH_ENFORCED: e.target.checked })} />
       </label>
+      <label className="flex items-center justify-between gap-3">
+        <span>Build end to end approves the data quality checks
+          <span className="block text-xs text-muted-foreground">Autopilot approves the proposed checks on behalf of the DQ approver, recorded as an Autopilot decision; off stops it at the checks for a DQ approver</span>
+        </span>
+        <input type="checkbox" checked={s.AUTOPILOT_APPROVES_DQ ?? true} onChange={(e) => setS({ ...s, AUTOPILOT_APPROVES_DQ: e.target.checked })} />
+      </label>
       <label className="flex items-center justify-between gap-3">Super admins may approve their own requests
         <input type="checkbox" checked={s.SUPER_SELF_APPROVE} onChange={(e) => setS({ ...s, SUPER_SELF_APPROVE: e.target.checked })} />
       </label>

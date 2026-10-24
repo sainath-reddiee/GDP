@@ -3,6 +3,11 @@
 POST /api/runs/{id}/autopilot   start: every automatic step runs in order, as the signed-in person, until the run
                                 reaches a human gate, a step fails, or a step needs a privilege the person lacks
                                 (RUN.OPERATE). A Gold run with table runs drives each of them the same way.
+                                After validation it commits the code and opens the pull request (dbt/publish), then
+                                stops at code review for the Data Developer unless the person holds QA sign off and
+                                code review. Setting AUTOPILOT_APPROVES_DQ (default on): the Data Quality checks are
+                                approved by autopilot even when the person is not a DQ approver; the justification
+                                says so.
 GET  /api/runs/{id}/autopilot   the job: status (RUNNING | STOPPED | FAILED), the steps it ran with their time, and
                                 where it stopped (the gate and what the person does there)
 
@@ -40,6 +45,29 @@ def _autonomous(db: Db) -> bool:
         return True
 
 
+def _approves_dq(db: Db) -> bool:
+    """Setting AUTOPILOT_APPROVES_DQ (default on): autopilot approves the Data Quality checks on behalf of the DQ
+    approver, so a Forward Engineering Lead's build end to end does not stop there."""
+    try:
+        from app.governance import settings
+
+        return bool(settings(db).get("AUTOPILOT_APPROVES_DQ", True))
+    except Exception:
+        return True
+
+
+DQ_ON_BEHALF = "Data Quality checks approved on behalf of the DQ approver (AUTOPILOT_APPROVES_DQ)"
+
+
+def _allowed(db: Db, method: str, path: str, body: Optional[Dict[str, Any]] = None) -> bool:
+    from app.governance import preview_call
+
+    try:
+        return preview_call(db, method, path, body).get("verdict") == "ALLOW"
+    except Exception:
+        return True
+
+
 def _approve(db: Db, run_id: str, to_state: str, what: str):
     from app import main as m
 
@@ -70,11 +98,11 @@ def _approve_mapping(db: Db, run_id: str):
     return _approve(db, run_id, "MAPPING_APPROVED", f"mapping accepted from the best candidates ({len(decisions)} decided)")
 
 
-def _approve_soda(db: Db, run_id: str):
+def _approve_soda(db: Db, run_id: str, on_behalf: bool = False):
     """At the checks gate: approve it. Past it (the code moved the run on): approve the checks still proposed."""
     state = db.query("SELECT CURRENT_STATE FROM CORE.WORKFLOW_RUN WHERE RUN_ID = %s", (run_id,))[0]["current_state"]
     if state == "SODA_REVIEW":
-        return _approve(db, run_id, "SODA_APPROVED", "proposed Data Quality checks accepted")
+        return _approve(db, run_id, "SODA_APPROVED", DQ_ON_BEHALF if on_behalf else "proposed Data Quality checks accepted")
     db.execute("""UPDATE CORE.SODA_EXPECTATION_REGISTRY SET STATUS = 'APPROVED', REVIEWED_BY = CURRENT_USER(),
                          REVIEWED_AT = CURRENT_TIMESTAMP()
                    WHERE RUN_ID = %s AND IS_CURRENT AND STATUS = 'PROPOSED'""", (run_id,))
@@ -88,6 +116,17 @@ def _approve_soda(db: Db, run_id: str):
     return {"ok": True}
 
 
+def _publish_pr(db: Db, run_id: str):
+    """Commit the current generation to a branch and open the pull request, as the Publish button does."""
+    from app import main as m
+
+    result = m.publish_dbt(run_id, m.DbtPublish(), db) or {}
+    status = str(result.get("status") or "").upper()
+    if status in ("NOT_CONFIGURED", "FAILED"):
+        return {"error": result.get("detail") or f"publishing {status.lower()}"}
+    return result
+
+
 def _signoff_qa(db: Db, run_id: str):
     """Run the QA suite on the current STTM, then sign it off; blocking failures stop autopilot for a person."""
     from app import main as m
@@ -95,6 +134,15 @@ def _signoff_qa(db: Db, run_id: str):
     m.qa_run(run_id, m.QaRunIn(), db)
     return m.qa_signoff(run_id, m.QaSignoff(decision="APPROVED", note=ap.JUSTIFICATION.format(
         what="QA suite ran with no failing critical or high tests")), db)
+
+
+def _publish_ready(db: Db) -> bool:
+    try:
+        from app.main import _github_publisher_ready
+
+        return _github_publisher_ready(db)
+    except Exception:
+        return False
 
 
 def _facts(db: Db, run_id: str) -> Tuple[str, Dict[str, Any], Dict[str, Any]]:
@@ -137,6 +185,12 @@ def _facts(db: Db, run_id: str) -> Tuple[str, Dict[str, Any], Dict[str, Any]]:
                         AND GENERATION_STATUS IN ('GENERATED', 'APPROVED') ORDER BY GENERATION_VERSION DESC LIMIT 1""",
                    (run_id, sttm[0]["sttm_id"] if sttm else ""))
     facts["dbt_generated"] = bool(gen)
+    facts["publish_ready"] = _publish_ready(db)
+    facts["published"] = bool(gen) and bool(db.query("""SELECT 1 FROM CORE.GIT_PUBLICATION WHERE RUN_ID = %s
+                                                          AND GENERATION_ID = %s AND STATUS = 'PUBLISHED' LIMIT 1""",
+                                                       (run_id, gen[0]["generation_id"])))
+    facts["may_signoff_qa"] = _allowed(db, "POST", f"/api/runs/{run_id}/qa/signoff")
+    facts["may_approve_code"] = _allowed(db, "POST", f"/api/runs/{run_id}/review", {"to_state": "DBT_APPROVED", "decision": "APPROVE"})
     facts["validated"] = bool(gen) and bool(db.query("""SELECT 1 FROM CORE.VALIDATION_RUN WHERE RUN_ID = %s
                                                           AND GENERATION_ID = %s AND VALIDATION_TYPE = 'SUMMARY' LIMIT 1""",
                                                        (run_id, gen[0]["generation_id"])))
@@ -179,6 +233,7 @@ def _call(db: Db, run_id: str, action: str) -> Tuple[str, str, Callable[[], Any]
                          {"to_state": "STTM_APPROVED", "decision": "APPROVE"}),
         "approve_soda": ("POST", f"/api/runs/{run_id}/review", lambda: _approve_soda(db, run_id),
                          {"to_state": "SODA_APPROVED", "decision": "APPROVE"}),
+        "publish_pr": ("POST", f"/api/runs/{run_id}/dbt/publish", lambda: _publish_pr(db, run_id)),
         "signoff_qa": ("POST", f"/api/runs/{run_id}/qa/signoff", lambda: _signoff_qa(db, run_id), None),
         "approve_code": ("POST", f"/api/runs/{run_id}/review",
                          lambda: _approve(db, run_id, "DBT_APPROVED", "validation passed, checks approved and QA signed off"),
@@ -210,6 +265,9 @@ def drive(db: Db, run_id: str, job: Dict[str, Any], log: Optional[Callable[[Dict
             return {"kind": "BLOCKED", "label": f"{nxt['label']} did not move the run on; open the run to see why"}
         method, path, call, body = _call(db, run_id, action)
         verdict = preview_call(db, method, path, body)
+        if verdict.get("verdict") != "ALLOW" and action == "approve_soda" and _approves_dq(db):
+            call = lambda: _approve_soda(db, run_id, on_behalf=True)   # noqa: E731
+            verdict = {"verdict": "ALLOW"}
         if verdict.get("verdict") != "ALLOW":
             return {"kind": "BLOCKED", "label": f"{nxt['label']} needs {verdict.get('privilege')}"
                     + (f" (approval by {verdict['approver_role']})" if verdict.get("approver_role") else "")

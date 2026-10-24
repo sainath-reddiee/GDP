@@ -7,6 +7,7 @@ import { has } from "@/lib/os/access";
 import { PRIORITY_TONE, actHref, enhancesSource, intentLabel, overdue, phaseOf, requestSteps, type RequestEvent, type RequestItem } from "@/lib/os/requests";
 import { ActivityRow, Banner, Btn, Card, Empty, Field, PageHeader, SourceError, Tag, ago, pretty, type Tone } from "@/components/os/ui";
 import { AddSource, ItemControls, LinkDomain, RequestControls } from "@/components/os/request-ui";
+import { RequestFiles } from "@/components/os/request-files";
 import { cn } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -38,6 +39,9 @@ const EVENT: Record<string, (e: RequestEvent) => string> = {
   DONE: () => "Every part is done: the request is complete",
   SOURCE_ONBOARDED: () => "Source onboarded",
   DESIGN_STORED: () => "Design approved and stored",
+  FILE_ADDED: () => "Attached files",
+  FILE_REMOVED: () => "Removed a file",
+  FILES_HANDED_OVER: () => "Files added to the domain's documents",
 };
 
 export default async function RequestPage({ params }: { params: { id: string } }) {
@@ -187,6 +191,12 @@ export default async function RequestPage({ params }: { params: { id: string } }
           {r.may.link_domain && (
             <Card title="The domain" subtitle={`Asked for a new domain${r.proposed_domain ? `, ${r.proposed_domain}` : ""}. It links itself when a domain of that name exists; or link it here.`}>
               <LinkDomain requestId={r.request_id} domains={domains.data.map((d) => ({ domain_id: d.domain_id, domain_name: d.domain_name }))} previewing={previewing} />
+            </Card>
+          )}
+
+          {(r.request_type === "DOMAIN" || (r.files ?? []).length > 0 || r.may.add_files) && (
+            <Card title="Files" subtitle={r.domain_id ? "Handed to the domain's documents, read there for review" : "Kept on the request until the domain exists"}>
+              <RequestFiles requestId={r.request_id} files={r.files ?? []} mayAdd={!!r.may.add_files && r.request_type === "DOMAIN"} previewing={previewing} domainId={r.domain_id} />
             </Card>
           )}
 

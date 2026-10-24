@@ -1,7 +1,9 @@
 """Autopilot to the next gate: the next automatic step for every state of both pipelines, where it stops for a
 person, the star schema plan of a Gold run, and the acceleration evidence."""
 
+import sys
 from datetime import datetime
+from pathlib import Path
 
 import pytest
 
@@ -10,6 +12,8 @@ from services.gold.propose import propose
 from services.workflow import accelerator as acc
 from services.workflow.autopilot import next_action
 from tests.unit.test_gold_propose import CONSUMES, HUB, MASTERED, ROLE
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "api"))
 
 SILVER = {"pipeline": "SILVER", "has_target": True, "planned_tables": 2}
 
@@ -160,3 +164,86 @@ def test_star_schema_publishes_as_one_pull_request():
     assert yml.count("- name: dim_s") == 1 and "- name: fact_a" in yml and "- name: bridge_b" in yml
     clash = star.merge_files([{"entity": "A", "files": {"models/x.sql": "1"}}, {"entity": "B", "files": {"models/x.sql": "2"}}])
     assert clash["conflicts"] == ["models/x.sql"] and clash["files"]["models/x.sql"] == "1"
+
+
+FORWARD = {**BUILT, "publish_ready": True, "may_signoff_qa": False, "may_approve_code": False}
+
+
+def test_build_end_to_end_opens_the_pull_request_then_waits_on_code_review():
+    # a Forward Engineering Lead: validated code is committed into a PR, QA and code review are the Data Developer's
+    assert next_action("DBT_REVIEW", FORWARD)["action"] == "publish_pr"
+    out = next_action("DBT_REVIEW", {**FORWARD, "published": True})
+    assert out["kind"] == "GATE" and out["where"] == "code review" and "Pull request opened" in out["label"]
+    # a person who may sign off QA and review code goes on to approve
+    assert next_action("DBT_REVIEW", {**FORWARD, "published": True, "may_signoff_qa": True})["action"] == "signoff_qa"
+    assert next_action("DBT_REVIEW", {**FORWARD, "published": True, "qa_signed": True, "may_approve_code": True})["action"] == "approve_code"
+    # GitHub publishing not set up: no PR step, still waits on code review
+    assert next_action("DBT_REVIEW", {**FORWARD, "publish_ready": False})["where"] == "code review"
+
+
+def _drive(monkeypatch, grants, approves_dq=True):
+    """drive() over a simulated run: each step moves the state as the real procedure does; preview_call allows only
+    the privileges in grants."""
+    import app.main  # noqa: F401  (registers the routers, autopilot_api among them)
+    from app import autopilot_api as api, governance
+    from services.governance.policy import privilege_for
+
+    run = {"state": "STTM_APPROVED", "facts": {**SILVER, "autonomous": True, "publish_ready": True,
+                                                 "may_signoff_qa": "QA.SIGNOFF" in grants,
+                                                 "may_approve_code": "REVIEW.APPROVE" in grants}}
+    effects = {
+        "generate_soda": ("SODA_REVIEW", {"soda_generated": True, "soda_proposed": True}),
+        "approve_soda": ("SODA_APPROVED", {"soda_proposed": False}),
+        "generate_dbt": ("VALIDATION_PENDING", {"dbt_generated": True}),
+        "validate": ("DBT_REVIEW", {"validated": True}),
+        "publish_pr": ("DBT_REVIEW", {"published": True}),
+        "signoff_qa": ("DBT_REVIEW", {"qa_signed": True}),
+        "approve_code": ("COMPLETED", {}),
+    }
+    calls = []
+
+    def call_for(action, on_behalf=False):
+        def call():
+            calls.append(action + (" (on behalf)" if on_behalf else ""))
+            run["state"], change = effects[action]
+            run["facts"].update(change)
+            return {"ok": True}
+        return call
+
+    def fake_call(db, run_id, action):
+        body = {"to_state": "SODA_APPROVED", "decision": "APPROVE"} if action == "approve_soda" else None
+        path = {"publish_pr": f"/api/runs/{run_id}/dbt/publish", "approve_soda": f"/api/runs/{run_id}/review",
+                "signoff_qa": f"/api/runs/{run_id}/qa/signoff"}.get(action, f"/api/runs/{run_id}/soda")
+        return "POST", path, call_for(action), body
+
+    def preview(db, method, path, body=None):
+        privilege = privilege_for(method, path, body)[0]
+        return {"verdict": "ALLOW" if privilege in grants else "DENY", "privilege": privilege}
+
+    monkeypatch.setattr(api, "_facts", lambda db, run_id: (run["state"], dict(run["facts"]), {}))
+    monkeypatch.setattr(api, "_call", fake_call)
+    monkeypatch.setattr(api, "_approves_dq", lambda db: approves_dq)
+    monkeypatch.setattr(api, "_approve_soda", lambda db, run_id, on_behalf=False: call_for("approve_soda", on_behalf)())
+    monkeypatch.setattr(governance, "preview_call", preview)
+    job = {"steps": []}
+    return api.drive(None, "run-1", job), calls
+
+
+LEAD = {"RUN.OPERATE", "SODA.GENERATE", "DBT.GENERATE", "DBT.EDIT", "VALIDATION.RUN"}
+
+
+def test_drive_as_forward_lead_approves_dq_opens_the_pr_and_stops_at_code_review(monkeypatch):
+    from services.governance.policy import privilege_for
+
+    grants = LEAD | {privilege_for("POST", f"/api/runs/r/{p}", None)[0] for p in ("soda", "dbt", "validation", "dbt/publish")}
+    stop, calls = _drive(monkeypatch, grants)
+    assert calls == ["generate_soda", "approve_soda (on behalf)", "generate_dbt", "validate", "publish_pr"]
+    assert stop["kind"] == "GATE" and stop["where"] == "code review" and "Pull request opened" in stop["label"]
+
+
+def test_drive_stops_at_dq_when_autopilot_may_not_approve_it(monkeypatch):
+    from services.governance.policy import privilege_for
+
+    grants = LEAD | {privilege_for("POST", f"/api/runs/r/{p}", None)[0] for p in ("soda", "dbt", "validation", "dbt/publish")}
+    stop, calls = _drive(monkeypatch, grants, approves_dq=False)
+    assert calls == ["generate_soda"] and stop["kind"] == "BLOCKED" and "SODA.APPROVE" in stop["label"]

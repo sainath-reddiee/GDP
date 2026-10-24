@@ -507,6 +507,32 @@ def _read_upload(db: Db, domain_id: str, source_id: str, data: Optional[bytes] =
     return {"read_status": "PARTIAL" if unread else "READY", **result}
 
 
+def register_upload(db: Db, domain_id: str, name: str, data: bytes) -> Dict[str, Any]:
+    """Keep one file as a document of the domain and start reading it; the same file twice is stored once. Also used
+    to hand an onboarding request's files to its domain (requests_api)."""
+    if len(data) > document_files.MAX_FILE_BYTES:
+        return {"file_name": name, "error": f"larger than {document_files.MAX_FILE_BYTES // (1024 * 1024)} MB"}
+    if not data:
+        return {"file_name": name, "error": "the file is empty"}
+    digest = document_files.sha256(data)
+    dup = db.query("""SELECT SOURCE_ID, FILE_NAME FROM CORE.CONFLUENCE_SOURCE WHERE DOMAIN_ID = %s AND KIND = 'UPLOAD'
+                       AND STATUS = 'ACTIVE' AND FILE_SHA256 = %s""", (domain_id, digest))
+    if dup:
+        return {"file_name": name, "source_id": dup[0]["source_id"], "duplicate": True,
+                "note": f"Already uploaded as {dup[0]['file_name']}; not stored twice."}
+    source_id = str(uuid.uuid4())
+    path = document_files.stage_path(domain_id, source_id, name)
+    kind, note = document_files.classify(name, data)
+    _put(db, path, data)
+    db.execute("""INSERT INTO CORE.CONFLUENCE_SOURCE (SOURCE_ID, DOMAIN_ID, KIND, TITLE, FILE_NAME, STAGE_PATH, FILE_SIZE,
+                                                 CONTENT_TYPE, FILE_SHA256, FILE_KIND, READ_STATUS)
+                  SELECT %s, %s, 'UPLOAD', %s, %s, %s, %s, %s, %s, %s, 'QUEUED'""",
+               (source_id, domain_id, name[:1024], name, path, len(data), document_files.content_type(name), digest, kind))
+    _start_reading(db, domain_id, source_id, data)
+    return {"file_name": name, "source_id": source_id, "kind": kind, "size": len(data), "read_status": "QUEUED",
+            "note": note or None}
+
+
 @router.post("/api/domains/{domain_id}/documents/upload")
 async def upload_documents(domain_id: str, files_in: List[UploadFile] = File(..., alias="files"), db: Db = Depends(current_db)):
     """Upload documents of any type (up to 10 files of 50 MB). Each original is kept in @CORE.DOCUMENT_FILES and
@@ -522,33 +548,7 @@ async def upload_documents(domain_id: str, files_in: List[UploadFile] = File(...
         domain_detail(domain_id, db)
         if not _files_ready(db):
             raise HTTPException(503, "Keeping uploaded files needs migration V052. An admin applies it in Admin, Deploy.")
-        out = []
-        for name, data in files:
-            if len(data) > document_files.MAX_FILE_BYTES:
-                out.append({"file_name": name, "error": f"larger than {document_files.MAX_FILE_BYTES // (1024 * 1024)} MB"})
-                continue
-            if not data:
-                out.append({"file_name": name, "error": "the file is empty"})
-                continue
-            digest = document_files.sha256(data)
-            dup = db.query("""SELECT SOURCE_ID, FILE_NAME FROM CORE.CONFLUENCE_SOURCE WHERE DOMAIN_ID = %s AND KIND = 'UPLOAD'
-                               AND STATUS = 'ACTIVE' AND FILE_SHA256 = %s""", (domain_id, digest))
-            if dup:
-                out.append({"file_name": name, "source_id": dup[0]["source_id"], "duplicate": True,
-                            "note": f"Already uploaded as {dup[0]['file_name']}; not stored twice."})
-                continue
-            source_id = str(uuid.uuid4())
-            path = document_files.stage_path(domain_id, source_id, name)
-            kind, note = document_files.classify(name, data)
-            _put(db, path, data)
-            db.execute("""INSERT INTO CORE.CONFLUENCE_SOURCE (SOURCE_ID, DOMAIN_ID, KIND, TITLE, FILE_NAME, STAGE_PATH, FILE_SIZE,
-                                                         CONTENT_TYPE, FILE_SHA256, FILE_KIND, READ_STATUS)
-                          SELECT %s, %s, 'UPLOAD', %s, %s, %s, %s, %s, %s, %s, 'QUEUED'""",
-                       (source_id, domain_id, name[:1024], name, path, len(data), document_files.content_type(name), digest, kind))
-            _start_reading(db, domain_id, source_id, data)
-            out.append({"file_name": name, "source_id": source_id, "kind": kind, "size": len(data), "read_status": "QUEUED",
-                        "note": note or None})
-        return out
+        return [register_upload(db, domain_id, name, data) for name, data in files]
 
     try:
         out = await run_in_threadpool(store)

@@ -11,12 +11,16 @@ facts: pipeline (SILVER | GOLD), has_target, planned_tables (count), gold_model 
 (a Gold run that built its star schema, or a Silver run mapped to several tables), table_runs {total, done, failed}
 (a Silver parent's table runs), soda_generated, soda_proposed (checks still to decide), dbt_generated (for the current
 STTM), validated (the current generation), qa_signed (the current STTM's QA tests signed off), validation_failed,
-failure_reason, autonomous (setting AUTOPILOT_AUTONOMOUS).
+failure_reason, autonomous (setting AUTOPILOT_AUTONOMOUS), publish_ready (GitHub publishing set up), published (the
+current generation has a pull request), may_signoff_qa and may_approve_code (the person who started autopilot holds
+QA sign off and code review; both default to true).
 
 Autonomous: the gates of a table run (mapping, STTM, Data Quality checks, QA sign-off, code review) are decided by the
 autopilot on the evidence (best mapping candidate, proposed checks, a QA run without blocking failures, a passed
 validation), recorded with an "Autopilot" justification so a person reviews or reopens them later from the stores.
-It still stops where only a person can act: no target model, an open gold model, a failed validation or QA run.
+After validation it commits the code and opens the pull request, then stops at code review unless the person who
+started it may sign off QA and review code. It still stops where only a person can act: no target model, an open gold
+model, a failed validation or QA run.
 """
 
 from __future__ import annotations
@@ -34,6 +38,7 @@ ACTIONS = {
     "generate_soda": "Generate the Data Quality checks",
     "generate_dbt": "Generate the code",
     "validate": "Validate the code",
+    "publish_pr": "Commit the code and open the pull request",
     "approve_mapping": "Accept the best mapping candidates and approve the field mapping",
     "approve_sttm": "Approve the transformations (STTM)",
     "approve_soda": "Approve the Data Quality checks",
@@ -86,7 +91,8 @@ def auto_mapping_decisions(candidates: List[Dict[str, Any]], decided: Iterable[T
 
 
 def _build(state: str, facts: Dict[str, Any]) -> Dict[str, Any]:
-    """Autonomous, after the STTM: checks, code, validation, QA, code review, in the order the gates need them."""
+    """Autonomous, after the STTM: checks, code, validation, pull request, QA, code review, in the order the gates
+    need them. QA sign off and code review are left to a person when the caller may not do them."""
     if not facts.get("soda_generated") and state in ("STTM_APPROVED", "SODA_PENDING"):
         return _act("generate_soda")
     if state == "SODA_REVIEW" or facts.get("soda_proposed"):
@@ -95,10 +101,14 @@ def _build(state: str, facts: Dict[str, Any]) -> Dict[str, Any]:
         return _act("generate_dbt")
     if state not in ("VALIDATION_PASSED", "DBT_REVIEW"):
         return _act("validate")   # also moves a run whose code was validated while it waited at the checks gate
+    if facts.get("publish_ready") and not facts.get("published"):
+        return _act("publish_pr")
+    review = _gate("Pull request opened; waiting on the Data Developer's code review" if facts.get("published")
+                   else "Code validated; waiting on the Data Developer's code review", "code review")
     if not facts.get("qa_signed"):
-        return _act("signoff_qa")
+        return _act("signoff_qa") if facts.get("may_signoff_qa", True) else review
     if state == "DBT_REVIEW":
-        return _act("approve_code")
+        return _act("approve_code") if facts.get("may_approve_code", True) else review
     return {"kind": "BLOCKED", "label": "Validation passed but the run did not reach code review; open the run"}
 
 

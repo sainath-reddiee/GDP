@@ -1,11 +1,15 @@
 """Build domain/<domain>/domain_pack.json from the GDP dbt skill's domain contracts.
 
-    python infrastructure/contracts_to_packs.py            # writes domain/{company,opportunity,property}/domain_pack.json
+    python infrastructure/contracts_to_packs.py            # writes domain/{company,opportunity}/domain_pack.json
+    python infrastructure/contracts_to_packs.py property   # also PROPERTY (overwrites its hand-maintained pack)
 
 The packs are committed and reviewed; this script is rerun only when a contract changes. Target columns in a pack
 are the contract's view. At seed time the live DEV_GDP_SILVER_DB columns win for names, types and order, and the
 contract supplies semantics (notes, HKEY list, reference lookups). What markdown cannot express (detection signals,
 Property's targets from the mapping rules, source systems) is declared in DOMAINS below.
+
+domain/property/domain_pack.json is now maintained by hand (PROPERTY_CORE, PROPERTY_USAGE, PROPERTY_ADDRESS with
+its glossary), so it is only regenerated when named on the command line.
 """
 
 from __future__ import annotations
@@ -190,9 +194,16 @@ def build(domain: str, rules: str) -> Dict[str, Any]:
     }
 
 
+HAND_MAINTAINED = {"property"}
+
+
 def main() -> None:
     rules = (CONTRACTS / "sttm-mapping-rules.md").read_text(encoding="utf-8")
+    named = {a.lower() for a in sys.argv[1:]}
     for domain in DOMAINS:
+        if domain in HAND_MAINTAINED and domain not in named:
+            print(f"domain/{domain}/domain_pack.json: maintained by hand, not regenerated (name it to overwrite)")
+            continue
         pack = build(domain, rules)
         out = ROOT / "domain" / domain / "domain_pack.json"
         out.parent.mkdir(parents=True, exist_ok=True)

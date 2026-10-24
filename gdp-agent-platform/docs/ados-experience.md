@@ -60,8 +60,8 @@ A data owner files a request on Intake: sources for a domain, or a new domain (n
 |---|---|---|
 | Domain | the domain does not exist yet (Data OS Administrator, `DOMAIN.ONBOARD`), or was deleted or retired (Data steward, `DOMAIN.EDIT`, restores it) | as named |
 | Enable | a source is not registered, is unreachable, is not landed, or its run in the domain is not started | Data OS Administrator (`SOURCE.CONNECT`) |
-| Design | no approved domain model, or a run being profiled and mapped | Data Designer (`RUN.OPERATE`) and the gate approvers (`MAPPING.APPROVE`, `STTM.APPROVE`, `SODA.APPROVE`) |
-| Build | code generation and validation | Forward Engineering Lead (`RUN.OPERATE`) |
+| Design | no approved domain model, or a run being profiled, mapped and given its transformations, up to the approved STTM | Data Designer (`PROFILE.RUN`, `MAPPING.DECIDE`, `STTM.EDIT`) and the gate approvers (`MAPPING.APPROVE`, `STTM.APPROVE`) |
+| Build | from the approved STTM: data quality checks, code, validation and the pull request | Forward Engineering Lead (`RUN.OPERATE`), with Build end to end |
 | Review | code review | Data Developer (`REVIEW.APPROVE`) |
 | Done | every source's run is approved or completed | nobody; the request closes itself |
 
@@ -94,6 +94,9 @@ A data owner files a request on Intake: sources for a domain, or a new domain (n
 - **Link a run:** `RUN.CREATE` or `RUN.OPERATE`.
 - **Cancel:** the requester or `ROLE.MANAGE`.
 - **Reject:** `SOURCE.CONNECT`, `DOMAIN.ONBOARD`, `DOMAIN.EDIT` or `ROLE.MANAGE`.
+- **Add or remove files:** the requester, the domain's owners and stewards, or `DOMAIN.ONBOARD` or `DOMAIN.EDIT`.
+
+**Files on a request (V079).** A domain request (New or Enhance) takes files of any format: a data dictionary, a model export, a glossary, a sample domain JSON, a PDF (at most 10 files of 50 MB per upload). The form offers "Download sample domain JSON" (the starter domain pack, `PACK_TEMPLATE`, valid against the pack validator) to share with whoever describes the domain. Files are kept in `@CORE.DOCUMENT_FILES` under `requests/<request id>/` (`CORE.ONBOARDING_REQUEST_FILE`) and listed, with downloads, on Intake Selected and the request page. Once the request's domain exists (at once for an Enhance domain request, when it is linked for a new one), each file is handed to the domain's documents (`domain_sources_api.register_upload`): read there and its knowledge proposed for the steward's review ("Files added to the domain's documents" in the history). Until V079 is deployed, the request shows no files and uploading answers 503 with "apply V079".
 
 **New or enhance (V078).** `INTENT` is NEW or ENHANCE (NEW for requests filed before it).
 - **Enhance a domain:** pick a domain already on the platform and say what its model needs. The request waits at Design on the Data Designer (`MODEL.EDIT`) until a model version newer than the one approved at filing (`BASE_MODEL_VERSION`) is approved; its sources then follow as usual.
@@ -163,7 +166,7 @@ People get **personas**, named bundles of the governance roles, instead of role 
 |---|---|
 | GDP Product Owner (data owner) | DATA_STEWARD |
 | Data OS Administrator | PLATFORM_ADMIN |
-| Data Designer | DATA_ENGINEER, MODEL_APPROVER, STTM_APPROVER, DQ_APPROVER |
+| Data Designer | DATA_DESIGNER (V077), MODEL_APPROVER, STTM_APPROVER, DQ_APPROVER |
 | Forward Engineering Lead | DATA_ENGINEER, SKILL_OWNER |
 | Data Developer | CODE_REVIEWER |
 | QA & UAT Lead | QA_LEAD |
@@ -252,8 +255,16 @@ Sourcing moved to Intake and Enable, and modelling and mapping to Design, so Bui
 - **Design readiness:** each run shows four checks: the domain model approved, the field mapping approved, the transformations (STTM) approved, and the data quality checks approved. Readiness is the share of the first three. Data quality approval runs in parallel with the build, so it is shown but never waited for.
 - **Status:** Ready to build; Building; Validation flagged; In review; Model not approved; In design; Being onboarded; Failed; Built (hidden unless asked for). A run not ready says who acts next and links where they act.
 - **Linked:** each run names the onboarding request it serves, its source and, for a table run, the run it belongs to; a flow ribbon counts the runs at Intake, Enable, Design, Build and Review.
-- **Build end to end:** autopilot (`/api/runs/{id}/autopilot`, `services/workflow/autopilot.py`) runs every automatic step of a ready run in order: generate the code and the data quality checks, then validate with the review and standards agents. It stops at the code review gate a person owns. Each step passes the same governance check as a click (`RUN.OPERATE`); a preview of another role disables it. "Build all ready" starts every ready run of a domain. The Workbench offers the same button for a ready run.
+- **Build end to end:** autopilot (`/api/runs/{id}/autopilot`, `services/workflow/autopilot.py`) runs every automatic step of a ready run in order: generate the data quality checks and approve them, generate the code, validate it with the review and standards agents, then commit it and open the pull request (`POST /api/runs/{id}/dbt/publish`, when GitHub publishing is set up). It stops at code review for the Data Developer, unless the person who started it may sign off QA (`QA.SIGNOFF`) and review code (`REVIEW.APPROVE`). The checks are approved by autopilot on behalf of the DQ approver while the setting "Build end to end approves the data quality checks" (`AUTOPILOT_APPROVES_DQ`, Admin, on by default) is on; the approval's justification says so. Every other step passes the same governance check as a click (`RUN.OPERATE`); a preview of another role disables it. "Build all ready" starts every ready run of a domain. The Workbench offers the same button for a ready run.
 - **The Workbench** is one run's detail, opened from the board. The Silver and Gold pipeline lists left Build's tabs: they open from Run history ("Silver pipeline list", "Gold pipeline list") and stay guarded as before.
+
+## Domain packs of governed domains
+
+A domain whose model was approved in the Model Workbench is governed: the deploy does not re-apply its pack's tables, since that would undo approved changes (`drop_governed`). When its `domain/<name>/domain_pack.json` adds, drops or reshapes a table or column, the deploy saves the pack as a **draft model version** (`seed_knowledge.pack_drafts`): the approved model with the pack applied, tables the pack no longer has retired, note "Pack update from domain/<name>/domain_pack.json (<digest>)". A Data Designer reviews and approves it in the Model Workbench, and approval re-registers the tables. A draft already open is left alone (the log says so), and a pack proposed once is not proposed again after a rejection. Wording-only changes open no draft. Pack knowledge the pack no longer has is retired when the deploy wrote it and nobody edited it. `infrastructure/contracts_to_packs.py` no longer regenerates PROPERTY, whose pack is maintained by hand (name it on the command line to overwrite).
+
+## Testing the flows
+
+`tests/unit/test_request_journeys.py` walks each flow persona by persona without Snowflake: New source (Product Owner, Data OS Administrator, Data Designer, Forward Engineering Lead, Data Developer), a source already ready (straight to the Forward Engineering Lead), and Enhance source. At each step it checks the request's stage and the privilege it waits on, that the persona's bundle holds it and every endpoint privilege the step calls, that the graph allows the move, and what the requester's history records. `tests/integration/run_request_journey.py` runs the New source flow on DEV over HTTP, each step as its persona (`X-AIP-Persona`). `docs/uat-flows.md` is the click-through checklist.
 
 ## Run and request history
 

@@ -11,6 +11,7 @@ import {
 import { Btn, Tag, ago, pretty } from "./ui";
 import { Track, type TrackStep } from "./stage-board";
 import { stageHref } from "@/lib/os/work";
+import { RequestFiles } from "@/components/os/request-files";
 import { StartEnhancementRun } from "./request-ui";
 import { cn } from "@/lib/utils";
 
@@ -271,6 +272,14 @@ export function RequestFocus({ r, access }: { r: RequestDetail; access: OsAccess
           ) : <p className="os-faint text-[12px]">No source asked for yet.</p>}
         </div>
       </div>
+
+      {(r.request_type === "DOMAIN" || (r.files ?? []).length > 0) && (
+        <div className="mt-5">
+          <h3 className="os-eyebrow mb-2">Files ({(r.files ?? []).length})</h3>
+          <RequestFiles requestId={r.request_id} files={r.files ?? []} mayAdd={!!r.may?.add_files && r.request_type === "DOMAIN"}
+                        previewing={!!access.preview} domainId={r.domain_id} />
+        </div>
+      )}
 
       {r.events.length > 0 && (
         <div className="mt-5">

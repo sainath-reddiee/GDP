@@ -24,6 +24,12 @@ def test_route_mapping():
     assert privilege_for("POST", "/api/runs/abc/review", {"to_state": "MAPPING_PENDING"})[0] == "REVIEW.DECIDE"
     assert privilege_for("POST", "/api/runs/abc/model/3/approve")[0] == "MODEL.APPROVE"
     assert privilege_for("POST", "/api/runs/abc/qa/ask")[0] == "AI.USE"
+    # the design steps are the Data Designer's too (no RUN.OPERATE), and the builder's
+    assert privilege_for("POST", "/api/runs/abc/profile")[0] == "PROFILE.RUN"
+    for step in ("domain", "mapping", "sttm"):
+        assert privilege_for("POST", f"/api/runs/abc/{step}")[0] == "MAPPING.DECIDE"
+    assert privilege_for("POST", "/api/runs/abc/sttm/apply")[0] == "STTM.EDIT"
+    assert privilege_for("POST", "/api/runs/abc/soda")[0] == "RUN.OPERATE"
     assert privilege_for("POST", "/api/copilot/ask")[0] == "AI.USE"
     assert privilege_for("POST", "/api/runs/abc/suggestions/PROFILING")[0] == "AI.USE"
     assert privilege_for("POST", "/api/sources/s1/oracle/preview")[0] == "PROFILE.RUN"

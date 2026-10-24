@@ -66,10 +66,13 @@ def test_a_ready_source_without_a_run_waits_on_the_administrator_to_start_it():
 @pytest.mark.parametrize("state,stage,privilege", [
     ("SOURCE_REGISTERED", "ENABLE", "SOURCE.CONNECT"),
     ("LANDING_RUNNING", "ENABLE", "SOURCE.CONNECT"),
-    ("PROFILING_RUNNING", "DESIGN", "RUN.OPERATE"),
+    ("PROFILING_RUNNING", "DESIGN", "PROFILE.RUN"),
+    ("DOMAIN_IDENTIFIED", "DESIGN", "MAPPING.DECIDE"),
     ("MAPPING_REVIEW", "DESIGN", "MAPPING.APPROVE"),
     ("STTM_REVIEW", "DESIGN", "STTM.APPROVE"),
-    ("SODA_REVIEW", "DESIGN", "SODA.APPROVE"),
+    # the design ends at the approved transformations: the Forward Engineering Lead builds end to end from there
+    ("STTM_APPROVED", "BUILD", "RUN.OPERATE"),
+    ("SODA_REVIEW", "BUILD", "RUN.OPERATE"),
     ("SODA_APPROVED", "BUILD", "RUN.OPERATE"),
     ("VALIDATION_RUNNING", "BUILD", "RUN.OPERATE"),
     ("DBT_REVIEW", "REVIEW", "REVIEW.APPROVE"),
@@ -268,7 +271,8 @@ def test_request_writes_are_checked_by_the_endpoint_and_nothing_else_slips_throu
     for path in ("/api/onboarding-requests", "/api/onboarding-requests/r1/sources", "/api/onboarding-requests/r1/sources/i1/run",
                  "/api/onboarding-requests/r1/sources/i1/source", "/api/onboarding-requests/r1/sources/i1/remove",
                  "/api/onboarding-requests/r1/domain", "/api/onboarding-requests/r1/reject", "/api/onboarding-requests/r1/reopen",
-                 "/api/onboarding-requests/r1/sources/i1/enhance-run"):
+                 "/api/onboarding-requests/r1/sources/i1/enhance-run", "/api/onboarding-requests/r1/files",
+                 "/api/onboarding-requests/r1/files/f1/remove"):
         assert privilege_for("POST", path)[:1] == (None,), path
     assert privilege_for("POST", "/api/onboarding-requests/r1/delete")[0] == "RUN.OPERATE"
 
@@ -579,3 +583,67 @@ def test_no_milestone_while_still_with_the_administrator_or_when_removed_or_firs
     assert rq.milestones({"status": None}, {"stage": "DESIGN", "status": "NO_RUN"}) == []
     assert rq.milestones({"status": "MISSING"}, {"stage": "ENABLE", "status": "NO_RUN"}) == []
     assert rq.milestones({"status": "BUILD"}, {"stage": "REVIEW", "status": "REVIEW"}) == []
+
+
+# ---------------------------------------------------------------- files on a request (V079)
+
+
+def _stage(monkeypatch):
+    """The document stage as a dict: PUT and GET keep bytes in memory; register_upload records the domain documents."""
+    import app.domain_sources_api as ds
+
+    stage, documents = {}, []
+    monkeypatch.setattr(ds, "_put", lambda db, path, data: stage.__setitem__(path, data))
+    monkeypatch.setattr(ds, "_get", lambda db, path: stage[path])
+    monkeypatch.setattr(ds, "_files_ready", lambda db: True)
+
+    def register(db, domain_id, name, data):
+        documents.append((domain_id, name, data))
+        return {"file_name": name, "source_id": f"doc{len(documents)}"}
+    monkeypatch.setattr(ds, "register_upload", register)
+    return stage, documents
+
+
+def test_a_domain_request_keeps_files_of_any_format_until_the_domain_exists(api, monkeypatch):
+    client, db, who = api
+    stage, documents = _stage(monkeypatch)
+    db.on("FROM CORE.ONBOARDING_REQUEST WHERE", [req(request_type="DOMAIN", domain_id=None, proposed_domain="LEASE",
+                                                      requested_by="ANA")])
+    res = client.post("/api/onboarding-requests/r1/files", files=[
+        ("files", ("lease_dictionary.xlsx", b"PK\x03\x04 sheet", "application/octet-stream")),
+        ("files", ("sample_domain.json", b'{"domain": {"name": "LEASE"}}', "application/json")),
+        ("files", ("empty.txt", b"", "text/plain"))])
+    assert res.status_code == 200, res.text
+    out = res.json()["files"]
+    assert [o.get("error") for o in out] == [None, None, "the file is empty"]
+    assert sorted(p.split("/")[-1] for p in stage) == ["lease_dictionary.xlsx", "sample_domain.json"]
+    assert all(p.startswith("requests/r1/") for p in stage)
+    assert len(db.wrote("INSERT INTO CORE.ONBOARDING_REQUEST_FILE")) == 2
+    assert any(p[3] == "FILE_ADDED" for p in db.wrote("INSERT INTO CORE.ONBOARDING_REQUEST_EVENT"))
+    assert documents == []                                  # no domain yet: nothing handed over
+
+
+def test_files_are_handed_to_the_domain_once_it_exists(api, monkeypatch):
+    client, db, who = api
+    stage, documents = _stage(monkeypatch)
+    stage["requests/r1/f1/glossary.pdf"] = b"%PDF glossary"
+    db.on("FROM CORE.ONBOARDING_REQUEST_FILE", [{"file_id": "f1", "request_id": "r1", "file_name": "glossary.pdf",
+                                                 "sha256": "x", "stage_path": "requests/r1/f1/glossary.pdf"}])
+    db.on("FROM CORE.ONBOARDING_REQUEST WHERE", [req(request_type="DOMAIN", domain_id=None, proposed_domain="OPPORTUNITY",
+                                                      requested_by="ANA")])
+    res = client.post("/api/onboarding-requests/r1/domain", json={"domain_id": "d1"})
+    assert res.status_code == 200, res.text
+    assert documents == [("d1", "glossary.pdf", b"%PDF glossary")]
+    assert db.wrote("UPDATE CORE.ONBOARDING_REQUEST_FILE SET DOMAIN_SOURCE_ID") == [("doc1", "f1")]
+    assert any(p[3] == "FILES_HANDED_OVER" for p in db.wrote("INSERT INTO CORE.ONBOARDING_REQUEST_EVENT"))
+
+
+def test_only_the_requester_or_the_domain_side_adds_files(api, monkeypatch):
+    client, db, who = api
+    _stage(monkeypatch)
+    who["privileges"] = {"AUDIT.VIEW"}
+    db.on("FROM CORE.ONBOARDING_REQUEST WHERE", [req(request_type="DOMAIN", domain_id=None, requested_by="SOMEONE")])
+    res = client.post("/api/onboarding-requests/r1/files", files=[("files", ("a.csv", b"a,b", "text/csv"))])
+    assert res.status_code == 403
+    who["privileges"] = {"DOMAIN.ONBOARD"}                 # the Data OS Administrator may
+    assert client.post("/api/onboarding-requests/r1/files", files=[("files", ("a.csv", b"a,b", "text/csv"))]).status_code == 200

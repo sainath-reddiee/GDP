@@ -209,7 +209,7 @@ export const PERSONA_REQUIRES: Record<string, readonly string[]> = {
   admin: ["SOURCE.CONNECT", "CONFIG.EDIT", "INTEGRATION.MANAGE"],
   designer: ["MODEL.EDIT", "MODEL.APPROVE", "MAPPING.APPROVE", "STTM.EDIT", "STTM.APPROVE"],
   developer: ["REVIEW.APPROVE", "DBT.EDIT"],
-  qa: ["QA.EDIT", "QA.SIGNOFF", "SODA.EDIT", "SODA.APPROVE"],
+  qa: ["QA.EDIT", "QA.SIGNOFF"],
   reliability: ["OPS.OPERATE", "OPS.FIX_APPROVE"],
   curator: ["KNOWLEDGE.EDIT", "SKILL.RELEASE"],
   super: ["*"],
