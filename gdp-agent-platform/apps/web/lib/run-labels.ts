@@ -61,10 +61,10 @@ export function statusLabel(status: string | null | undefined): string {
 export type Gate = { name: string; role: string; privilege: string; slug: string; approveTo: string };
 
 export const GATES: Record<string, Gate> = {
-  MAPPING_REVIEW: { name: "Field mapping", role: "Model approver", privilege: "MAPPING.APPROVE", slug: "modeling?tab=mapping", approveTo: "MAPPING_APPROVED" },
-  STTM_REVIEW: { name: "Transformations and joins (Data Mapping)", role: "Data Mapping approver", privilege: "STTM.APPROVE", slug: "modeling?tab=transformations", approveTo: "STTM_APPROVED" },
-  SODA_REVIEW: { name: "Data quality checks", role: "DQ approver", privilege: "SODA.APPROVE", slug: "soda", approveTo: "SODA_APPROVED" },
-  DBT_REVIEW: { name: "Code review", role: "Code reviewer", privilege: "REVIEW.APPROVE", slug: "review", approveTo: "DBT_APPROVED" },
+  MAPPING_REVIEW: { name: "Field mapping", role: "Data Designer", privilege: "MAPPING.APPROVE", slug: "modeling?tab=mapping", approveTo: "MAPPING_APPROVED" },
+  STTM_REVIEW: { name: "Transformations and joins (Data Mapping)", role: "Data Designer", privilege: "STTM.APPROVE", slug: "modeling?tab=transformations", approveTo: "STTM_APPROVED" },
+  SODA_REVIEW: { name: "Data quality checks", role: "Forward Engineering Lead", privilege: "SODA.APPROVE", slug: "soda", approveTo: "SODA_APPROVED" },
+  DBT_REVIEW: { name: "Code review", role: "Data Developer", privilege: "REVIEW.APPROVE", slug: "review", approveTo: "DBT_APPROVED" },
 };
 
 /** The run waits on a person (one of the four gates). */

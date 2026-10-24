@@ -8,6 +8,7 @@ import { PRIORITY_TONE, actHref, enhancesSource, intentLabel, overdue, phaseOf, 
 import { ActivityRow, Banner, Btn, Card, Empty, Field, PageHeader, SourceError, Tag, ago, pretty, type Tone } from "@/components/os/ui";
 import { AddSource, ItemControls, LinkDomain, RequestControls } from "@/components/os/request-ui";
 import { RequestFiles } from "@/components/os/request-files";
+import { personaForPrivilege } from "@/lib/os/personas";
 import { cn } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -178,7 +179,7 @@ export default async function RequestPage({ params, searchParams }: { params: { 
                     <div key={`${w.privilege}-${w.label}-${w.item_id ?? ""}`} className="flex items-start justify-between gap-3 py-2.5">
                       <div className="min-w-0">
                         <div className="text-[12.5px] font-bold leading-snug">{w.label}</div>
-                        <div className="os-faint text-[10.5px]">{item ? `${item.source_name} · ` : ""}needs {w.privilege}</div>
+                        <div className="os-faint text-[10.5px]">{item ? `${item.source_name} · ` : ""}{personaForPrivilege(w.privilege)}</div>
                       </div>
                       {you && href ? <Btn href={href} variant="primary" title={w.label}>{waitCta(w)} <ArrowRight className="h-3.5 w-3.5" /></Btn> : you ? <Tag tone="green">Yours</Tag> : <Tag>Waiting on {waitRole(w) ?? "another role"}</Tag>}
                     </div>

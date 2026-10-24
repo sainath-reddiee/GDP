@@ -129,7 +129,7 @@ export default async function ReviewGate({ searchParams }: { searchParams: { run
         </Banner>
       )}
       {!failed && gate && (
-        <Banner tone="amber" icon={Hand}><b>{gate.name} waits on a {gate.role.toLowerCase()}.</b> Agents prepared the proposal. Approve it here, or run Build end to end and autopilot decides it on the evidence; you can reopen it later from the store.</Banner>
+        <Banner tone="amber" icon={Hand}><b>{gate.name} waits on the {gate.role}.</b> Agents prepared the proposal. Approve it here, or run Build end to end and autopilot decides it on the evidence; you can reopen it later from the store.</Banner>
       )}
       {b.errors.length > 0 && <SourceError what="Part of this run" error={b.errors.join(" · ")} />}
 

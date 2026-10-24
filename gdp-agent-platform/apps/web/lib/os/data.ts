@@ -1,4 +1,4 @@
-import { api, getRun } from "@/lib/api";
+import { api, apiAsSelf, getRun } from "@/lib/api";
 import type { AuditEvent, RunState, RunSummary, SourcesOverview } from "@/lib/types";
 import type { ModelEntity, ModelRelationship, QualitySummary } from "@/lib/hub-types";
 import type { KnowledgeItem } from "@/app/knowledge/actions";
@@ -19,8 +19,8 @@ async function load<T>(p: Promise<T>, empty: T): Promise<Loaded<T>> {
 }
 
 /** Runs, newest activity first. Test runs are left out, as on the classic lists. */
-export const loadRuns = (query = "sort=updated&limit=60") =>
-  load(api<{ runs: RunSummary[]; total?: number }>(`/api/runs?${query}`).then((r) => ({ runs: r.runs ?? [], total: r.total ?? r.runs?.length ?? 0 })),
+export const loadRuns = (query = "sort=updated&limit=60", asSelf = false) =>
+  load((asSelf ? apiAsSelf : api)<{ runs: RunSummary[]; total?: number }>(`/api/runs?${query}`).then((r) => ({ runs: r.runs ?? [], total: r.total ?? r.runs?.length ?? 0 })),
        { runs: [] as RunSummary[], total: 0 });
 
 export type Domain = {
@@ -117,8 +117,8 @@ export const loadPrs = () =>
 /* onboarding requests (V075) */
 
 export type RequestList = { requests: OnboardingRequest[]; counts: Record<string, number>; user: string };
-export const loadRequests = (scope: "all" | "mine" | "waiting" = "all", status: "OPEN" | "CLOSED" | "ALL" = "OPEN", domainId?: string) =>
-  load(api<RequestList>(`/api/onboarding-requests?${new URLSearchParams({ scope, status, ...(domainId ? { domain_id: domainId } : {}) })}`),
+export const loadRequests = (scope: "all" | "mine" | "waiting" = "all", status: "OPEN" | "CLOSED" | "ALL" = "OPEN", domainId?: string, asSelf = false) =>
+  load((asSelf ? apiAsSelf : api)<RequestList>(`/api/onboarding-requests?${new URLSearchParams({ scope, status, ...(domainId ? { domain_id: domainId } : {}) })}`),
        { requests: [], counts: {}, user: "" } as RequestList);
 export const loadRequest = (id: string) => load(api<RequestDetail>(`/api/onboarding-requests/${encodeURIComponent(id)}`), null as RequestDetail | null);
 
@@ -381,8 +381,8 @@ export const loadWorkflowSearch = (q: string) =>
 
 /** The runs the Design and Build boards and Home read (lib/os/work RUNS_QUERY and RUNS_WAITING, merged): the latest,
  *  plus every gate and failure however old, so the three always count the same runs. */
-export async function loadBoardRuns(): Promise<Loaded<{ runs: RunSummary[] }>> {
-  const [latest, ...waiting] = await Promise.all([loadRuns(RUNS_QUERY), ...RUNS_WAITING.map((q) => loadRuns(q))]);
+export async function loadBoardRuns(asSelf = false): Promise<Loaded<{ runs: RunSummary[] }>> {
+  const [latest, ...waiting] = await Promise.all([loadRuns(RUNS_QUERY, asSelf), ...RUNS_WAITING.map((q) => loadRuns(q, asSelf))]);
   return { data: { runs: mergeRuns(latest.data.runs, ...waiting.map((w) => w.data.runs)) },
            error: latest.error ?? waiting.find((w) => w.error)?.error ?? null };
 }

@@ -14,6 +14,7 @@ import { RUNNING_STATES, stageHref } from "@/lib/os/work";
 import { RequestFiles } from "@/components/os/request-files";
 import { StartEnhancementRun } from "./request-ui";
 import type { ActionItem } from "@/lib/os/actions";
+import { personaForPrivilege } from "@/lib/os/personas";
 import { cn } from "@/lib/utils";
 
 // Home and the Intake board: the build workflows (onboarding requests) with the step each one is at and who it waits on,
@@ -79,7 +80,10 @@ export function WorkflowRow({ r, access, href }: { r: OnboardingRequest; access:
               <Btn href={next ?? `/os/requests/${r.request_id}`} variant="primary" title={mine.label}>{next ? waitCta(mine) : "Open request"} <ArrowRight className="h-3.5 w-3.5" /></Btn>
             </>
           ) : open ? (
-            <Tag tone={r.attention ? "red" : phaseOf(r).tone}>{r.attention ? "Needs attention" : phaseOf(r).label}</Tag>
+            // whose step it is, by persona (the step's own wait names it)
+            <Tag tone={r.attention ? "red" : "neutral"} title={phaseOf(r).label}>
+              {r.attention ? "Needs attention" : `Waiting on ${(r.waits[0] && waitRole(r.waits[0])) || phaseOf(r).label}`}
+            </Tag>
           ) : (
             <Tag tone={r.status === "DONE" ? "green" : "neutral"}>{pretty(r.status)}</Tag>
           )}
@@ -234,7 +238,7 @@ export function RequestFocus({ r, access }: { r: RequestDetail; access: OsAccess
                 return (
                   <div key={`${w.privilege}-${w.label}-${w.item_id ?? ""}`} className="flex items-center justify-between gap-3 py-2.5">
                     <span className="min-w-0 text-[12px]"><b className="block leading-snug">{w.label}</b>
-                      <span className="os-faint text-[10.5px]">{item ? `${item.source_name} · ` : ""}needs {w.privilege}</span></span>
+                      <span className="os-faint text-[10.5px]">{item ? `${item.source_name} · ` : ""}{personaForPrivilege(w.privilege)}</span></span>
                     {you && enhance && w.privilege === "RUN.CREATE" && item && !item.run_id && item.source_system_id
                       ? <StartEnhancementRun requestId={r.request_id} itemId={item.item_id} source={item.source_name} previewing={!!access.preview} />
                       : you && href ? <Btn href={href} variant="primary" title={w.label}>{waitCta(w)} <ArrowRight className="h-3.5 w-3.5" /></Btn> : you ? <Tag tone="green">Yours</Tag> : <Tag>Waiting on {waitRole(w) ?? "another role"}</Tag>}
@@ -368,14 +372,15 @@ const GROUP: Record<ActionItem["group"], { icon: Icon; tint: string; where: stri
   "Operations": { icon: Siren, tint: "bg-[var(--os-red-bg)] text-[var(--os-red-ink)]", where: "Operations" },
 };
 
-/** One action from across the platform in Home's queue (lib/os/actions.ts): a run gate or failure no workflow covers, an
- *  approval, a model or check in review, knowledge or a skill to review, an incident. Always the viewer's to act on. */
+/** One action from across the platform in Home's queue (lib/os/actions.ts): a run at a person's step, an approval, a
+ *  model or check in review, knowledge or a skill to review, an incident. It names the persona that acts on it; the
+ *  action button is the viewer's only when their current persona may act, else the row opens it to look at. */
 export function PlatformActionRow({ a }: { a: ActionItem }) {
   const g = GROUP[a.group];
   const I = a.tone === "red" && a.group === "Gates" ? AlertTriangle : g.icon;
   return (
-    <article data-testid="platform-action" className={cn("os-card os-rise p-3.5 transition hover:shadow-[var(--os-shadow-pop)] border-l-[3px]",
-                                                          a.tone === "red" ? "border-l-[var(--os-red-ink)]" : "border-l-[var(--os-forest)]")}>
+    <article data-testid="platform-action" className={cn("os-card os-rise p-3.5 transition hover:shadow-[var(--os-shadow-pop)]",
+                                                          a.mine && "border-l-[3px]", a.mine && (a.tone === "red" ? "border-l-[var(--os-red-ink)]" : "border-l-[var(--os-forest)]"))}>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex min-w-[min(100%,260px)] flex-1 items-start gap-3">
           <span className={cn("grid h-9 w-9 shrink-0 place-items-center rounded-lg", a.tone === "red" ? "bg-[var(--os-red-bg)] text-[var(--os-red-ink)]" : g.tint)}><I className="h-4 w-4" /></span>
@@ -389,8 +394,17 @@ export function PlatformActionRow({ a }: { a: ActionItem }) {
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          <Tag tone="green">Your turn</Tag>
-          <Btn href={a.href} variant="primary">{a.cta} <ArrowRight className="h-3.5 w-3.5" /></Btn>
+          {a.mine ? (
+            <>
+              <Tag tone="green">Your turn</Tag>
+              <Btn href={a.href} variant="primary">{a.cta} <ArrowRight className="h-3.5 w-3.5" /></Btn>
+            </>
+          ) : (
+            <>
+              <Tag tone="neutral">Waiting on {a.persona}</Tag>
+              <Btn href={a.href}>Open <ArrowRight className="h-3.5 w-3.5" /></Btn>
+            </>
+          )}
         </div>
       </div>
     </article>

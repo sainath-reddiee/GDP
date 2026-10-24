@@ -41,12 +41,12 @@ type Params = { view?: string; type?: string; intent?: string; q?: string; denie
 /** The workflow's next step is the viewer's (or the previewed role's). */
 const yours = (r: OnboardingRequest, access: OsAccess) => requestNeedsMe(r, access);
 
-/** Theirs first, then blocked or late, then by priority, then the longest waiting; finished ones last, newest first. */
-function order(rows: OnboardingRequest[], access: OsAccess) {
+/** Blocked or late first, then by priority, then the longest waiting; finished ones last, newest first. Never by whose
+ *  turn it is: Home's order is the same under every persona. */
+function order(rows: OnboardingRequest[], _access?: OsAccess) {
   const waited = (r: OnboardingRequest) => r.stage_changed_at ?? r.updated_at ?? r.created_at;
   return [...rows].sort((a, b) =>
     Number(b.status === "OPEN") - Number(a.status === "OPEN")
-    || Number(yours(b, access)) - Number(yours(a, access))
     || Number(!!b.attention || overdue(b)) - Number(!!a.attention || overdue(a))
     || (PRIORITY[a.priority] ?? 1) - (PRIORITY[b.priority] ?? 1)
     || (a.status === "OPEN" ? waited(a).localeCompare(waited(b)) : (b.closed_at ?? b.updated_at).localeCompare(a.closed_at ?? a.updated_at)));
@@ -60,22 +60,22 @@ export default async function Home({ searchParams }: { searchParams: Params }) {
   const deniedName = denied ? (deniedSection && deniedSection !== denied.label ? `${deniedSection}: ${denied.label}` : denied.label) : "";
 
   const query = (searchParams.q ?? "").trim();
-  const [list, domains, searched] = await Promise.all([loadRequests("all", "ALL"), loadDomains(),
+  // Home is the platform's master data: read with the person's own access, the same under every persona they work as
+  const [list, domains, searched] = await Promise.all([loadRequests("all", "ALL", undefined, true), loadDomains(),
     query ? loadWorkflowSearch(query) : Promise.resolve(null)]);
   const all = list.data.requests;
   const active = all.filter((r) => r.status === "OPEN");
   const action = active.filter((r) => yours(r, access));
   const views = { active, action, all };
-  // every other action across the platform waiting on the viewer: each run the Design and Build boards count as theirs
-  // (unless one of their workflows here already shows it), approvals, models and checks in review, knowledge and skill
-  // proposals, fixes, incidents. One queue with the workflows; these wait on the viewer, so they are in every view.
-  // a run is shown through its workflow only when that workflow's wait on it is the viewer's; the runs of its other
-  // sources that wait on the viewer still get their own rows (else the boards would count them and Home would not)
-  const covered = new Set(action.flatMap((r) => r.waits.filter((w) => w.item_id && requestNeedsMe({ ...r, waits: [w] }, access))
-    .map((w) => r.items.find((i) => i.item_id === w.item_id)?.run_id)).filter(Boolean) as string[]);
+  // every other open action on the platform, whoever acts on it (runs at a person's step that no workflow here holds,
+  // approvals, models and checks in review, knowledge and skill proposals, fixes, incidents), each naming its persona.
+  // Active and All show them all; Action required keeps the workflows and actions the current persona acts on.
+  const covered = new Set(active.flatMap((r) => r.items.map((i) => i.run_id)).filter(Boolean) as string[]);
   const platform = await loadActions(access, covered);
+  const mineItems = platform.items.filter((a) => a.mine);
 
-  const view = VIEWS.find((v) => v.key === searchParams.view)?.key ?? (action.length + platform.items.length ? "action" : "active");
+  // the same opening view under every persona: everything open
+  const view = VIEWS.find((v) => v.key === searchParams.view)?.key ?? "active";
   const type = TYPES.find((t) => t.key === searchParams.type) ?? TYPES[0];
   const intent = INTENTS.find((i) => i.key === searchParams.intent) ?? INTENTS[0];
   // the search bar matches workflows by meaning (synonyms, intent such as "waiting on me"), best first; when the search
@@ -101,21 +101,22 @@ export default async function Home({ searchParams }: { searchParams: Params }) {
   const typeOf = (e: Entry): ActionType => (e.kind === "workflow" ? e.r.request_type : e.a.type);
   const poolFor = (v: keyof typeof views): Entry[] => [
     ...order(views[v].filter((r) => intentOk(r) && matches(r)), access).map((r) => ({ kind: "workflow" as const, r })),
-    ...(intent.key === "all" ? platform.items.filter(platformMatches).map((a) => ({ kind: "platform" as const, a })) : []),
+    ...(intent.key === "all" ? (v === "action" ? mineItems : platform.items).filter(platformMatches).map((a) => ({ kind: "platform" as const, a })) : []),
   ];
   const pool = poolFor(view);
   const ofType = (k: (typeof TYPES)[number]) => (k.type ? pool.filter((e) => typeOf(e) === k.type) : pool);
   // one queue: what needs attention first (failed runs and validations), then the viewer's workflows, then the other
   // actions by urgency; outside Action required the remaining workflows follow. A search keeps its best match first.
+  // urgency alone (never whose turn it is), so the order is the same under every persona
   const urgency = (e: Entry) => e.kind === "platform"
     ? ({ red: 0, amber: 2, purple: 3, blue: 4 } as const)[e.a.tone]
-    : e.r.attention ? 0 : yours(e.r, access) ? 1 : 5;
+    : e.r.attention ? 0 : e.r.status === "OPEN" ? 1 : 5;
   const entries = ofType(type).map((e, i) => ({ e, i }));
   const queue = (rank
     ? entries.sort((x, y) => (x.e.kind === "workflow" ? rank.get(x.e.r.request_id) ?? 0 : 1e6 + x.i) - (y.e.kind === "workflow" ? rank.get(y.e.r.request_id) ?? 0 : 1e6 + y.i))
     : entries.sort((x, y) => urgency(x.e) - urgency(y.e) || x.i - y.i)).map((x) => x.e);
   // the view counts are everything in each view (the filters below narrow the list, and show their own counts)
-  const counts = { action: action.length + platform.items.length, active: active.length + platform.items.length, all: all.length + platform.items.length };
+  const counts = { action: action.length + mineItems.length, active: active.length + platform.items.length, all: all.length + platform.items.length };
   // matches the current view leaves out (a finished workflow, one not waiting on you), offered as "show all"
   const elsewhereMatches = q ? (type.type ? poolFor("all").filter((e) => typeOf(e) === type.type) : poolFor("all")).length : 0;
 

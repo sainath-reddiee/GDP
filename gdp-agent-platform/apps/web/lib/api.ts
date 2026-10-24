@@ -159,3 +159,8 @@ export function proxyHeaders(): Record<string, string> {
 export async function apiRaw(path: string): Promise<Response> {
   return fetch(`${API_URL}${path}`, { cache: "no-store", headers: sessionHeaders() });
 }
+
+/** The platform as the signed-in person sees it with their own access, whatever persona they work as ("super" is the
+ *  full persona: the API keeps their own privileges and roles, never more). Home's overview reads this way so it shows
+ *  the same master data under every persona; what the person may do still follows the persona. */
+export const apiAsSelf = <T>(path: string) => api<T>(path, { headers: { "X-AIP-Persona": "super" } });

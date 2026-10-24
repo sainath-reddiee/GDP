@@ -43,10 +43,10 @@ RUN_STATES: Dict[str, tuple] = {
     "PROFILING_COMPLETE": ("DESIGN", "MAPPING.DECIDE", f"{_DESIGN}: match the domain"),
     "DOMAIN_IDENTIFIED": ("DESIGN", "MAPPING.DECIDE", f"{_DESIGN}: generate the field mapping"),
     "MAPPING_PENDING": ("DESIGN", "MAPPING.DECIDE", f"{_DESIGN}: decide the field mapping"),
-    "MAPPING_REVIEW": ("DESIGN", "MAPPING.APPROVE", "Model approver: approve the field mapping"),
+    "MAPPING_REVIEW": ("DESIGN", "MAPPING.APPROVE", f"{_DESIGN}: approve the field mapping"),
     "MAPPING_APPROVED": ("DESIGN", "MAPPING.DECIDE", f"{_DESIGN}: generate the transformations and joins"),
     "STTM_PENDING": ("DESIGN", "STTM.EDIT", f"{_DESIGN}: complete the transformations and joins"),
-    "STTM_REVIEW": ("DESIGN", "STTM.APPROVE", "Data Mapping approver: approve the transformations and joins"),
+    "STTM_REVIEW": ("DESIGN", "STTM.APPROVE", f"{_DESIGN}: approve the transformations and joins"),
     # the design is done once the transformations are approved: the Forward Engineering Lead builds end to end from
     # here (Build end to end generates and approves the data quality checks, the code, validation and the PR)
     "STTM_APPROVED": ("BUILD", "RUN.OPERATE", f"{_BUILD}: build end to end (checks, code, validation, pull request)"),
@@ -65,7 +65,7 @@ RUN_STATES: Dict[str, tuple] = {
 # while the code is in review, and a DQ approver may approve the checks themselves while Build end to end has not
 ALSO_WAITS: Dict[str, List[tuple]] = {
     "DBT_REVIEW": [("QA.SIGNOFF", "QA & UAT Lead: run and sign off the QA tests")],
-    "SODA_REVIEW": [("SODA.APPROVE", "DQ approver: approve the data quality checks (Build end to end approves them otherwise)")],
+    "SODA_REVIEW": [("SODA.APPROVE", f"{_DESIGN}: approve the data quality checks (Build end to end approves them otherwise)")],
 }
 DONE_STATES = {"DBT_APPROVED", "COMPLETED", "DEPLOYMENT_PENDING", "DEPLOYED", "PIPELINE_ENABLED"}
 _ORDER = list(RUN_STATES) + sorted(DONE_STATES)

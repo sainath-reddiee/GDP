@@ -61,3 +61,31 @@ export function personasFor(g: Grants): Persona[] {
   const fit = PERSONAS.filter((p) => p.id !== "viewer" && hasAny(g, PERSONA_REQUIRES[p.id]));
   return fit.length ? fit : PERSONAS.filter((p) => p.id === "viewer");
 }
+
+/** The persona whose work a privilege is, as the persona bundles hand them out (V076/V077): what Home and the request
+ *  screens name as "waiting on", instead of a privilege or a governance role. */
+export const PERSONA_FOR_PRIVILEGE: Record<string, PersonaId> = {
+  "SOURCE.CONNECT": "admin", "DOMAIN.ONBOARD": "admin",
+  "PROFILE.RUN": "designer", "MAPPING.DECIDE": "designer", "MAPPING.APPROVE": "designer", "STTM.EDIT": "designer",
+  "STTM.APPROVE": "designer", "MODEL.EDIT": "designer", "MODEL.APPROVE": "designer", "SODA.APPROVE": "designer",
+  "SODA.EDIT": "designer", "RUN.CREATE": "designer",
+  "RUN.OPERATE": "forward_lead", "DBT.EDIT": "forward_lead", "SKILL.RELEASE": "forward_lead",
+  "REVIEW.APPROVE": "developer", "REVIEW.DECIDE": "developer",
+  "QA.SIGNOFF": "qa", "QA.EDIT": "qa", "PACKAGE.APPROVE": "qa", "PACKAGE.EDIT": "qa",
+  "DOMAIN.EDIT": "product_owner", "REQUEST.CHANGES": "product_owner",
+  "KNOWLEDGE.EDIT": "curator", "SKILL.EDIT": "curator",
+  "OPS.OPERATE": "reliability", "OPS.FIX_APPROVE": "reliability", "OPS.FIX_PUBLISH": "reliability", "CASE.WORK": "reliability",
+};
+/** The persona whose bundle holds a governance role (who decides a change request routed to that role). */
+export const PERSONA_FOR_ROLE: Record<string, PersonaId> = {
+  PLATFORM_ADMIN: "admin", DATA_DESIGNER: "designer", MODEL_APPROVER: "designer", STTM_APPROVER: "designer",
+  DQ_APPROVER: "designer", DATA_ENGINEER: "forward_lead", SKILL_OWNER: "forward_lead", CODE_REVIEWER: "developer",
+  QA_LEAD: "qa", DATA_STEWARD: "product_owner", SUPPORT_ENGINEER: "reliability", SUPER_ADMIN: "super",
+  GOVERNANCE_ADMIN: "super",
+};
+export const personaLabel = (id: PersonaId | null | undefined) => (id ? personaById(id).label : "a person");
+/** The persona label for a privilege ("Data Designer" for STTM.APPROVE); the privilege itself when none is known. */
+export const personaForPrivilege = (privilege: string) => {
+  const id = PERSONA_FOR_PRIVILEGE[privilege];
+  return id ? personaById(id).label : privilege;
+};
