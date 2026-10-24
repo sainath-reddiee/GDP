@@ -17,12 +17,30 @@ type Message =
   | { role: "assistant"; content: string; data?: CopilotAnswer; error?: boolean }
   | { role: "divider"; content: string };
 
-const CopilotCtx = createContext<{ setFocus: (f: Focus) => void; open: (question?: string) => void; shown: boolean }>({
-  setFocus: () => undefined, open: () => undefined, shown: false,
+const CopilotCtx = createContext<{ setFocus: (f: Focus) => void; open: (question?: string) => void; toggle: () => void; shown: boolean; unread: boolean }>({
+  setFocus: () => undefined, open: () => undefined, toggle: () => undefined, shown: false, unread: false,
 });
 
 /** Pages tell the copilot which table is in view (e.g. an open profile) and can open it with a question. */
 export const useCopilot = () => useContext(CopilotCtx);
+
+/** The header's Copilot button: opens the drawer (Ctrl+J does the same). Not on the full Copilot page, which is the
+ *  drawer's big version, nor for people who may not use AI. */
+export function CopilotButton({ className }: { className?: string }) {
+  const { toggle, shown, unread } = useCopilot();
+  const { can } = useAccess();
+  const pathname = usePathname() ?? "";
+  if (!can("AI.USE") || pathname.startsWith("/os/work/copilot")) return null;
+  return (
+    <button type="button" onClick={toggle} aria-label={shown ? "Close copilot" : "Open copilot"} title="Copilot (Ctrl+J)"
+            aria-expanded={shown} data-copilot-launcher className={cn("relative", className)}>
+      <Sparkles className="h-4 w-4" />
+      <span className="hidden lg:inline">Copilot</span>
+      <kbd className="hidden rounded border border-current/20 px-1 text-[10px] font-semibold opacity-60 xl:inline">Ctrl J</kbd>
+      {unread && !shown && <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-destructive ring-2 ring-background" />}
+    </button>
+  );
+}
 
 const STAGE_LABEL: Record<string, string> = {
   profile: "Profiling", domain: "Domain", modeling: "Mapping", mapping: "Mapping", sttm: "Mapping", soda: "Data Quality", qa: "QA tests",
@@ -31,6 +49,7 @@ const STAGE_LABEL: Record<string, string> = {
 
 function describe(page: CopilotPage): string {
   if (page.table) return `${page.database}.${page.schema}.${page.table}`;
+  if (page.path === "/os") return "Home";
   const run = page.path.match(/^\/runs\/[0-9a-f-]{36}(?:\/([a-z]+))?/);
   if (run) return `Run · ${run[1] ? STAGE_LABEL[run[1]] ?? run[1] : "Overview"}`;
   if (page.path.startsWith("/sources") || page.path.startsWith("/os/design/sources")) return page.schema ? `Sources · ${page.database}.${page.schema}` : "Sources";
@@ -156,23 +175,15 @@ function CopilotShell({ children }: { children: ReactNode }) {
   }, [send]);
 
   return (
-    <CopilotCtx.Provider value={{ setFocus, open, shown: show }}>
+    <CopilotCtx.Provider value={{ setFocus, open, toggle: () => setShow((v) => !v), shown: show, unread }}>
       {children}
-      {/* the Copilot workspace is the full version of this drawer; its own controls sit where the launcher would */}
-      {can("AI.USE") && !pathname.startsWith("/os/work/copilot") && <button type="button" onClick={() => setShow((v) => !v)} aria-label={show ? "Close copilot" : "Open copilot"}
-              title="Copilot (Ctrl+J)" aria-expanded={show} data-copilot-launcher
-              className={cn("fixed bottom-5 right-5 z-[71] grid h-14 w-14 place-items-center rounded-full bg-primary text-white shadow-lg ring-4 ring-background transition hover:scale-105 hover:shadow-xl",
-                            show && "max-sm:hidden")}>
-        {show ? <X className="h-6 w-6" /> : <Sparkles className="h-6 w-6" />}
-        {unread && !show && <span className="absolute right-1 top-1 h-3 w-3 rounded-full bg-destructive ring-2 ring-background" />}
-      </button>}
       {show && can("AI.USE") && (
         <aside role="dialog" aria-label="Copilot"
                className={cn("fixed z-[70] flex flex-col overflow-hidden bg-background shadow-2xl",
                              "max-sm:inset-0",
                              wide
                                ? "sm:inset-y-0 sm:right-0 sm:w-full sm:max-w-[520px] sm:border-l"
-                               : "sm:bottom-24 sm:right-5 sm:h-[min(640px,calc(100vh-8rem))] sm:w-[400px] sm:origin-bottom-right sm:rounded-2xl sm:border sm:animate-[copilot-in_160ms_ease-out]")}>
+                               : "sm:right-5 sm:top-[66px] sm:h-[min(640px,calc(100vh-5.5rem))] sm:w-[400px] sm:origin-top-right sm:rounded-2xl sm:border sm:animate-[copilot-in_160ms_ease-out]")}>
           <header className="flex items-center gap-3 border-b bg-accent px-4 py-3">
             <span className="grid h-8 w-8 place-items-center rounded-xl bg-primary text-white"><Bot className="h-4 w-4" /></span>
             <div className="min-w-0">

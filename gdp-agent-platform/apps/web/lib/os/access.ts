@@ -43,7 +43,7 @@ export type Screen = {
   view?: readonly string[]; why: string;
 };
 export const SECTIONS: { key: SectionKey; label: string }[] = [
-  { key: "work", label: "My Work" }, { key: "intake", label: "Intake" }, { key: "enable", label: "Enable" }, { key: "design", label: "Design" },
+  { key: "work", label: "Home" }, { key: "intake", label: "Intake" }, { key: "enable", label: "Enable" }, { key: "design", label: "Design" },
   { key: "build", label: "Build" }, { key: "review", label: "Review" }, { key: "skills", label: "Skills" }, { key: "release", label: "Release" },
   { key: "knowledge", label: "Knowledge" }, { key: "run", label: "Run & DQ" }, { key: "admin", label: "Admin" },
 ];
@@ -57,11 +57,12 @@ const OPERATORS = ["OPS.VIEW", "JIRA.READ", "CASE.WORK"] as const;
 const SUPER = ["*"] as const;
 
 export const SCREENS: Screen[] = [
-  // My Work: the person's own work, the estate overview and the copilot
-  { key: "work", section: "work", href: "/os", label: "My Work", exact: true, why: "everyone signed in" },
+  // Home: the workflows in flight, the inbox and the estate overview
+  { key: "work", section: "work", href: "/os", label: "Home", exact: true, why: "everyone signed in" },
   { key: "inbox", section: "work", href: "/os/work/inbox", label: "Inbox", why: "everyone signed in (requests, questions, tickets)" },
   { key: "overview", section: "work", href: "/os/work/overview", label: "Overview", exact: true, why: "everyone signed in" },
-  { key: "copilot", section: "work", href: "/os/work/copilot", label: "Copilot", view: ["AI.USE"], why: "people who may use AI" },
+  // Copilot opens from the header; its full page is reached from the drawer, not a tab
+  { key: "copilot", section: "work", href: "/os/work/copilot", label: "Copilot", rail: false, view: ["AI.USE"], why: "people who may use AI" },
 
   // Intake: asking for something, and the onboarding wizards that start it
   { key: "intake", section: "intake", href: "/os/intake", label: "New request",

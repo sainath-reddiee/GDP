@@ -8,7 +8,7 @@ Every screen reads live platform data through the endpoints the classic pages al
 
 | Entry | Tabs |
 |---|---|
-| My Work | My Work (`/os`), Inbox (`/work`), Overview, Copilot |
+| Home | Home (`/os`), Inbox (`/os/work/inbox`), Overview (`/os/work/overview`) |
 | Intake | New request, Requests, Request history |
 | Enable | Source readiness, Onboard a source, Onboard a domain (the Data OS Administrator's alone) |
 | Design | Designer studio, Domains, Stores (the six stores, with their own store tabs) |
@@ -22,20 +22,28 @@ Every screen reads live platform data through the endpoints the classic pages al
 
 Each person sees only the entries and tabs their privileges open; an entry opens its first open tab. Every one of the 79 page routes belongs to exactly one tab (checked against the access list). In the new shell, the tab bar replaces the classic workspace tabs, so a page never shows two tab bars.
 
-The header carries what the classic top bar did: the domain scope, global search (Ctrl K), the "New" menu, and the account menu (work-role switch, appearance, sign out). It also has "View as" and, for admins, "Preview as role".
+The header carries what the classic top bar did: the domain scope, global search (Ctrl K), Copilot, the "New" menu, and the account menu (work-role switch, appearance, sign out). It also has "View as" and, for admins, "Preview as role". Copilot (for `AI.USE`) opens its drawer from the header button or Ctrl J; the drawer links to the full Copilot page (`/os/work/copilot`), which is no longer a tab. There is no floating launcher and no workspace pill.
 
 **How it is wired**
 - `middleware.ts` passes each signed-in request's path to the root layout (header `x-ados-path`, set by the server, never taken from the client).
-- The root layout looks the path up in the access list. A page outside the person's role (or the previewed role) goes back to My Work with the reason, before it renders.
+- The root layout looks the path up in the access list. A page outside the person's role (or the previewed role) goes back to Home with the reason, before it renders.
 - `components/os/chrome.tsx` draws the frame. The classic page components themselves are unchanged.
 
 **Classic layout (admins only).** Admin has a "Classic layout" switch (cookie `ados_classic`). The root layout honours it only for holders of `ADMIN.VIEW` or super admins. With it on, the classic pages get the old sidebar and top bar; `/os` keeps its shell either way. The e2e checks of the classic layout (`command-center.spec.ts`) set this cookie.
 
-**Landing.** With `ADOS_LANDING=1`, signing in and opening `/` land on `/os` (mission control). The default is off, so people land on the classic My Work (`/work`), which now also opens in the new shell.
+**Landing.** Everyone lands on Home (`/os`) after signing in and on `/`, whatever their role (`lib/os/home.ts`).
+
+## Home (`/os`)
+
+A developer studio, with no hero: the build workflows (onboarding requests) and how to start one.
+
+- **Workflows.** Each row is a request: its type and intent ("Enhance source"), domain, priority, overdue, and a step track (Domain, Enable, Design, Build, Review, Done) with the step it is at and "Waiting on <role> · 2d". The role is the one the wait names ("Model approver: approve the field mapping"). When the viewer's role acts next the row says "Your turn" with "Do it", which opens where that step is worked. A row expands to its sources and their runs.
+- **Views and filters**, all in the URL so a view can be shared: Active (open), Action required (open and waiting on a privilege the viewer holds; the default when it has any), All; type (Domain, Source, Product); New or Enhance; search by workflow name. The header's domain scope narrows the list.
+- **Start a workflow.** Data domain, Data source and Data product, each New or Enhance, open Intake with the type and intent chosen. Everyone sees the panel; the buttons open for people who may file a request (the Intake screen's privileges) and are disabled with the reason for the rest. Administrators also get "Onboard directly". Data products are coming soon.
 
 ## Onboarding requests (V075)
 
-A data owner files a request on Intake: sources for a domain, or a new domain (named, never picked from the domains that exist; for those, a source request). Data product requests are a "coming soon" placeholder on Intake. The request then travels to whoever acts next. Nobody types its stage in. Every read works it out again from the domain, each source's registration and health, and the runs that onboard them (`services/onboarding/requests.py`).
+A data owner files a request on Intake: sources for a domain, or a new domain (named, never picked from the domains that exist), each new or enhanced (V078, below). Data product requests are a "coming soon" placeholder on Intake. The request then travels to whoever acts next. Nobody types its stage in. Every read works it out again from the domain, each source's registration and health, and the runs that onboard them (`services/onboarding/requests.py`).
 
 | Stage | When | Who acts (privilege) |
 |---|---|---|
@@ -76,7 +84,12 @@ A data owner files a request on Intake: sources for a domain, or a new domain (n
 - **Cancel:** the requester or `ROLE.MANAGE`.
 - **Reject:** `SOURCE.CONNECT`, `DOMAIN.ONBOARD`, `DOMAIN.EDIT` or `ROLE.MANAGE`.
 
-Reads follow domain membership (`domains.can_see`). Requests waiting on a role appear in that role's My Work, in Enable (sources to enable) and in Design (the domain's requests). Notifications stay in-app.
+**New or enhance (V078).** `INTENT` is NEW or ENHANCE (NEW for requests filed before it).
+- **Enhance a domain:** pick a domain already on the platform and say what its model needs. The request waits at Design on the Data Designer (`MODEL.EDIT`) until a model version newer than the one approved at filing (`BASE_MODEL_VERSION`) is approved; its sources then follow as usual.
+- **Enhance a source:** pick a registered source and name the tables or scope to add; a source not on the platform is refused (file it as a new source). A ready source skips Enable as before. On a new source request, Intake suggests Enhance when a picked source already feeds the domain.
+- Until V078 is deployed, every request reads as NEW and filing an Enhance request answers 503 with "apply V078".
+
+Reads follow domain membership (`domains.can_see`). Requests waiting on a role appear under Action required on that role's Home, in Enable (sources to enable) and in Design (the domain's requests). Notifications stay in-app.
 
 **Phases, in the owner's words.** Next to the stage, a request and each of its sources carry a phase (`requests.phase`):
 
@@ -119,13 +132,13 @@ A request shows the earliest phase of the parts at its stage. Two milestones are
 
 The experience uses the platform's governance as it is: 48 privileges, 14 system roles and the approval policies (`services/governance/policy.py`). It creates no role and grants nothing. One file decides what each person is shown, `apps/web/lib/os/access.ts`:
 
-- **Screens:** each screen lists the privileges that open it (any of them). The rail shows only screens the person may open. Opening any other screen by URL sends the person back to My Work with the reason, before the page reads anything.
+- **Screens:** each screen lists the privileges that open it (any of them). The rail shows only screens the person may open. Opening any other screen by URL sends the person back to Home with the reason, before the page reads anything.
 - **Actions:** each button that changes something names the privilege it needs (`ACTIONS`).
   - A person who holds that privilege sees the button as normal.
   - A person who lacks it but holds `REQUEST.CHANGES` sees "Request: ...", and the tooltip names the approver role from the active policy. The classic page then routes the change to that role, as it always has.
   - Anyone else does not see the button.
-- **Personas:** a person's privileges decide which personas they are offered (`PERSONA_REQUIRES`). A person with none of them gets Viewer. The chosen persona only orders the queue and the landing page.
-- **Work queue:** My Work and Review list only the runs this person decides, may request a decision on, or operates. Holders of `APPROVAL.VIEW` see every gate.
+- **Personas:** a person's privileges decide which personas they are offered (`PERSONA_REQUIRES`). A person with none of them gets Viewer. The chosen persona only orders the queue.
+- **Work queue:** Home and Review list only the runs this person decides, may request a decision on, or operates. Holders of `APPROVAL.VIEW` see every gate.
 - **Preview:** super admins only, by persona, from Admin → People (cookie `ados_preview_persona`; see Personas below). A preview changes only what is shown: data still loads as the signed-in person, and decisions are off.
 - **The API still enforces everything.** Hiding a screen or a button controls what people see; it is not the security boundary. Reads are not restricted per role in the API (the Viewer role reads everything by design). Restricting reads by domain membership is a later backend step.
 
@@ -185,7 +198,7 @@ How these behave:
 
 | Screen | Reads |
 |---|---|
-| My Work `/os` | `/api/runs`, `/api/domains`, `/api/knowledge/overview` |
+| Home `/os` | `/api/onboarding-requests?status=ALL` |
 | Intake `/os/intake` | domains, `/api/sources/overview`, runs, `/api/domains/{id}/data-model`; files a request (sources go to the administrator) |
 | Enable `/os/enable` | `/api/sources/overview`, `/api/hub/ingestion-control` (secrets never shown), `/api/hub/pipelines` |
 | Design `/os/design` | domain data model (shared `ErCanvas`), `/api/runs/{id}/mapping`, domain questions and contract |
@@ -240,7 +253,7 @@ Sourcing moved to Intake and Enable, and modelling and mapping to Design, so Bui
 
 Help shows two walkthroughs built from live records, with no fixtures:
 
-1. **Forward Engineering Lead, happy path:** the most advanced run that passed validation, from My Work through the Workbench and the validation gate to the pull request and code review.
+1. **Forward Engineering Lead, happy path:** the most advanced run that passed validation, from Home through the Workbench and the validation gate to the pull request and code review.
 2. **Onboarding with people in the loop:** the open request furthest along, from filing through the administrator (skipped on its own when the sources are already onboarded), the designer, build and validation, improving a skill and validating again when flagged, to the pull request, QA and release.
 
 Each step names the persona who acts and opens the real run or request. Scores are whatever the agents find.

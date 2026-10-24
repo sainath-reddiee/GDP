@@ -12,7 +12,7 @@ export const dynamic = "force-dynamic";
 export const metadata = { title: "How it works" };
 
 const TOUR: { key: ScreenKey; href: string; title: string; what: string }[] = [
-  { key: "work", href: "/os", title: "My Work", what: "Decisions waiting on a person, autonomous runs, knowledge pulse and the onboarded domains." },
+  { key: "work", href: "/os", title: "Home", what: "Every build workflow with the step it is at and who it waits on (Active, Action required, All), and New or Enhance for a domain, source or data product." },
   { key: "intake", href: "/os/intake", title: "Intake", what: "Link a domain and its sources; see what is reused and where the request routes." },
   { key: "enable", href: "/os/enable", title: "Enable", what: "Source readiness and the config-driven ingestion framework." },
   { key: "design", href: "/os/design", title: "Design", what: "The domain model, mapping proposals with confidence, open questions and the contract." },

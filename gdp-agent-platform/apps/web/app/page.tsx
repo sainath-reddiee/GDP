@@ -11,7 +11,7 @@ export const metadata = {
   description: "Agentic data engineering on Snowflake: AI agents take any source to a reviewed dbt pull request, with human approval at every gate.",
 };
 
-/** The home page. Signed out: the product page, with sign-in in the top bar. Signed in: My Work (or Agentic Data OS mission control with ADOS_LANDING=1). */
+/** The home page. Signed out: the product page, with sign-in in the top bar. Signed in: Home (/os), whatever the role. */
 export default function Home() {
   const jar = cookies();
   const signedIn = AUTH_MODE === "pat" ? !!jar.get(SESSION_COOKIE) : !!jar.get(DEV_COOKIE);

@@ -9,9 +9,10 @@ import {
 import { cn } from "@/lib/utils";
 import { screenOfPath, type ScreenKey, type SectionKey } from "@/lib/os/access";
 import { PERSONA_COOKIE } from "@/lib/os/personas";
+import { CopilotButton } from "@/components/copilot/copilot-provider";
 
-// The Agentic Data OS shell, around every signed-in page: CBRE header (brand, domain scope, global search, workspace
-// pill, "Preview as role", "View as" persona, new menu, account), the UX package's ten-entry icon rail (plus Admin for
+// The Agentic Data OS shell, around every signed-in page: CBRE header (brand, domain scope, global search, Copilot,
+// "Preview as role", "View as" persona, new menu, account), the UX package's ten-entry icon rail (plus Admin for
 // admins) and, above the page, the tabs of the entry on show: every page of that entry, /os and classic alike. The
 // root layout passes only what the person's governance privileges allow: the entries, their tabs, and the personas.
 
@@ -42,7 +43,7 @@ const setCookie = (name: string, value: string | null) => {
 };
 
 export type ShellProps = {
-  user: string | null; environment: string;
+  user: string | null;
   /** the rail entries the person may open (each opens its first open tab), and every open tab */
   sections: ShellSection[]; screens: ShellScreen[]; personas: ShellPersona[]; persona: string;
   preview: ShellPreview | null; scope?: ShellScope | null;
@@ -51,7 +52,7 @@ export type ShellProps = {
   children: ReactNode;
 };
 
-export function OsShell({ user, environment, sections, screens, personas, persona, preview, scope, headerStart, headerEnd, children }: ShellProps) {
+export function OsShell({ user, sections, screens, personas, persona, preview, scope, headerStart, headerEnd, children }: ShellProps) {
   const path = usePathname();
   const router = useRouter();
   const [pending, start] = useTransition();
@@ -130,9 +131,7 @@ export function OsShell({ user, environment, sections, screens, personas, person
           <kbd className="ml-auto rounded border border-[var(--os-line)] px-1.5 text-[10px]">Ctrl K</kbd>
         </button>
         <div className="flex shrink-0 items-center gap-2.5 text-[12px]">
-          <span className="os-tag os-tag-green hidden border border-[var(--os-green-line)] xl:inline-flex" title="The workspace this platform runs in">
-            <span className="h-1.5 w-1.5 rounded-full bg-current" /> {environment} WORKSPACE
-          </span>
+          <CopilotButton className="os-btn inline-flex h-9 items-center gap-2 px-2.5 text-[12px] font-bold lg:px-3" />
           <label className="hidden items-center gap-2 lg:flex">
             <span className="os-muted hidden 2xl:inline">View as</span>
             <span className="relative">

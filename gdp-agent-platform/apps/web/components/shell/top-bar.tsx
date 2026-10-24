@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, useTransition } from "react";
-import { Boxes, Check, ChevronDown, Loader2, LogOut, Plus, Search, Sparkles, Ticket } from "lucide-react";
+import { Boxes, Check, ChevronDown, Loader2, LogOut, Plus, Search, Ticket } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { logout } from "@/app/login/actions";
 import { setDomainScope } from "@/app/scope-actions";
@@ -11,6 +11,7 @@ import { RoleSelector } from "@/components/role-selector";
 import { ThemeSegmented, ThemeToggle } from "@/components/theme/theme-toggle";
 import { actableBy, QUICK_ACTION_GROUPS, QUICK_ACTIONS } from "./quick-actions";
 import { useDismiss } from "./use-dismiss";
+import { CopilotButton } from "@/components/copilot/copilot-provider";
 
 export type DomainOption = { domain_id: string; domain_name: string };
 
@@ -186,19 +187,6 @@ function TicketsShortcut({ privileges }: { privileges?: string[] | null }) {
   );
 }
 
-/** Copilot from any page: the full chat workspace (sessions, attachments, Jira, drafted changes). Ctrl+J, or the round
- *  button, still opens the quick drawer for a question about the page on screen. Shown to people with AI.USE. */
-function CopilotShortcut({ privileges }: { privileges?: string[] | null }) {
-  const allowed = !privileges || privileges.includes("*") || privileges.includes("AI.USE");
-  if (!allowed) return null;
-  return (
-    <Link href="/os/work/copilot" title="Copilot chat (Ctrl+J for a quick question about this page)" data-testid="copilot-shortcut"
-          className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-border/80 bg-card/70 px-3 text-sm font-medium text-muted-foreground shadow-xs transition hover:border-agent/40 hover:text-agent">
-      <Sparkles className="h-4 w-4" /><span className="hidden lg:inline">Copilot</span>
-    </Link>
-  );
-}
-
 /** Sticky frosted bar above every signed-in page: domain scope, search (Ctrl/Cmd+K), quick actions, theme, account. */
 export function TopBar({ user, role, canLogout, appRoles, privileges, domains, scope }: {
   user: string | null; role: string | null; canLogout: boolean; appRoles?: string[] | null; privileges?: string[] | null;
@@ -217,7 +205,7 @@ export function TopBar({ user, role, canLogout, appRoles, privileges, domains, s
           <span className="ml-auto hidden items-center gap-0.5 sm:flex"><kbd className="kbd">{mac ? "⌘" : "Ctrl"}</kbd><kbd className="kbd">K</kbd></span>
         </button>
         <div className="ml-auto flex items-center gap-1.5">
-          <CopilotShortcut privileges={privileges} />
+          <CopilotButton className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-border/80 bg-card/70 px-3 text-sm font-medium text-muted-foreground shadow-xs transition hover:border-agent/40 hover:text-agent" />
           <TicketsShortcut privileges={privileges} />
           <NewMenu privileges={privileges} />
           <ThemeToggle />

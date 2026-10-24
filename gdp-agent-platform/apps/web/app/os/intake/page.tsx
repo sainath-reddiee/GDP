@@ -13,10 +13,22 @@ export const dynamic = "force-dynamic";
 export const metadata = { title: "Request and define" };
 
 const TYPES = [
-  { key: "source", label: "New source", icon: Database, soon: false, hint: "Ask for a source system for a domain: attach one already on the platform, or request a new one from the Data OS Administrator" },
-  { key: "domain", label: "New domain", icon: Boxes, soon: false, hint: "Ask for a business domain that is not on the platform yet: the Data OS Administrator onboards its model, contract and memory" },
-  { key: "product", label: "New data product", icon: Crown, soon: true, hint: "Governed Gold products from mastered Silver domains" },
+  { key: "source", label: "Source", icon: Database, soon: false, hint: "Ask for a source system for a domain: attach one already on the platform, or request a new one from the Data OS Administrator",
+    enhance: "More from a source already registered: name the tables or scope to add; the run that onboards it into the domain picks them up" },
+  { key: "domain", label: "Domain", icon: Boxes, soon: false, hint: "Ask for a business domain that is not on the platform yet: the Data OS Administrator onboards its model, contract and memory",
+    enhance: "Extend a domain already on the platform: the Data Designer adds what you name to its model and a model approver approves the new version" },
+  { key: "product", label: "Data product", icon: Crown, soon: true, hint: "Governed Gold products from mastered Silver domains", enhance: "Change a data product already published" },
 ] as const;
+
+const INTENTS = [{ key: "new", label: "New" }, { key: "enhance", label: "Enhance" }] as const;
+
+/** How a request to extend a domain travels, in order. */
+const ENHANCE_DOMAIN_ROUTE = [
+  { t: "File the request", s: "Pick the domain and say what its model needs: entities, attributes, rules" },
+  { t: "Data Designer extends the model", s: "In the domain's model workspace, reusing its memory and contract" },
+  { t: "A model approver approves the new version", s: "The request moves on once a newer model version than today's is approved" },
+  { t: "Its sources follow", s: "Sources named on the request are profiled and mapped into the extended model" },
+];
 
 /** How a request for a new domain travels, in order. */
 const DOMAIN_ROUTE = [
@@ -47,10 +59,14 @@ function SourceOption({ s, checked, feeding }: { s: SourceOverviewItem; checked:
   );
 }
 
-export default async function Intake({ searchParams }: { searchParams: { type?: string; domain?: string; source?: string | string[] } }) {
+export default async function Intake({ searchParams }: { searchParams: { type?: string; intent?: string; domain?: string; source?: string | string[] } }) {
   const access = await guard("intake");
   const persona = access.persona;
   const type = TYPES.find((t) => t.key === searchParams.type) ?? TYPES[0];
+  const intent = searchParams.intent === "enhance" ? "enhance" : "new";
+  const enhance = intent === "enhance";
+  const INTENT = enhance ? "ENHANCE" : "NEW";
+  const link = (t: string, i: string) => `/os/intake?${new URLSearchParams({ type: t, intent: i, ...(searchParams.domain ? { domain: searchParams.domain } : {}) })}`;
   const [domains, sources, runs] = await Promise.all([loadDomains(), loadSources(), loadRuns("sort=updated&limit=150")]);
   const picked = new Set(([] as string[]).concat(searchParams.source ?? []));
   const domain = domains.data.find((d) => d.domain_id === searchParams.domain) ?? null;
@@ -75,13 +91,21 @@ export default async function Intake({ searchParams }: { searchParams: { type?: 
   const head = (
     <>
       <PageHeader eyebrow={`${persona.label} / Request and define`} title="Create an onboarding request"
-                  subtitle="One intake for a source, a domain or a data product. Link what already exists so the agents reuse it instead of re-entering it." />
-      <div className="mb-4 flex flex-wrap gap-2" role="tablist">
-        {TYPES.map((t) => (
-          <Link key={t.key} href={`/os/intake?type=${t.key}`} role="tab" aria-selected={t.key === type.key} className={cn("os-btn", t.key === type.key && "os-btn-primary")}>
-            <t.icon className="h-3.5 w-3.5" /> {t.label}{t.soon && <Tag className="ml-1">Soon</Tag>}
-          </Link>
-        ))}
+                  subtitle="One intake for a source, a domain or a data product, new or enhanced. Link what already exists so the agents reuse it instead of re-entering it." />
+      <div className="mb-4 flex flex-wrap items-center gap-3">
+        <div className="flex flex-wrap gap-2" role="tablist" aria-label="What is requested">
+          {TYPES.map((t) => (
+            <Link key={t.key} href={link(t.key, intent)} role="tab" aria-selected={t.key === type.key} className={cn("os-btn", t.key === type.key && "os-btn-primary")}>
+              <t.icon className="h-3.5 w-3.5" /> {t.label}{t.soon && <Tag className="ml-1">Soon</Tag>}
+            </Link>
+          ))}
+        </div>
+        <div className="inline-flex rounded-lg border border-[var(--os-line)] bg-[var(--os-subtle)] p-0.5" role="tablist" aria-label="New or enhance" data-testid="intake-intent">
+          {INTENTS.map((i) => (
+            <Link key={i.key} href={link(type.key, i.key)} role="tab" aria-selected={i.key === intent}
+                  className={cn("rounded-md px-3 py-1.5 text-[12px] font-bold", i.key === intent ? "bg-[var(--os-surface)] shadow-[var(--os-shadow)]" : "os-muted")}>{i.label}</Link>
+          ))}
+        </div>
       </div>
     </>
   );
@@ -99,6 +123,46 @@ export default async function Intake({ searchParams }: { searchParams: { type?: 
     );
   }
 
+  if (type.key === "domain" && enhance) {
+    // a domain already on the platform, extended: picked from the onboarded domains
+    return (
+      <>
+        {head}
+        <SourceError what="Domains" error={domains.error} />
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1.45fr)_minmax(0,1fr)]">
+          <Card title="Enhance a domain" subtitle={type.enhance}>
+            <div data-testid="domain-enhance" className="grid gap-4">
+              <AutoForm action="/os/intake">
+                <input type="hidden" name="type" value="domain" />
+                <input type="hidden" name="intent" value="enhance" />
+                <label className="os-label" htmlFor="domain">Domain to enhance</label>
+                <select id="domain" name="domain" defaultValue={domain?.domain_id ?? ""} className="os-input">
+                  <option value="">Choose an onboarded domain...</option>
+                  {domains.data.map((d) => <option key={d.domain_id} value={d.domain_id}>{d.domain_name}{d.description ? ` · ${d.description.slice(0, 60)}` : ""}</option>)}
+                </select>
+              </AutoForm>
+              {domain && entities.length > 0 && (
+                <div className="flex flex-wrap items-center gap-1.5 text-[11px]"><span className="os-faint">Its model today:</span>
+                  {entities.map((e) => <Tag key={e.entity_name} tone={e.kind === "HUB" ? "green" : "neutral"}>{e.entity_name}</Tag>)}</div>
+              )}
+              <SubmitRequest type="DOMAIN" intent="ENHANCE" domainId={domain?.domain_id ?? null} domainName={domain?.domain_name ?? null} picked={[]} previewing={!!access.preview} />
+            </div>
+          </Card>
+          <Card title="Where the request goes" subtitle="Routed by the platform, step by step">
+            <ol className="flex flex-col gap-2.5 text-[12px]">
+              {ENHANCE_DOMAIN_ROUTE.map((x, i) => (
+                <li key={x.t} className="flex gap-2.5">
+                  <span className="os-faint grid h-6 w-6 shrink-0 place-items-center rounded-full bg-[var(--os-neutral-bg)] text-[11px] font-extrabold">{i + 1}</span>
+                  <span><b>{x.t}</b><span className="os-faint block text-[11px]">{x.s}</span></span>
+                </li>
+              ))}
+            </ol>
+          </Card>
+        </div>
+      </>
+    );
+  }
+
   if (type.key === "domain") {
     // a domain not on the platform yet: named, never picked from the domains that exist (those take source requests)
     return (
@@ -110,7 +174,7 @@ export default async function Intake({ searchParams }: { searchParams: { type?: 
               <SubmitRequest type="DOMAIN" domainId={null} domainName={null} picked={[]} previewing={!!access.preview} />
             </div>
             <p className="os-faint mt-4 border-t border-[var(--os-line)] pt-3 text-[11.5px]">
-              Domains are onboarded by the Data OS Administrator. For a domain already on the platform, file a <Link href="/os/intake?type=source" className="underline">source request</Link> instead.
+              Domains are onboarded by the Data OS Administrator. For a domain already on the platform, <Link href={link("domain", "enhance")} className="underline">enhance it</Link> or file a <Link href={link("source", "new")} className="underline">source request</Link>.
             </p>
           </Card>
           <Card title="Where the request goes" subtitle="Routed by the platform, step by step">
@@ -136,9 +200,10 @@ export default async function Intake({ searchParams }: { searchParams: { type?: 
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.45fr)_minmax(0,1fr)]">
         <div className="flex min-w-0 flex-col gap-4">
-          <Card title={type.label} subtitle={type.hint}>
+          <Card title={`${enhance ? "Enhance" : "New"} source`} subtitle={enhance ? type.enhance : type.hint}>
             <AutoForm action="/os/intake" className="grid gap-4">
               <input type="hidden" name="type" value={type.key} />
+              <input type="hidden" name="intent" value={intent} />
               <div>
                 <label className="os-label" htmlFor="domain">Business domain</label>
                 <select id="domain" name="domain" defaultValue={domain?.domain_id ?? ""} className="os-input">
@@ -166,14 +231,22 @@ export default async function Intake({ searchParams }: { searchParams: { type?: 
                       </div>
                     ) : <p className="os-faint text-[11.5px]">{sources.data.sources.length ? "Every registered source already feeds this domain." : "No source is registered on the platform yet."}</p>}
                   </fieldset>
-                  <p className="os-faint text-[11px]">A ready source (green) is registered, reachable and landed, so the request goes straight to the Data Designer. None fits? Name it under Request a new source below and the Data OS Administrator onboards it.</p>
+                  <p className="os-faint text-[11px]">{enhance
+                    ? "Pick the registered source to widen; name the tables or scope to add in the request below. A source not on the platform yet is a new source request."
+                    : "A ready source (green) is registered, reachable and landed, so the request goes straight to the Data Designer. None fits? Name it under Request a new source below and the Data OS Administrator onboards it."}</p>
+                  {!enhance && domain && chosen.some((s) => feeding.has(s.source_system_name)) && (
+                    <p className="os-banner os-banner-blue text-[11.5px]" data-testid="suggest-enhance">
+                      {chosen.filter((s) => feeding.has(s.source_system_name)).map((s) => s.source_system_name).join(", ")} already feed{chosen.filter((s) => feeding.has(s.source_system_name)).length === 1 ? "s" : ""} {domain.domain_name}.{" "}
+                      Asking for more from {chosen.filter((s) => feeding.has(s.source_system_name)).length === 1 ? "it" : "them"}? <Link className="font-bold underline" href={`${link("source", "enhance")}&${chosen.map((s) => `source=${encodeURIComponent(s.source_system_id)}`).join("&")}`}>Enhance instead</Link>.
+                    </p>
+                  )}
                 </div>
               )}
             </AutoForm>
           </Card>
 
           <Card title="Request details" subtitle="Filing the request routes it: the platform checks what exists and sends it to whoever acts first">
-            <SubmitRequest type={REQUEST_TYPE[type.key]} domainId={domain?.domain_id ?? null} domainName={domain?.domain_name ?? null}
+            <SubmitRequest type={REQUEST_TYPE[type.key]} intent={INTENT} domainId={domain?.domain_id ?? null} domainName={domain?.domain_name ?? null}
                            picked={chosen.map((s) => ({ source_system_id: s.source_system_id, source_name: s.source_system_name }))}
                            previewing={!!access.preview} />
             <p className="os-faint mt-4 border-t border-[var(--os-line)] pt-3 text-[11.5px]">

@@ -2,7 +2,7 @@ import { requestSteps, type OnboardingRequest } from "@/lib/os/requests";
 import { cn } from "@/lib/utils";
 
 /** A request's path as small bars: done, current (red when blocked), pending. */
-export function RequestDots({ r }: { r: Pick<OnboardingRequest, "stage" | "status" | "attention" | "domain_id" | "request_type"> }) {
+export function RequestDots({ r }: { r: Pick<OnboardingRequest, "stage" | "status" | "attention" | "domain_id" | "request_type" | "intent"> }) {
   return (
     <span className="flex items-center gap-1" aria-label={`Stage ${r.stage.toLowerCase()}`}>
       {requestSteps(r).map((s) => (

@@ -94,7 +94,7 @@ export const osAccess = cache(async (): Promise<OsAccess> => {
   };
 });
 
-/** Opens an /os screen only for people whose privileges allow it; anyone else goes back to My Work with the reason. */
+/** Opens an /os screen only for people whose privileges allow it; anyone else goes back to Home with the reason. */
 export async function guard(key: ScreenKey): Promise<OsAccess> {
   const access = await osAccess();
   if (!canSee(access, key)) redirect(`/os?denied=${key}`);

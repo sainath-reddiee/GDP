@@ -27,7 +27,7 @@ async function call(path: string, body: unknown): Promise<RequestResult> {
 }
 
 export type NewRequestInput = {
-  request_type: "SOURCE" | "DOMAIN" | "PRODUCT"; title: string; business_outcome?: string; domain_id?: string | null;
+  request_type: "SOURCE" | "DOMAIN" | "PRODUCT"; intent?: "NEW" | "ENHANCE"; title: string; business_outcome?: string; domain_id?: string | null;
   proposed_domain?: string | null; priority: "LOW" | "MEDIUM" | "HIGH"; needed_by?: string | null;
   sources: { source_system_id?: string; source_name?: string; note?: string }[]; allow_duplicate?: boolean;
 };

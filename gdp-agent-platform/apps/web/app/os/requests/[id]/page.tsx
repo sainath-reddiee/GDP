@@ -4,7 +4,7 @@ import { stateLabel } from "@/lib/run-labels";
 import { loadDomains, loadRequest, loadRuns, loadSources } from "@/lib/os/data";
 import { guard } from "@/lib/os/session";
 import { has } from "@/lib/os/access";
-import { PRIORITY_TONE, overdue, phaseOf, requestSteps, type RequestEvent, type RequestItem, type Wait } from "@/lib/os/requests";
+import { PRIORITY_TONE, actHref, intentLabel, overdue, phaseOf, requestSteps, type RequestEvent, type RequestItem } from "@/lib/os/requests";
 import { ActivityRow, Banner, Btn, Card, Empty, Field, PageHeader, SourceError, Tag, ago, pretty, type Tone } from "@/components/os/ui";
 import { AddSource, ItemControls, LinkDomain, RequestControls } from "@/components/os/request-ui";
 import { cn } from "@/lib/utils";
@@ -40,28 +40,6 @@ const EVENT: Record<string, (e: RequestEvent) => string> = {
   DESIGN_STORED: () => "Design approved and stored",
 };
 
-/** Where the person a wait names does the work. */
-function actHref(w: Wait, item: RequestItem | undefined, domainId: string | null, product: boolean, requestId: string): string | null {
-  // a domain to onboard opens the administrator's domain wizard for this request; a retired one is restored in Domains
-  if (w.privilege === "DOMAIN.ONBOARD") return `/os/enable/new-domain?${new URLSearchParams({ request: requestId })}`;
-  if (w.privilege === "DOMAIN.EDIT") return "/os/knowledge?view=domains";
-  if (w.privilege === "MODEL.APPROVE" || w.privilege === "MODEL.EDIT") return domainId ? `/os/knowledge/domains/${domainId}` : "/domains";
-  if (item?.run_id) {
-    return ["MAPPING.APPROVE", "STTM.APPROVE", "SODA.APPROVE", "REVIEW.APPROVE"].includes(w.privilege)
-      ? `/os/review?run=${item.run_id}` : `/os/build?run=${item.run_id}`;
-  }
-  if (w.privilege === "RUN.CREATE") return product ? "/os/build/gold" : "/os/build";
-  if (w.privilege === "SOURCE.CONNECT" || w.privilege === "PROFILE.RUN") {
-    // a source to register, or whose run is to start, opens the administrator's wizard for this request (Enable shows
-    // the same); one unreachable or not landed goes to the source store
-    if (item && (!item.source_system_id || item.status === "NO_RUN" || item.status === "ATTENTION")) {
-      return `/os/enable/onboarding?type=source&${new URLSearchParams({ request: requestId, item: item.item_id, name: item.source_name })}`;
-    }
-    return item?.source_system_id ? "/os/design/sources" : "/os/enable";
-  }
-  return null;
-}
-
 export default async function RequestPage({ params }: { params: { id: string } }) {
   const access = await guard("requests");
   const [detail, sources, runs, domains] = await Promise.all([loadRequest(params.id), loadSources(), loadRuns("sort=updated&limit=200"), loadDomains()]);
@@ -90,7 +68,7 @@ export default async function RequestPage({ params }: { params: { id: string } }
   return (
     <>
       <PageHeader
-        eyebrow={`Onboarding request · ${pretty(r.request_type)}`}
+        eyebrow={`Onboarding request · ${intentLabel(r)}`}
         title={r.title}
         subtitle={r.business_outcome ?? undefined}
         actions={<Btn href="/os/requests">All requests</Btn>}
@@ -214,7 +192,7 @@ export default async function RequestPage({ params }: { params: { id: string } }
 
           <Card title="Request details">
             <div className="grid gap-2.5">
-              <Field label="Type">{pretty(r.request_type)} · {r.pipeline === "GOLD" ? "Gold" : "Silver"} pipeline</Field>
+              <Field label="Type">{intentLabel(r)} · {r.pipeline === "GOLD" ? "Gold" : "Silver"} pipeline</Field>
               <Field label="Stage since">{ago(r.stage_changed_at) || "–"}</Field>
               <Field label="Last activity">{ago(r.updated_at)}</Field>
             </div>

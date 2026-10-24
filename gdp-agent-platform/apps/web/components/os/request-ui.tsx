@@ -50,10 +50,11 @@ const Off = () => <p className="os-faint mt-1 text-[11px]">Off while you preview
 
 /* ---------------------------------------------------------------- filing a request (Intake) */
 
-export function SubmitRequest({ type, domainId, domainName, picked, previewing }: {
-  type: "SOURCE" | "DOMAIN" | "PRODUCT"; domainId: string | null; domainName: string | null;
+export function SubmitRequest({ type, intent = "NEW", domainId, domainName, picked, previewing }: {
+  type: "SOURCE" | "DOMAIN" | "PRODUCT"; intent?: "NEW" | "ENHANCE"; domainId: string | null; domainName: string | null;
   picked: { source_system_id: string; source_name: string }[]; previewing: boolean;
 }) {
+  const enhance = intent === "ENHANCE";
   const router = useRouter();
   const [title, setTitle] = useState("");
   const [outcome, setOutcomeText] = useState("");
@@ -66,14 +67,19 @@ export function SubmitRequest({ type, domainId, domainName, picked, previewing }
   const { pending, outcome: result, run } = useRequestCall();
 
   const sources = [...picked.map((p) => ({ source_system_id: p.source_system_id })), ...named.map((n) => ({ source_name: n.name, note: n.note || undefined }))];
-  const ready = !!title.trim() && (type === "DOMAIN" ? !!(domainId || proposed.trim()) : !!domainId) && (type !== "SOURCE" || sources.length > 0);
-  const missing = !title.trim() ? "Give the request a title." : type !== "DOMAIN" && !domainId ? "Choose the domain above."
-    : type === "DOMAIN" && !domainId && !proposed.trim() ? "Name the new domain." : type === "SOURCE" && !sources.length ? "Pick or name at least one source." : "";
+  // enhancing a domain extends one that exists (picked above) and says what it needs; enhancing a source widens a
+  // registered one (picked above), so no new source is named
+  const ready = !!title.trim() && (type === "DOMAIN" && !enhance ? !!(domainId || proposed.trim()) : !!domainId)
+    && (type !== "SOURCE" || sources.length > 0) && (!enhance || type !== "DOMAIN" || !!outcome.trim());
+  const missing = !title.trim() ? "Give the request a title." : (type !== "DOMAIN" || enhance) && !domainId ? "Choose the domain above."
+    : type === "DOMAIN" && !enhance && !domainId && !proposed.trim() ? "Name the new domain."
+    : type === "DOMAIN" && enhance && !outcome.trim() ? "Say what the domain needs."
+    : type === "SOURCE" && !sources.length ? (enhance ? "Pick the source to enhance above." : "Pick or name at least one source.") : "";
 
   const submit = (allowDuplicate = false) => {
     const body: NewRequestInput = {
-      request_type: type, title: title.trim(), business_outcome: outcome.trim() || undefined, priority,
-      needed_by: neededBy || null, domain_id: domainId, proposed_domain: !domainId && type === "DOMAIN" ? proposed.trim() : null,
+      request_type: type, intent, title: title.trim(), business_outcome: outcome.trim() || undefined, priority,
+      needed_by: neededBy || null, domain_id: domainId, proposed_domain: !domainId && type === "DOMAIN" && !enhance ? proposed.trim() : null,
       sources, allow_duplicate: allowDuplicate,
     };
     setDupes(null);
@@ -89,7 +95,8 @@ export function SubmitRequest({ type, domainId, domainName, picked, previewing }
       <div className="grid gap-3 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)]">
         <div><label className="os-label" htmlFor="rq-title">Request title</label>
           <input id="rq-title" value={title} onChange={(e) => setTitle(e.target.value)} maxLength={256} disabled={previewing}
-                 placeholder={type === "PRODUCT" ? "e.g. Pipeline forecast by region" : type === "DOMAIN" ? "e.g. Tenant domain for leasing" : `e.g. ${domainName ?? "Opportunity"} from Salesforce`} className="os-input" /></div>
+                 placeholder={type === "PRODUCT" ? "e.g. Pipeline forecast by region" : type === "DOMAIN" ? (enhance ? `e.g. Add leases to ${domainName ?? "Property"}` : "e.g. Tenant domain for leasing")
+                   : enhance ? "e.g. Salesforce: add campaign tables" : `e.g. ${domainName ?? "Opportunity"} from Salesforce`} className="os-input" /></div>
         <div><label className="os-label" htmlFor="rq-priority">Priority</label>
           <select id="rq-priority" value={priority} onChange={(e) => setPriority(e.target.value as typeof priority)} disabled={previewing} className="os-input">
             <option value="LOW">Low</option><option value="MEDIUM">Medium</option><option value="HIGH">High</option>
@@ -97,15 +104,17 @@ export function SubmitRequest({ type, domainId, domainName, picked, previewing }
         <div><label className="os-label" htmlFor="rq-needed">Needed by</label>
           <input id="rq-needed" type="date" value={neededBy} onChange={(e) => setNeededBy(e.target.value)} disabled={previewing} className="os-input" /></div>
       </div>
-      <div><label className="os-label" htmlFor="rq-outcome">Business outcome</label>
-        <textarea id="rq-outcome" value={outcome} onChange={(e) => setOutcomeText(e.target.value)} rows={2} maxLength={4000} disabled={previewing}
-                  placeholder="What the business gets, the consumers and their SLA" className="os-input resize-y" /></div>
-      {type === "DOMAIN" && !domainId && (
+      <div><label className="os-label" htmlFor="rq-outcome">{type === "DOMAIN" && enhance ? "What the domain needs" : "Business outcome"}</label>
+        <textarea id="rq-outcome" value={outcome} onChange={(e) => setOutcomeText(e.target.value)} rows={type === "DOMAIN" && enhance ? 3 : 2} maxLength={4000} disabled={previewing}
+                  placeholder={type === "DOMAIN" && enhance ? "The entities, attributes or rules to add, and what the business gets from them"
+                    : type === "SOURCE" && enhance ? "The tables or scope to add, and what the business gets from them" : "What the business gets, the consumers and their SLA"}
+                  className="os-input resize-y" /></div>
+      {type === "DOMAIN" && !domainId && !enhance && (
         <div><label className="os-label" htmlFor="rq-domain">New domain name</label>
           <input id="rq-domain" value={proposed} onChange={(e) => setProposed(e.target.value)} maxLength={128} disabled={previewing}
                  placeholder="e.g. TENANT" className="os-input" /></div>
       )}
-      {type !== "PRODUCT" && (
+      {type !== "PRODUCT" && !(type === "SOURCE" && enhance) && (
         <div>
           <span className="os-label">Request a new source</span>
           <div className="flex flex-wrap gap-2">

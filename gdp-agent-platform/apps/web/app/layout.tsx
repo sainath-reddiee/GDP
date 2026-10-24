@@ -81,7 +81,6 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
               classic={classic}
               shell={{
                 user: access.user,
-                environment: (process.env.AIP_ENVIRONMENT ?? "DEV").toUpperCase(),
                 sections,
                 screens: open.map(({ key, href, label, exact, section }) => ({ key, href, label, exact, section })),
                 personas: access.personas.map(({ id, label, short, home, responsibility }) => ({ id, label, short, home, responsibility })),

@@ -43,6 +43,8 @@ REQ_COLS = ("REQUEST_ID, REQUEST_TYPE, TITLE, BUSINESS_OUTCOME, DOMAIN_ID, PROPO
             "CLOSED_BY, CLOSED_AT, CLOSE_REASON")
 ITEM_COLS = ("ITEM_ID, REQUEST_ID, SOURCE_SYSTEM_ID, SOURCE_NAME, SOURCE_NOTE, RUN_ID, STATUS, STATUS_DETAIL, ADDED_BY, "
              "ADDED_AT, UPDATED_AT, REMOVED_BY, REMOVED_AT")
+# V078: new or enhance; read apart so the requests keep working before it is deployed (every request is then NEW)
+INTENT_COLS = "INTENT, BASE_MODEL_VERSION"
 RUN_COLS = ("RUN_ID, RUN_NAME, DOMAIN_ID, SOURCE_SYSTEM_ID, CURRENT_STATE, FAILED_FROM_STATE, FAILURE_REASON, IS_ARCHIVED, "
             "DELETED_AT, PARENT_RUN_ID, CREATED_AT, COALESCE(PIPELINE, 'SILVER') AS PIPELINE")
 
@@ -152,8 +154,19 @@ def _runs(db: Db, run_ids: List[str], source_ids: List[str]) -> tuple:
     return found, children, by_source
 
 
+def _before_v077(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return "invalid identifier" in text and ("intent" in text or "base_model_version" in text)
+
+
 def _load(db: Db, where: str, params: tuple) -> List[Dict[str, Any]]:
-    return db.query(f"SELECT {REQ_COLS} FROM CORE.ONBOARDING_REQUEST WHERE {where} ORDER BY UPDATED_AT DESC", params)
+    try:
+        rows = db.query(f"SELECT {REQ_COLS}, {INTENT_COLS} FROM CORE.ONBOARDING_REQUEST WHERE {where} ORDER BY UPDATED_AT DESC", params)
+    except Exception as exc:
+        if not _before_v077(exc):
+            raise
+        rows = db.query(f"SELECT {REQ_COLS} FROM CORE.ONBOARDING_REQUEST WHERE {where} ORDER BY UPDATED_AT DESC", params)
+    return [{**r, "intent": rq.intent(r)} for r in rows]
 
 
 def _items(db: Db, request_ids: List[str]) -> Dict[str, List[Dict[str, Any]]]:
@@ -387,6 +400,7 @@ class SourceIn(BaseModel):
 
 class NewRequest(BaseModel):
     request_type: str = Field(max_length=16)
+    intent: str = Field(default="NEW", max_length=8)
     title: str = Field(max_length=256)
     business_outcome: Optional[str] = Field(default=None, max_length=4000)
     domain_id: Optional[str] = Field(default=None, max_length=36)
@@ -423,11 +437,12 @@ def create_request(body: NewRequest, db: Db = Depends(current_db)):
     """File a request. 409 with the open requests that already ask for one of the sources, unless allow_duplicate."""
     who = _who(db)
     kind = body.request_type.upper()
+    intent = body.intent.upper()
     domain = _domains(db, [body.domain_id]).get(body.domain_id) if body.domain_id else None
-    problems = rq.validate({**body.model_dump(), "request_type": kind, "sources": [s.model_dump() for s in body.sources]},
+    problems = rq.validate({**body.model_dump(), "request_type": kind, "intent": intent, "sources": [s.model_dump() for s in body.sources]},
                            bool(domain and domain.get("active_flag") is not False))
     if kind == "DOMAIN" and not body.domain_id and body.proposed_domain and _domain_named(db, body.proposed_domain):
-        problems.append(f"A domain named {body.proposed_domain} already exists: pick it instead.")
+        problems.append(f"A domain named {body.proposed_domain} already exists: enhance it instead.")
     if problems:
         raise HTTPException(422, " ".join(problems))
     if domain and not domain_access.can_see(db, who["user"], body.domain_id, who["privileges"], who["roles"]):
@@ -444,14 +459,29 @@ def create_request(body: NewRequest, db: Db = Depends(current_db)):
         dupes = _duplicates(db, body.domain_id, [r["source_system_id"] for r in rows if r.get("source_system_id")], [r["source_name"] for r in rows])
         if dupes:
             raise HTTPException(409, {"message": "An open request already asks for this.", "duplicates": dupes})
+    if intent == "ENHANCE" and kind == "SOURCE":
+        unknown = [r["source_name"] for r in rows if not r.get("source_system_id")]
+        if unknown:
+            raise HTTPException(422, f"Enhancing needs a source already on the platform; {', '.join(unknown)} is not registered: "
+                                     "request it as a new source.")
     request_id = str(uuid.uuid4())
-    db.execute(
-        "INSERT INTO CORE.ONBOARDING_REQUEST (REQUEST_ID, REQUEST_TYPE, TITLE, BUSINESS_OUTCOME, DOMAIN_ID, PROPOSED_DOMAIN, PIPELINE, PRIORITY, "
-        "NEEDED_BY, STATUS, STAGE) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'OPEN', %s)",
-        (request_id, kind, body.title.strip()[:256], (body.business_outcome or "").strip() or None, body.domain_id,
-         None if body.domain_id else (body.proposed_domain or "").strip() or None, "GOLD" if kind == "PRODUCT" else "SILVER",
-         body.priority.upper(), body.needed_by, "NEW"))
-    _event(db, request_id, "SUBMITTED", body.business_outcome, to=kind)
+    cols = ("REQUEST_ID, REQUEST_TYPE, TITLE, BUSINESS_OUTCOME, DOMAIN_ID, PROPOSED_DOMAIN, PIPELINE, PRIORITY, NEEDED_BY, STATUS, STAGE")
+    values = (request_id, kind, body.title.strip()[:256], (body.business_outcome or "").strip() or None, body.domain_id,
+              None if body.domain_id else (body.proposed_domain or "").strip() or None, "GOLD" if kind == "PRODUCT" else "SILVER",
+              body.priority.upper(), body.needed_by, "NEW")
+    # an Enhance domain request waits for a model newer than the one approved now
+    base = domain.get("approved_version") if domain and kind == "DOMAIN" and intent == "ENHANCE" else None
+    try:
+        db.execute(f"INSERT INTO CORE.ONBOARDING_REQUEST ({cols}, {INTENT_COLS}) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'OPEN', %s, %s, %s)",
+                   values + (intent, base))
+    except Exception as exc:
+        if not _before_v077(exc):
+            raise
+        if intent == "ENHANCE":
+            raise HTTPException(503, "Enhance requests are not deployed yet: apply migration V078 "
+                                     "(python infrastructure/deploy_snowflake.py --database DEV_AI_PLATFORM).") from exc
+        db.execute(f"INSERT INTO CORE.ONBOARDING_REQUEST ({cols}) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'OPEN', %s)", values)
+    _event(db, request_id, "SUBMITTED", body.business_outcome, to=kind if intent == "NEW" else f"{kind} (enhance)")
     for row in rows:
         _add_item(db, request_id, row)
     return _detail(db, request_id)

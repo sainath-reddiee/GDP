@@ -158,6 +158,16 @@ def test_removed_sources_are_ignored_and_a_domain_only_request_finishes_when_the
     assert rq.assess(req(request_type="DOMAIN"), [], DOMAIN, {}, {})["status"] == "DONE"
 
 
+def test_an_enhance_domain_request_waits_on_the_designer_until_a_newer_model_is_approved():
+    r = req(request_type="DOMAIN", intent="ENHANCE", base_model_version=1)
+    waiting = rq.assess(r, [], DOMAIN, {}, {})
+    assert waiting["stage"] == "DESIGN" and waiting["waiting_on"] == "MODEL.EDIT" and "extend the OPPORTUNITY model" in waiting["waiting_label"]
+    assert rq.assess(r, [], {**DOMAIN, "approved_version": 2}, {}, {})["status"] == "DONE"
+    # a new domain request that found its domain is done once the model is approved, as before
+    assert rq.assess(req(request_type="DOMAIN", base_model_version=1), [], DOMAIN, {}, {})["status"] == "DONE"
+    assert rq.intent({}) == "NEW" and rq.intent({"intent": "enhance"}) == "ENHANCE"
+
+
 def test_a_data_product_waits_on_a_gold_run():
     a = rq.assess(req(request_type="PRODUCT"), [item(source_system_id=None, source_name="Gold: OPPORTUNITY")], DOMAIN, {}, {})
     assert a["stage"] == "BUILD" and a["waiting_on"] == "RUN.CREATE" and a["items"]["i1"]["status"] == "NO_RUN"
@@ -201,9 +211,17 @@ def test_the_existing_run_is_picked_only_when_it_fits():
     ({"request_type": "DOMAIN", "title": "x"}, "Name the new domain"),
     ({"request_type": "DOMAIN", "title": "x", "domain_id": "d1"}, "A domain request is for a new domain"),
     ({"request_type": "SOURCE", "title": "x", "domain_id": "d1", "priority": "URGENT", "sources": [{"source_name": "A"}]}, "Priority"),
+    ({"request_type": "SOURCE", "intent": "REDO", "title": "x", "domain_id": "d1", "sources": [{"source_name": "A"}]}, "new or enhance"),
+    ({"request_type": "SOURCE", "intent": "ENHANCE", "title": "x", "domain_id": "d1", "sources": []}, "Pick the source to enhance"),
+    ({"request_type": "DOMAIN", "intent": "ENHANCE", "title": "x", "business_outcome": "Add leases"}, "Pick the domain to enhance"),
+    ({"request_type": "DOMAIN", "intent": "ENHANCE", "title": "x", "domain_id": "d1"}, "Say what the domain needs"),
 ])
 def test_validation_says_what_is_wrong(body, needle):
     assert any(needle in p for p in rq.validate(body, domain_exists=True))
+
+
+def test_an_enhance_domain_request_on_an_existing_domain_is_valid():
+    assert rq.validate({"request_type": "DOMAIN", "intent": "ENHANCE", "title": "x", "domain_id": "d1", "business_outcome": "Add leases"}, True) == []
 
 
 def test_a_retired_domain_is_refused():
@@ -363,6 +381,38 @@ def test_before_the_migration_the_api_says_to_deploy_it(api):
     db.on("FROM CORE.ONBOARDING_REQUEST WHERE", missing)
     res = client.get("/api/onboarding-requests")
     assert res.status_code == 503 and "V075" in res.json()["detail"]
+
+
+def test_an_enhance_source_needs_a_registered_source(api):
+    client, db, _ = api
+    res = client.post("/api/onboarding-requests", json={**NEW, "intent": "ENHANCE", "sources": [{"source_name": "Yardi"}]})
+    assert res.status_code == 422 and "not registered" in res.json()["detail"]
+    db.on("FROM CORE.ONBOARDING_REQUEST WHERE", [req(intent="ENHANCE")])
+    assert client.post("/api/onboarding-requests", json={**NEW, "intent": "ENHANCE"}).status_code == 200
+    (row,) = db.wrote("INSERT INTO CORE.ONBOARDING_REQUEST (")
+    assert row[-2:] == ("ENHANCE", None)
+
+
+def test_an_enhance_domain_request_records_the_model_it_was_filed_against(api):
+    client, db, _ = api
+    db.on("FROM CORE.ONBOARDING_REQUEST WHERE", [req(request_type="DOMAIN", intent="ENHANCE", base_model_version=1)])
+    res = client.post("/api/onboarding-requests", json={"request_type": "DOMAIN", "intent": "ENHANCE", "title": "Leases",
+                                                        "domain_id": "d1", "business_outcome": "Add the lease entity"})
+    assert res.status_code == 200 and res.json()["intent"] == "ENHANCE" and res.json()["waiting_on"] == "MODEL.EDIT"
+    (row,) = db.wrote("INSERT INTO CORE.ONBOARDING_REQUEST (")
+    assert row[-2:] == ("ENHANCE", 1)
+
+
+def test_before_v077_every_request_reads_as_new(api):
+    client, db, _ = api
+
+    def legacy(sql, params):
+        if "INTENT" in sql:
+            raise RuntimeError("SQL compilation error: invalid identifier 'INTENT'")
+        return [req()]
+    db.on("FROM CORE.ONBOARDING_REQUEST WHERE", legacy)
+    res = client.get("/api/onboarding-requests")
+    assert res.status_code == 200 and res.json()["requests"][0]["intent"] == "NEW"
 
 
 def test_a_data_product_request_gets_a_gold_run_item_so_it_is_not_done_on_filing(api):

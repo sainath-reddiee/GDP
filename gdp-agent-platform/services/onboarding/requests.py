@@ -20,6 +20,8 @@ from typing import Any, Dict, Iterable, List, Optional
 
 STAGES = ["DOMAIN", "ENABLE", "DESIGN", "BUILD", "REVIEW", "DONE"]
 TYPES = ("SOURCE", "DOMAIN", "PRODUCT")
+# a new domain, source or product, or more from one already on the platform (V078)
+INTENTS = ("NEW", "ENHANCE")
 PRIORITIES = ("LOW", "MEDIUM", "HIGH")
 OPEN, DONE, CANCELLED, REJECTED = "OPEN", "DONE", "CANCELLED", "REJECTED"
 
@@ -87,6 +89,18 @@ def phase(part: Dict[str, Any], product: bool = False) -> str:
     if stage == "BUILD":
         return "FLAGGED" if state == "VALIDATION_FAILED" else "STORED" if state in _STORED_STATES else "BUILD"
     return "DESIGN"
+
+
+def intent(request: Dict[str, Any]) -> str:
+    """NEW or ENHANCE; a request filed before V078 is NEW."""
+    return "ENHANCE" if _up(request.get("intent")) == "ENHANCE" else "NEW"
+
+
+def _newer(approved: Any, base: Any) -> bool:
+    """An approved model version newer than the one a request was filed against (any approved one when there was none)."""
+    if approved is None:
+        return False
+    return base is None or int(approved) > int(base)
 
 
 def stage_index(stage: str) -> int:
@@ -230,6 +244,10 @@ def assess(request: Dict[str, Any], items: List[Dict[str, Any]], domain: Optiona
     elif not domain.get("approved_version") and kind != "PRODUCT":
         parts.append({"stage": "DESIGN", "waits": [_wait("MODEL.APPROVE", f"{_DESIGN}: design and approve the {domain.get('domain_name')} model")],
                       "attention": None})
+    elif kind == "DOMAIN" and intent(request) == "ENHANCE" and not _newer(domain.get("approved_version"), request.get("base_model_version")):
+        # extending a domain: its model was approved when the request was filed; the request waits until a newer one is
+        parts.append({"stage": "DESIGN", "waits": [_wait("MODEL.EDIT", f"{_DESIGN}: extend the {domain.get('domain_name')} model and have it approved")],
+                      "attention": None})
     live = [s for s in per_item.values() if s["status"] != "REMOVED"]
     parts.extend(live)
 
@@ -315,7 +333,18 @@ def validate(body: Dict[str, Any], domain_exists: bool) -> List[str]:
     if _up(body.get("priority") or "MEDIUM") not in PRIORITIES:
         problems.append("Priority is LOW, MEDIUM or HIGH.")
     sources = [s for s in body.get("sources") or [] if (s.get("source_system_id") or (s.get("source_name") or "").strip())]
-    if kind == "DOMAIN":
+    enhance = _up(body.get("intent") or "NEW") == "ENHANCE"
+    if _up(body.get("intent") or "NEW") not in INTENTS:
+        problems.append("Choose new or enhance.")
+    if kind == "DOMAIN" and enhance:
+        # extending a domain already on the platform: its model gains what the request names
+        if not body.get("domain_id"):
+            problems.append("Pick the domain to enhance.")
+        elif not domain_exists:
+            problems.append("That domain does not exist or is retired.")
+        if not (body.get("business_outcome") or "").strip():
+            problems.append("Say what the domain needs: the entities, attributes or rules to add.")
+    elif kind == "DOMAIN":
         # a domain request asks the Data OS Administrator to onboard a new domain; one already on the platform needs
         # a source request instead
         if body.get("domain_id"):
@@ -327,7 +356,8 @@ def validate(body: Dict[str, Any], domain_exists: bool) -> List[str]:
     elif not domain_exists:
         problems.append("That domain does not exist or is retired.")
     if kind == "SOURCE" and not sources:
-        problems.append("Name at least one source: a registered one, or the name of one still to onboard.")
+        problems.append("Name at least one source: a registered one, or the name of one still to onboard."
+                        if not enhance else "Pick the source to enhance.")
     names = [_up(s.get("source_system_id") or s.get("source_name")) for s in sources]
     if len(names) != len(set(names)):
         problems.append("Each source can be named once.")

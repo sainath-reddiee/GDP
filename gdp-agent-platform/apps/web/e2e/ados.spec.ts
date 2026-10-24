@@ -5,7 +5,7 @@ import { expect, test } from "@playwright/test";
 const BASE = process.env.AIP_WEB_URL ?? "http://localhost:3000";
 
 const SCREENS: [string, RegExp][] = [
-  ["/os", /Good (morning|afternoon|evening)/],
+  ["/os", /Build workflows/],
   ["/os/intake", /Create an onboarding request/],
   ["/os/requests", /Onboarding requests/],
   ["/os/enable", /Source readiness/],
@@ -39,14 +39,48 @@ test("every /os screen renders in its own shell, with no classic chrome", async 
   }
 });
 
-test("the rail marks the current screen and the persona reorders the queue", async ({ page }) => {
+test("the rail marks the current screen", async ({ page }) => {
   await page.goto("/os/knowledge");
   await expect(page.getByRole("navigation", { name: "Agentic Data OS" }).getByRole("link", { name: "Knowledge" })).toHaveAttribute("aria-current", "page");
   await page.goto("/os");
-  await page.getByLabel("View as persona").first().selectOption("designer");
-  await expect(page.getByText("Mission control / Data Designer")).toBeVisible();
-  await page.getByLabel("View as persona").first().selectOption("forward_lead");
-  await expect(page.getByText("Mission control / Forward Engineering Lead")).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Agentic Data OS" }).getByRole("link", { name: "Home" })).toHaveAttribute("aria-current", "page");
+});
+
+// Home: no hero, no workspace pill; Copilot in the header; workflows filtered in the URL; New or Enhance per kind.
+test("Home lists the build workflows by view, type, intent and name, and starts new or enhanced ones", async ({ page }) => {
+  await page.goto("/os");
+  await expect(page.getByText(/Good (morning|afternoon|evening)/)).toHaveCount(0);
+  await expect(page.getByText(/WORKSPACE$/)).toHaveCount(0);
+  // Copilot opens from the header (no floating launcher)
+  const copilot = page.locator("header [data-copilot-launcher]");
+  await expect(copilot).toHaveCount(1);
+  await copilot.click();
+  await expect(page.getByRole("dialog", { name: "Copilot" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  // views and filters are links that keep each other
+  const views = page.getByTestId("home-views");
+  for (const v of ["Active", "Action required", "All"]) await expect(views.getByRole("link", { name: new RegExp(v) })).toBeVisible();
+  await views.getByRole("link", { name: /^All/ }).click();
+  await page.waitForURL(/view=all/);
+  await page.getByTestId("home-types").getByRole("link", { name: "Source" }).click();
+  await page.waitForURL(/view=all&type=source/);
+  for (const row of await page.getByTestId("workflow-row").all()) await expect(row).toContainText(/(New|Enhance) source/);
+  await page.getByTestId("home-search").fill("zz-no-such-workflow");
+  await page.waitForURL(/q=zz-no-such-workflow/);
+  await expect(page.getByText('No workflow matches "zz-no-such-workflow"')).toBeVisible();
+  // Start a workflow: New and Enhance for a domain and a source open Intake; data products are coming soon
+  await page.goto("/os");
+  await expect(page.getByTestId("start-product-new")).toHaveAttribute("aria-disabled", "true");
+  await expect(page.getByTestId("start-product-enhance")).toHaveAttribute("aria-disabled", "true");
+  await page.getByTestId("start-domain-enhance").click();
+  await page.waitForURL(/\/os\/intake\?type=domain&intent=enhance$/);
+  await expect(page.getByTestId("domain-enhance")).toBeVisible();
+  await expect(page.locator("#domain")).toBeVisible();
+  await expect(page.locator("#rq-domain")).toHaveCount(0);
+  await page.goto("/os");
+  await page.getByTestId("start-source-new").click();
+  await page.waitForURL(/\/os\/intake\?type=source&intent=new$/);
+  await expect(page.getByTestId("intake-intent").getByRole("tab", { name: "New" })).toHaveAttribute("aria-selected", "true");
 });
 
 // Governance: the dev user is a super admin, so it can preview what each role is shown (a cookie the UI honours only
@@ -65,7 +99,7 @@ test("a viewer sees only the screens their role opens, and is turned back from t
   // the package's ten entries, filtered: a viewer reads requests, domains, the audit trail, knowledge and operations
   // the package's entries a viewer may open; Admin, governance and the audit trail are a super admin's alone
   // Build appears for its read-only Run history tab
-  await expect(railLinks(page)).toHaveText(["My Work", "Intake", "Design", "Build", "Knowledge", "Run & DQ", "Help"]);
+  await expect(railLinks(page)).toHaveText(["Home", "Intake", "Design", "Build", "Knowledge", "Run & DQ", "Help"]);
   await expect(railLinks(page).filter({ hasText: "Build" })).toHaveAttribute("href", "/os/history");
   await expect(page.getByLabel("Persona")).toHaveText("Viewer");
   await page.goto("/os/build");
@@ -81,7 +115,7 @@ test("a viewer sees only the screens their role opens, and is turned back from t
 test("a code reviewer gets the build, review and release screens and the developer persona", async ({ page }) => {
   await previewAs(page, "developer");
   await page.goto("/os");
-  await expect(railLinks(page)).toHaveText(["My Work", "Intake", "Design", "Build", "Review", "Release", "Knowledge", "Run & DQ", "Help"]);
+  await expect(railLinks(page)).toHaveText(["Home", "Intake", "Design", "Build", "Review", "Release", "Knowledge", "Run & DQ", "Help"]);
   await expect(page.getByLabel("Persona")).toHaveText("Data Developer");
 });
 
@@ -144,7 +178,7 @@ test("skill versions can be made candidate or promoted in place", async ({ page 
 
 test("the rail is the package's ten entries and every page is a tab of one", async ({ page }) => {
   await page.goto("/os");
-  await expect(railLinks(page)).toHaveText(["My Work", "Intake", "Enable", "Design", "Build", "Review", "Skills", "Release", "Knowledge", "Run & DQ", "Admin", "Help"]);
+  await expect(railLinks(page)).toHaveText(["Home", "Intake", "Enable", "Design", "Build", "Review", "Skills", "Release", "Knowledge", "Run & DQ", "Admin", "Help"]);
   // classic pages open inside the shell, under their entry, as one of its tabs
   await page.goto("/runs");
   await expect(page.getByRole("navigation", { name: "Main" })).toHaveCount(0);

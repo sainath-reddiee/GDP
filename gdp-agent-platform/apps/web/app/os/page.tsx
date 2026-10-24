@@ -1,260 +1,132 @@
-import Link from "next/link";
-import { ArrowRight, BookOpen, Bot, CheckCircle2, Hand, Layers, Rocket, ShieldCheck, Sparkles, TriangleAlert } from "lucide-react";
-import { GATES, stateLabel } from "@/lib/run-labels";
-import type { RunSummary } from "@/lib/types";
-import { loadDomains, loadKnowledgeOverview, loadRequests, loadRuns } from "@/lib/os/data";
-import { RequestQueue } from "@/components/os/request-queue";
-import { currentStep, lifecycleOf, progressOf } from "@/lib/os/lifecycle";
-import { SECTIONS, actMode, canSee, has, screenByKey, type ScreenKey } from "@/lib/os/access";
+import { CheckCircle2, Inbox, SearchX, ShieldCheck } from "lucide-react";
+import { loadRequests } from "@/lib/os/data";
+import { SECTIONS, has, screenByKey, type ScreenKey } from "@/lib/os/access";
 import { osAccess, type OsAccess } from "@/lib/os/session";
-import { Banner, Bar, Card, Empty, Kpi, SourceError, Stepper, Tag, ago, parseTs, pretty, type Tone } from "@/components/os/ui";
-import { Action } from "@/components/os/action";
-import { Btn } from "@/components/os/ui";
+import { getDomainScope } from "@/lib/domain-scope";
+import { intentOf, overdue, type OnboardingRequest, type RequestType } from "@/lib/os/requests";
+import { Banner, Btn, Empty, SourceError } from "@/components/os/ui";
+import { Segmented, StartPanel, WorkflowRow } from "@/components/os/home";
+import { HomeSearch } from "@/components/os/home-search";
 
 export const dynamic = "force-dynamic";
+export const metadata = { title: "Home" };
+
+// Home, where everyone lands whatever their role: every build workflow (an onboarding request) with the step it is at
+// and who it waits on, filtered in the URL (?view=active|action|all&type=&intent=&q=), and the panel that starts a new
+// one or enhances what is already on the platform.
 
 const screenByKeySafe = (key: string) => {
   try { return screenByKey(key as ScreenKey) ?? null; } catch { return null; }
 };
 
-const greeting = () => {
-  const h = new Date().getHours();
-  return h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening";
-};
-const firstName = (user: string | null | undefined) => {
-  if (!user) return "";
-  const w = user.split(/[._@\s-]+/)[0];
-  return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
-};
+const VIEWS = [
+  { key: "active", label: "Active" },
+  { key: "action", label: "Action required" },
+  { key: "all", label: "All" },
+] as const;
+const TYPES: { key: string; label: string; type?: RequestType }[] = [
+  { key: "all", label: "All" }, { key: "domain", label: "Domain", type: "DOMAIN" }, { key: "source", label: "Source", type: "SOURCE" },
+  { key: "product", label: "Product", type: "PRODUCT" },
+];
+const INTENTS = [{ key: "all", label: "Any" }, { key: "new", label: "New" }, { key: "enhance", label: "Enhance" }] as const;
+const PRIORITY = { HIGH: 0, MEDIUM: 1, LOW: 2 } as const;
 
-type QueueRow = { run: RunSummary; reason: string; tone: Tone; action: string; href: string; mine: boolean; rank: number };
+type Params = { view?: string; type?: string; intent?: string; q?: string; denied?: string };
 
-// as on the classic My Work: failures count for 14 days, then they are history, not work
-const RECENT = 14 * 24 * 3600 * 1000;
+/** The workflow's next step is the viewer's (or the previewed role's). */
+const yours = (r: OnboardingRequest, access: OsAccess) => r.status === "OPEN" && r.waits.some((w) => has(access, w.privilege));
 
-/** A run is in this person's queue only when their privileges let them act on it: a gate they decide (or may request a
- *  decision on), or a blocked or running build they operate. Governance leads (APPROVAL.VIEW) see every gate. */
-function queueRow(run: RunSummary, access: OsAccess): QueueRow | null {
-  const s = run.current_state;
-  const mine = access.persona.states.includes(s);
-  const at = (rank: number, reason: string, tone: Tone, action: string, page: "review" | "build") =>
-    canSee(access, page) ? { run, reason, tone, action, href: `/os/${page}?run=${run.run_id}`, mine, rank } : null;
-  const operates = has(access, "RUN.OPERATE");
-  if (s in GATES) {
-    const mode = actMode(access, GATES[s].privilege);
-    if (mode === "none" && !has(access, "APPROVAL.VIEW")) return null;
-    return at(0, `${GATES[s].name} awaits ${GATES[s].role.toLowerCase()}`, "amber", mode === "do" ? "Review" : mode === "request" ? "Request" : "View", "review");
-  }
-  if (!operates) return null;
-  if (s === "VALIDATION_FAILED") return at(1, "Validation failed: below the gate", "red", "Fix", "review");
-  if (mine && run.lifecycle === "RUNNING") return at(2, stateLabel(s), "blue", "Open", "build");
-  if (s === "FAILED" && Date.now() - parseTs(run.updated_at ?? run.created_at) < RECENT) return at(3, "Run failed", "red", "Investigate", "build");
-  return null;
+/** Theirs first, then blocked or late, then by priority, then the longest waiting; finished ones last, newest first. */
+function order(rows: OnboardingRequest[], access: OsAccess) {
+  const waited = (r: OnboardingRequest) => r.stage_changed_at ?? r.updated_at ?? r.created_at;
+  return [...rows].sort((a, b) =>
+    Number(b.status === "OPEN") - Number(a.status === "OPEN")
+    || Number(yours(b, access)) - Number(yours(a, access))
+    || Number(!!b.attention || overdue(b)) - Number(!!a.attention || overdue(a))
+    || (PRIORITY[a.priority] ?? 1) - (PRIORITY[b.priority] ?? 1)
+    || (a.status === "OPEN" ? waited(a).localeCompare(waited(b)) : (b.closed_at ?? b.updated_at).localeCompare(a.closed_at ?? a.updated_at)));
 }
 
-export default async function MissionControl({ searchParams }: { searchParams: { denied?: string } }) {
+export default async function Home({ searchParams }: { searchParams: Params }) {
   const access = await osAccess();
-  const persona = access.persona;
   const denied = searchParams.denied ? screenByKeySafe(searchParams.denied) : null;
   // the rail entry and its tab ("Build: Workbench"), or the entry alone when they share a name
   const deniedSection = denied ? SECTIONS.find((x) => x.key === denied.section)?.label : null;
   const deniedName = denied ? (deniedSection && deniedSection !== denied.label ? `${deniedSection}: ${denied.label}` : denied.label) : "";
-  const seeHref = (key: ScreenKey, href: string) => (canSee(access, key) ? href : undefined);
-  // where a run opens for this person: the workbench, else the gate, else nowhere (runs are not part of their role)
-  const runScreen = canSee(access, "build") ? "build" : canSee(access, "review") ? "review" : null;
-  const [runs, domains, knowledge, waiting] = await Promise.all([loadRuns("sort=updated&limit=150"), loadDomains(), loadKnowledgeOverview(),
-    loadRequests("waiting", "OPEN")]);
-  // the API answers "waiting" for the signed-in person; the screen keeps only what the grants on show cover (a
-  // preview of another role shows that role's queue)
-  const mineNow = waiting.data.requests.filter((r) => r.waits.some((w) => has(access, w.privilege)));
-  const live = runs.data.runs.filter((r) => !r.is_archived);
-  const queue = live.map((r) => queueRow(r, access)).filter((x): x is QueueRow => !!x)
-    .sort((a, b) => Number(b.mine) - Number(a.mine) || a.rank - b.rank || (b.run.updated_at ?? b.run.created_at).localeCompare(a.run.updated_at ?? a.run.created_at));
-  const atGate = live.filter((r) => r.current_state in GATES);
-  const autonomous = live.filter((r) => r.lifecycle === "RUNNING" && !(r.current_state in GATES));
-  const releaseReady = live.filter((r) => ["DBT_REVIEW", "DBT_APPROVED"].includes(r.current_state));
-  const completed = live.filter((r) => r.current_state === "COMPLETED");
-  const recent = live.filter((r) => r.lifecycle !== "DRAFT").slice(0, 3);
-  const k = knowledge.data;
-  const gateCounts = Object.entries(GATES).map(([state, g]) => ({ state, g, n: atGate.filter((r) => r.current_state === state).length }));
-  const estate = domains.data.filter((d) => d.knowledge_items > 0 || d.target_tables > 0);
+
+  const list = await loadRequests("all", "ALL");
+  // the header's domain scope (a domain name) narrows the list, as it does the classic pages
+  const scope = getDomainScope().toUpperCase();
+  const scoped = list.data.requests.filter((r) => !scope || (r.domain_name ?? r.proposed_domain ?? "").toUpperCase() === scope);
+  const active = scoped.filter((r) => r.status === "OPEN");
+  const action = active.filter((r) => yours(r, access));
+  const views = { active, action, all: scoped };
+
+  const view = VIEWS.find((v) => v.key === searchParams.view)?.key ?? (action.length ? "action" : "active");
+  const type = TYPES.find((t) => t.key === searchParams.type) ?? TYPES[0];
+  const intent = INTENTS.find((i) => i.key === searchParams.intent) ?? INTENTS[0];
+  const q = (searchParams.q ?? "").trim().toLowerCase();
+  const rows = order(views[view].filter((r) =>
+    (!type.type || r.request_type === type.type)
+    && (intent.key === "all" || intentOf(r) === intent.key.toUpperCase())
+    && (!q || r.title.toLowerCase().includes(q))), access);
+
+  const href = (patch: Partial<Params>) => {
+    const next = { view, type: type.key, intent: intent.key, q: searchParams.q ?? "", ...patch };
+    // the view always (its default depends on the queue); a filter only when it narrows
+    const p = new URLSearchParams(Object.entries(next).filter(([k, v]) => v && (k === "view" || v !== "all")) as [string, string][]);
+    return `/os?${p}`;
+  };
+  const filtered = type.key !== "all" || intent.key !== "all" || !!q;
 
   return (
-    <>
-      <section className="os-hero os-rise mb-4 px-7 py-6 sm:px-8">
-        <span className="shape1" /><span className="shape2" /><span className="shape3" />
-        <div className="relative flex flex-wrap items-end justify-between gap-4">
-          <div className="max-w-2xl">
-            <div className="mb-2 text-[10.5px] font-extrabold uppercase tracking-[0.12em] text-[#bfeeda]">Mission control / {persona.label}</div>
-            <h1 className="text-[26px] font-extrabold tracking-[-0.03em]">{greeting()}{access.user ? `, ${firstName(access.user)}` : ""}.</h1>
-            <p className="mt-2 text-[13px] leading-relaxed text-[#d8f1e7]">
-              {atGate.length
-                ? <>{atGate.length} decision{atGate.length === 1 ? "" : "s"} wait on a person across {new Set(atGate.map((r) => r.domain_name)).size} domain{new Set(atGate.map((r) => r.domain_name)).size === 1 ? "" : "s"}; </>
-                : <>No gate waits on a person right now; </>}
-              {autonomous.length} workflow{autonomous.length === 1 ? " is" : "s are"} moving forward on {autonomous.length === 1 ? "its" : "their"} own. Focus on the decisions that need human judgment.
-            </p>
-          </div>
-          <div className="flex gap-2">
-            {canSee(access, "intake") && actMode(access, "RUN.CREATE") !== "none" &&
-              <Link href="/os/intake" className="os-btn border-white/30 bg-white/10 text-white hover:bg-white/20"><Rocket className="h-3.5 w-3.5" /> New onboarding</Link>}
-            {queue[0] && <Link href={queue[0].href} className="os-btn border-white bg-white text-[#004c3b] hover:bg-[#eafaf2]">Resume {queue[0].run.domain_name ?? "latest"} <ArrowRight className="h-3.5 w-3.5" /></Link>}
-          </div>
-        </div>
-      </section>
-
+    <div data-testid="home">
       {denied && (
         <Banner tone="amber" icon={ShieldCheck}>
           <b>{deniedName} is not part of your role.</b> It is open to {denied.why}{denied.view ? ` (any of ${denied.view.join(", ")})` : ""}. Ask a governance admin if you need it.
         </Banner>
       )}
-      <SourceError what="Workflow runs" error={runs.error} />
+      <SourceError what="Workflows" error={list.error} />
 
-      <div className="mb-4 grid grid-cols-2 gap-3 xl:grid-cols-4">
-        <Kpi label="Ready for decision" value={atGate.length} hint={`${queue.length} in your queue`} icon={Hand} tone="amber" href="#queue" />
-        <Kpi label="Autonomous workflows" value={autonomous.length} hint="progressing without intervention" icon={Bot} tone="blue" href={seeHref("build", "/os/build")} />
-        <Kpi label="Ready to release" value={releaseReady.length} hint={`${completed.length} completed end to end`} icon={Rocket} tone="green" href={seeHref("release", "/os/release")} />
-        <Kpi label="Knowledge contributions" value={k?.totals.learned_7d ?? "–"} hint={k ? `learned in 7 days; ${k.totals.inbox} to curate` : "Enterprise Memory unavailable"} icon={Sparkles} tone="purple" href="/os/knowledge" />
-      </div>
-
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
-        <div className="flex min-w-0 flex-col gap-4">
-          {(mineNow.length > 0 || waiting.error) && (
-            <RequestQueue title="Onboarding requests waiting on you" subtitle="Requests whose next step is your role's: a source to register, a run to start, a gate to decide"
-                          requests={mineNow} access={access} error={waiting.error} empty="Nothing waits on you" />
-          )}
-          <Card id="queue" title="My action queue" subtitle={`Decisions and blocked work, ${persona.short.toLowerCase()} items first`}
-                action={<Action access={access} id="viewApprovals" href="/os/review/approvals" />} pad={false}>
-            {queue.length ? (
-              <div className="overflow-x-auto">
-                <table className="os-table">
-                  <thead><tr><th>Workflow</th><th>Current step</th><th>Status</th><th /></tr></thead>
-                  <tbody>
-                    {queue.slice(0, 8).map((q) => {
-                      const step = currentStep(lifecycleOf(q.run));
-                      const failed = q.run.current_state === "FAILED";
-                      return (
-                        <tr key={q.run.run_id}>
-                          <td className="max-w-[280px]">
-                            <Link href={q.href} className="block truncate font-bold hover:underline" title={q.run.run_name}>{q.run.run_name}</Link>
-                            <div className="os-faint truncate text-[11px]">{q.run.domain_name ?? "No domain"} · {q.run.source_system_name ?? "No source"} · {ago(q.run.updated_at ?? q.run.created_at)}</div>
-                          </td>
-                          <td className="max-w-[240px]">
-                            <div className="font-semibold">{failed ? "Stopped" : step.label}</div>
-                            <div className="os-faint truncate text-[11px]" title={q.reason}>{failed ? q.reason : `${step.owner} · ${q.reason}`}</div>
-                          </td>
-                          <td className="whitespace-nowrap"><Tag tone={q.tone}>{stateLabel(q.run.current_state)}</Tag>{q.mine && <Tag tone="green" className="ml-1">Your role</Tag>}</td>
-                          <td className="text-right"><Btn href={q.href} variant={q.tone === "red" ? "red" : q.tone === "amber" ? "warn" : "default"}>{q.action}</Btn></td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            ) : (
-              <div className="p-5"><Empty icon={CheckCircle2} title="Nothing waits on you">
-                {persona.id === "viewer" ? "Your role can read the platform but not decide or operate, so no work is routed to you." : "No run your role acts on is at a gate, failed or in your steps right now."}
-              </Empty></div>
-            )}
-          </Card>
-
-          {runScreen && (
-          <Card title="Recently active workflows" subtitle="The latest runs, with where each one is in the lifecycle">
-            {recent.length ? (
-              <div className="grid gap-3 lg:grid-cols-3">
-                {recent.map((r) => {
-                  const steps = lifecycleOf(r);
-                  const step = currentStep(steps);
-                  return (
-                    <Link key={r.run_id} href={`/os/${runScreen}?run=${r.run_id}`} className="os-card block p-4 transition hover:-translate-y-0.5 hover:shadow-[var(--os-shadow-pop)]">
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0">
-                          <div className="truncate text-[13px] font-extrabold" title={r.run_name}>{r.run_name}</div>
-                          <div className="os-faint truncate text-[11px]">{r.domain_name ?? "No domain"} · {r.source_system_name ?? "no source"}</div>
-                        </div>
-                        <Tag tone={step.status === "failed" ? "red" : step.status === "waiting" ? "amber" : step.status === "done" ? "green" : "blue"}>{step.label}</Tag>
-                      </div>
-                      <div className="my-3"><Stepper steps={steps} compact /></div>
-                      <Bar value={progressOf(r) * 100} tone={step.status === "failed" ? "red" : step.status === "waiting" ? "amber" : "green"} />
-                      <div className="os-faint mt-2 text-[11px]">{stateLabel(r.current_state)} · {ago(r.updated_at ?? r.created_at)}</div>
-                    </Link>
-                  );
-                })}
-              </div>
-            ) : <Empty title="No runs yet">Start an onboarding to see it here.</Empty>}
-          </Card>
-          )}
-        </div>
-
-        <div className="flex min-w-0 flex-col gap-4">
-          <Card title="Autonomy center" subtitle="What the agents do alone, and where policy hands to a person"
-                action={runScreen ? <Btn href={`/os/${runScreen}`}>Open workflows</Btn> : undefined}>
-            <div className="os-divide">
-              <div className="flex items-center justify-between gap-3 pb-3">
-                <div><div className="text-[12.5px] font-bold">Auto-advancing</div><div className="os-faint text-[11px]">Profiling, generation and validation run as tools and agents</div></div>
-                <Tag tone="blue">{autonomous.length} runs</Tag>
-              </div>
-              {gateCounts.map(({ state, g, n }) => (
-                <div key={state} className="flex items-center justify-between gap-3 py-3">
-                  <div className="min-w-0"><div className="text-[12.5px] font-bold">{g.name}</div><div className="os-faint text-[11px]">Human gate · {g.role}</div></div>
-                  <Tag tone={n ? "amber" : "neutral"}>{n ? `${n} waiting` : "Clear"}</Tag>
-                </div>
-              ))}
-              <div className="pt-3 text-[11.5px] leading-relaxed os-muted">
-                <ShieldCheck className="mr-1 inline h-3.5 w-3.5 text-[var(--os-emerald)]" />
-                A run reaches code review only when every validation check passes with no errors. Code is never merged or deployed automatically.
-              </div>
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
+        <section className="min-w-0" aria-labelledby="workflows-title">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+            <div className="flex min-w-0 items-baseline gap-2">
+              <h1 id="workflows-title" className="text-[20px] font-extrabold tracking-[-0.03em]">Build workflows</h1>
+              {scope && <span className="os-faint truncate text-[12px]">in {getDomainScope()}</span>}
             </div>
-          </Card>
+            <HomeSearch />
+          </div>
+          <div className="mb-4 flex flex-wrap items-center gap-2">
+            <Segmented label="Workflows to show" testId="home-views" options={VIEWS.map((v) => ({
+              key: v.key, label: v.label, href: href({ view: v.key }), active: v.key === view, count: views[v.key].length,
+              dot: v.key === "action" && action.length > 0,
+            }))} />
+            <span className="mx-1 hidden h-5 w-px bg-[var(--os-line)] sm:block" aria-hidden />
+            <Segmented label="Type" testId="home-types" options={TYPES.map((t) => ({ key: t.key, label: t.label, href: href({ type: t.key }), active: t.key === type.key }))} />
+            <Segmented label="New or enhance" testId="home-intents" options={INTENTS.map((i) => ({ key: i.key, label: i.label, href: href({ intent: i.key }), active: i.key === intent.key }))} />
+          </div>
 
-          <Card title="Knowledge pulse" subtitle="Enterprise Memory learned from runs, reviews and operations" action={<Btn href="/os/knowledge">Open knowledge</Btn>}>
-            <SourceError what="Enterprise Memory" error={knowledge.error} />
-            {k ? (
-              <>
-                <div className="mb-3 grid grid-cols-3 gap-2 text-center">
-                  {[["Active", k.totals.active], ["Learned 7d", k.totals.learned_7d], ["To curate", k.totals.inbox]].map(([l, v]) => (
-                    <div key={l} className="os-subtle rounded-lg py-2"><div className="text-[18px] font-extrabold tabular-nums">{v}</div><div className="os-faint text-[10.5px]">{l}</div></div>
-                  ))}
-                </div>
-                <div className="os-muted mb-1.5 text-[10.5px] font-bold uppercase tracking-wide">Most used by runs (30 days)</div>
-                <div className="os-divide">
-                  {k.top_used.slice(0, 4).map((t) => (
-                    <Link key={t.knowledge_id} href={`/os/knowledge?id=${t.knowledge_id}`} className="flex items-center justify-between gap-2 py-2 hover:underline">
-                      <span className="min-w-0"><span className="block truncate text-[12px] font-semibold">{t.title}</span>
-                        <span className="os-faint text-[10.5px]">{t.domain_name} · {pretty(t.knowledge_type)}</span></span>
-                      <Tag tone="green">{t.runs} runs</Tag>
-                    </Link>
-                  ))}
-                </div>
-              </>
-            ) : <Empty icon={BookOpen} title="Enterprise Memory unavailable" />}
-          </Card>
-        </div>
+          {rows.length ? (
+            <div className="flex flex-col gap-3">
+              {rows.map((r) => <WorkflowRow key={r.request_id} r={r} access={access} />)}
+            </div>
+          ) : filtered ? (
+            <Empty icon={SearchX} title={q ? `No workflow matches "${searchParams.q?.trim()}"` : "No workflow matches these filters"}
+                   action={<Btn href={href({ type: "all", intent: "all", q: "" })}>Clear filters</Btn>} />
+          ) : view === "action" ? (
+            <Empty icon={CheckCircle2} title="Nothing waits on you">When a workflow reaches a step your role owns, it shows here with what to do.</Empty>
+          ) : (
+            <Empty icon={Inbox} title={view === "active" ? "No active workflows" : "No workflows yet"}>
+              Start one from <b>Start a workflow</b>: a new domain, source or data product, or more from one already on the platform.
+            </Empty>
+          )}
+        </section>
+
+        <aside className="order-first xl:order-none">
+          <div className="xl:sticky xl:top-[76px]"><StartPanel access={access} /></div>
+        </aside>
       </div>
-
-      <Card className="mt-4" title="Onboarded domains" subtitle="The estate the agents build on: each domain's model, memory and runs" action={<Btn href="/os/knowledge?view=domains">Domains</Btn>}>
-        <SourceError what="Domains" error={domains.error} />
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          {estate.map((d) => {
-            const dr = live.filter((r) => r.domain_name === d.domain_name);
-            return (
-              <Link key={d.domain_id} href={canSee(access, "design") ? `/os/design?domain=${d.domain_id}` : `/os/knowledge?domain=${d.domain_id}`} className="os-card block p-4 transition hover:-translate-y-0.5 hover:shadow-[var(--os-shadow-pop)]">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2 text-[14px] font-extrabold"><Layers className="h-4 w-4 text-[var(--os-emerald)]" />{d.domain_name}</div>
-                  {d.mdm_role && <Tag tone={d.mdm_role === "MASTERED" ? "green" : "blue"}>{pretty(d.mdm_role)}</Tag>}
-                </div>
-                <p className="os-muted mt-1.5 line-clamp-2 min-h-[34px] text-[11.5px] leading-snug">{d.description}</p>
-                <div className="mt-3 grid grid-cols-3 gap-2 text-center">
-                  <div><div className="text-[16px] font-extrabold tabular-nums">{d.target_tables}</div><div className="os-faint text-[10px]">tables</div></div>
-                  <div><div className="text-[16px] font-extrabold tabular-nums">{d.knowledge_items}</div><div className="os-faint text-[10px]">memory</div></div>
-                  <div><div className="text-[16px] font-extrabold tabular-nums">{dr.length}</div><div className="os-faint text-[10px]">runs</div></div>
-                </div>
-                {dr.some((r) => r.current_state === "FAILED" || r.current_state === "VALIDATION_FAILED") &&
-                  <div className="mt-2 flex items-center gap-1 text-[11px] text-[var(--os-red-ink)]"><TriangleAlert className="h-3 w-3" /> has failed runs</div>}
-              </Link>
-            );
-          })}
-        </div>
-      </Card>
-    </>
+    </div>
   );
 }

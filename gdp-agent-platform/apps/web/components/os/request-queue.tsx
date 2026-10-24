@@ -5,7 +5,7 @@ import { PRIORITY_TONE, overdue, phaseOf, type OnboardingRequest } from "@/lib/o
 import { Btn, Card, Empty, SourceError, Tag, ago, pretty } from "./ui";
 import { RequestDots } from "./request-dots";
 
-/** Onboarding requests with the part each one waits on, for the screens where that role works (My Work for everyone,
+/** Onboarding requests with the part each one waits on, for the screens where that role works (Home for everyone,
  *  Enable for the administrator, Design for the designer). Only waits the viewer's privileges cover are named "yours". */
 export function RequestQueue({ title, subtitle, requests, access, error, empty, max = 6 }: {
   title: string; subtitle: string; requests: OnboardingRequest[]; access: Grants; error?: string | null; empty: string; max?: number;

@@ -85,7 +85,7 @@ export function DemoPaths({ runs, requests }: { runs: RunSummary[]; requests: On
       <div className="grid gap-0 lg:grid-cols-2" data-testid="demo-paths">
         <div className="border-b border-[var(--os-line)] p-4 lg:border-b-0 lg:border-r">
           <div className="mb-2 flex items-center gap-2 text-[13px] font-extrabold"><PlayCircle className="h-4 w-4 text-[var(--os-emerald)]" />1 · Forward Engineering Lead, happy path</div>
-          {run ? <Steps steps={happy} /> : <p className="os-faint px-2 text-[11.5px]">No run has passed validation yet. Once one does, this path walks it from My Work to the pull request.</p>}
+          {run ? <Steps steps={happy} /> : <p className="os-faint px-2 text-[11.5px]">No run has passed validation yet. Once one does, this path walks it from Home to the pull request.</p>}
         </div>
         <div className="p-4">
           <div className="mb-2 flex items-center gap-2 text-[13px] font-extrabold"><PlayCircle className="h-4 w-4 text-[var(--os-emerald)]" />2 · Onboarding with people in the loop</div>
