@@ -20,6 +20,10 @@ Fully automated browser tests for `apps/web`, covering:
 | `test_journey_skills_copilot.py` | Skill scout, proposals, skill detail/edit/compare, skill builder (all modes), copilot compose/attach/Jira/conversation/publish |
 | `test_journey_ops_admin_tools.py` | Tickets views/filters/sprints, QA suites/assistant, DQ store/suite, people personas/preview, every admin section, lineage trace/direction, code search |
 | `test_e2e_business_flows.py` | Chained use cases: persona tours, request → onboarding handoff → history, Silver pipeline happy path, knowledge contribute → find → verify → retire, incident → known fix |
+| `test_domain_detail.py` | Domain page: 9 sections × 3 layers, description, people, rules, versions, documents (upload/review/re-read/unlink), references, accuracy, MDM, playbook, examples, lineage map, learning, contract → AI pack draft, pack JSON |
+| `test_design_stores.py` | Modeling store tabs, domain models (fork), model workbench (all tabs, import modes, exports, entities, relationships, validate, draft → save → submit → withdraw, comments), table models, dbt viewer, Data Mapping (filters, tabs, chips, line drawer, staging, submit, joins, versions, publish), profiling (browser, drawer, annotations, schedules), source store switches |
+| `test_runs_quality_boards.py` | Run audit, Data Quality scan, QA inner tabs/rename/Jira bug, tickets workspace (Jira inbox, triage), DQ run checks (filters, coverage, approve/reject), DAG (tasks, settings, logs, poll), quality center, enable/ready/history/design boards, My Work tiles & actions |
+| `test_knowledge_drawer_admin.py` | Knowledge drawer tabs/edit/verify/diff/rollback/close, review inbox approve/reject/diff/replay/view-in-document, admin models (search, test, stage select save bar), integrations (GitHub, repo settings, Jira, Airflow, Datadog, incidents, cases) |
 
 Destructive buttons (delete/approve/publish/save/run...) are only clicked by the crawler when `AIP_UI_ALLOW_WRITES=1`.
 API tests live in `tests/api` (see its README).
