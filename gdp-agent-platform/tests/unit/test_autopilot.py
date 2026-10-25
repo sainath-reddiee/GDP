@@ -72,6 +72,8 @@ def test_autonomous_decides_every_table_gate(state, facts, expected):
 
 def test_autonomous_still_stops_where_only_a_person_can_act():
     assert next_action("VALIDATION_FAILED", AUTO)["kind"] == "BLOCKED"
+    assert next_action("VALIDATION_FAILED", {**AUTO, "resume": True})["action"] == "generate_dbt"
+    assert next_action("VALIDATION_FAILED", {**SILVER, "resume": True})["action"] == "validate"
     assert next_action("DOMAIN_IDENTIFIED", {**AUTO, "has_target": False})["where"] == "target model"
     gold = {"pipeline": "GOLD", "has_target": False, "autonomous": True, "gold_model": {"open": True}}
     assert next_action("DOMAIN_IDENTIFIED", gold)["where"] == "gold model"

@@ -27,6 +27,7 @@ export type RunInfo = {
   archived_at?: string | null;
   archived_by?: string | null;
   pipeline?: "SILVER" | "GOLD" | null;
+  parent_run_id?: string | null;
 };
 
 export type Lifecycle = "DRAFT" | "RUNNING" | "COMPLETED" | "FAILED" | "ARCHIVED";
@@ -34,6 +35,16 @@ export type Lifecycle = "DRAFT" | "RUNNING" | "COMPLETED" | "FAILED" | "ARCHIVED
 export type RunStatusFilter = "all" | "active" | "running" | "draft" | "completed" | "failed" | "archived";
 
 export type StorageType = "IN_PLACE" | "MANAGED" | "ICEBERG";
+
+export type TableRunSummary = {
+  run_id: string;
+  run_name: string;
+  model_entity?: string | null;
+  target_model?: string | null;
+  current_state: string;
+  current_stage?: string | null;
+  status?: string;
+};
 
 export type RunState = {
   run_id: string;
@@ -50,10 +61,13 @@ export type RunState = {
   run: RunInfo;
   /** Parallel lanes after the STTM, from the work actually done (absent before the STTM is approved). */
   lanes?: RunLanes;
+  parent_run_id?: string | null;
+  table_runs?: TableRunSummary[];
 };
 
 export type RunSummary = {
   run_id: string;
+  parent_run_id?: string | null;
   pipeline?: "SILVER" | "GOLD" | null;
   run_name: string;
   current_state: string;

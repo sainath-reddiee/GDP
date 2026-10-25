@@ -7,14 +7,15 @@ import {
   artifactGroups, gatePassed, gateText, defaultRun, loadBoardRuns, loadRunBundle, loadRuns, scoreOf, tableOf,
 } from "@/lib/os/data";
 import { guard, type OsAccess } from "@/lib/os/session";
-import { boardView, pastStage, runNeedsMe, stageOfRun } from "@/lib/os/work";
-import { BoardList, BoardTabs, RunCard } from "@/components/os/stage-board";
+import { boardView, leafRuns, pastStage, resolveBoardRun, runNeedsMe, stageOfRun } from "@/lib/os/work";
+import { BoardList, BoardTabs, StageFilterBar, WorkflowGroupCard, WorkflowJourneyBar, groupRunsByWorkflow } from "@/components/os/stage-board";
 import { HomeSearch } from "@/components/os/home-search";
-import { BuildEndToEnd } from "@/components/os/build-run";
+import { BuildAllReady, BuildEndToEnd } from "@/components/os/build-run";
 import { actMode } from "@/lib/os/access";
 import { Action } from "@/components/os/action";
 import { currentStep, gateHref, lifecycleOfRun, osHref } from "@/lib/os/lifecycle";
 import { ActivityRow, Banner, Bar, Btn, Card, Empty, Field, PageHeader, SourceError, Stepper, Tag, ago, pretty, type Tone } from "@/components/os/ui";
+import { cn } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Build" };
@@ -29,7 +30,7 @@ const WORKING = new Set(["PROFILING_RUNNING", "DBT_GENERATING", "VALIDATION_RUNN
 const DONE: { tone: Tone; label: string } = { tone: "green", label: "Completed" };
 const FAIL: { tone: Tone; label: string } = { tone: "red", label: "Failed" };
 
-type Params = { view?: string; run?: string; q?: string };
+type Params = { view?: string; run?: string; q?: string; domain?: string; status?: string };
 
 /** Build: the runs being generated and validated, by Selected, Action required, Active and Completed. A selected run
  *  opens the workbench: its eight steps, the agents, the artifacts and the gates. */
@@ -37,18 +38,49 @@ export default async function BuildBoard({ searchParams }: { searchParams: Param
   const access = await guard("build");
   const runs = await loadBoardRuns();
   const q = (searchParams.q ?? "").trim().toLowerCase();
+  const domainFilter = searchParams.domain ?? "all";
+  const statusFilter = searchParams.status ?? "all";
   const live = runs.data.runs.filter((r) => !r.is_archived && r.current_state !== "CANCELLED");
-  const listed = live.filter((r) => !q || r.run_name.toLowerCase().includes(q) || (r.domain_name ?? "").toLowerCase().includes(q));
+  const leaves = leafRuns(live);
+  const searched = leaves.filter((r) => !q || r.run_name.toLowerCase().includes(q) || (r.domain_name ?? "").toLowerCase().includes(q) || (r.source_system_name ?? "").toLowerCase().includes(q));
+  const byDomain = searched.filter((r) => domainFilter === "all" || (r.domain_name ?? "No domain") === domainFilter);
+  const matchesStatus = (r: (typeof leaves)[number]) => {
+    if (statusFilter === "ready") return ["STTM_APPROVED", "SODA_PENDING", "SODA_REVIEW", "SODA_APPROVED", "DBT_PENDING"].includes(r.current_state);
+    if (statusFilter === "flagged") return r.current_state === "VALIDATION_FAILED" || r.current_state === "FAILED";
+    if (statusFilter === "review") return r.current_state === "DBT_REVIEW" || r.current_state === "VALIDATION_PASSED";
+    return true;
+  };
+  const listed = byDomain.filter(matchesStatus);
   const active = listed.filter((r) => stageOfRun(r) === "build");
   const lists = { action: active.filter((r) => runNeedsMe(r, access)), active, completed: listed.filter((r) => pastStage(r, "build")) };
-  // a run named in the URL is selected, any run (older links name runs at every step); Selected alone opens the latest build
-  // Selected with nothing selected opens the first build waiting on the viewer, else the first building, else the latest
   const fallback = lists.action[0] ?? lists.active[0]
-    ?? defaultRun(live, ["DBT_REVIEW", "VALIDATION_FAILED", "VALIDATION_PASSED", "DBT_GENERATING", "DBT_PENDING", "DBT_APPROVED"]) ?? null;
-  const run = live.find((r) => r.run_id === searchParams.run) ?? (searchParams.view === "selected" ? fallback : null) ?? null;
+    ?? defaultRun(leaves, ["DBT_REVIEW", "VALIDATION_FAILED", "VALIDATION_PASSED", "DBT_GENERATING", "DBT_PENDING", "DBT_APPROVED"]) ?? null;
+  const run = resolveBoardRun(live, searchParams.run, access, "build") ?? (searchParams.view === "selected" ? fallback : null) ?? null;
   const view = boardView(searchParams.view ?? (searchParams.run && run ? "selected" : undefined), !!run, lists.action.length);
   const rows = view === "selected" ? [] : lists[view];
+  const grouped = groupRunsByWorkflow(rows, live, (r) => runNeedsMe(r, access));
   const select = (id: string) => `/os/build?${new URLSearchParams({ view: "selected", run: id })}`;
+
+  const domainCounts = new Map<string, number>();
+  for (const r of searched) {
+    const d = r.domain_name ?? "No domain";
+    domainCounts.set(d, (domainCounts.get(d) ?? 0) + 1);
+  }
+  const domainOptions = [
+    { key: "all", label: "All domains", count: searched.length },
+    ...[...domainCounts.entries()].sort((a, b) => b[1] - a[1]).map(([k, count]) => ({ key: k, label: k, count })),
+  ];
+  const statusOptions = [
+    { key: "all", label: "All states", count: byDomain.length },
+    { key: "ready", label: "Ready to build", count: byDomain.filter((r) => ["STTM_APPROVED", "SODA_PENDING", "SODA_REVIEW", "SODA_APPROVED", "DBT_PENDING"].includes(r.current_state)).length },
+    { key: "flagged", label: "Flagged", count: byDomain.filter((r) => r.current_state === "VALIDATION_FAILED" || r.current_state === "FAILED").length, dot: byDomain.some((r) => r.current_state === "VALIDATION_FAILED" || r.current_state === "FAILED") },
+    { key: "review", label: "Validated", count: byDomain.filter((r) => r.current_state === "DBT_REVIEW" || r.current_state === "VALIDATION_PASSED").length },
+  ];
+  const filterUrl = (patch: Partial<Params>) => {
+    const next = { view: view === "selected" ? "active" : view, q: searchParams.q ?? "", domain: domainFilter, status: statusFilter, ...patch };
+    const p = new URLSearchParams(Object.entries(next).filter(([k, v]) => v && (k === "view" || v !== "all")) as [string, string][]);
+    return `/os/build?${p}`;
+  };
 
   return (
     <div data-testid="build-board">
@@ -57,19 +89,32 @@ export default async function BuildBoard({ searchParams }: { searchParams: Param
           <div className="os-eyebrow">Build</div>
           <h1 className="text-[22px] font-extrabold tracking-[-0.03em]">Generate, validate and hand off</h1>
         </div>
-        <HomeSearch placeholder="Search runs by name or domain" />
+        <HomeSearch placeholder="Search workflows, tables or domains" />
       </div>
-      <div className="mb-4">
+      <div className="mb-4 flex flex-wrap items-center gap-2">
         <BoardTabs base="/os/build" view={view} selection={run ? ["run", run.run_id] : null} fallback={fallback ? ["run", fallback.run_id] : null}
                    counts={{ action: lists.action.length, active: lists.active.length, completed: lists.completed.length }} />
+        {view !== "selected" && (
+          <>
+            <span className="mx-1 hidden h-5 w-px bg-[var(--os-line)] sm:block" aria-hidden />
+            <StageFilterBar
+              domains={domainOptions}
+              activeDomain={domainFilter}
+              domainHref={(d) => filterUrl({ domain: d })}
+              statuses={statusOptions}
+              activeStatus={statusFilter}
+              statusHref={(s) => filterUrl({ status: s })}
+            />
+          </>
+        )}
       </div>
       <SourceError what="Workflow runs" error={runs.error} />
       {view === "selected" && run ? <Workbench runId={run.run_id} access={access} /> : (
-        <BoardList count={rows.length} empty={view === "action"
+        <BoardList count={grouped.length} empty={view === "action"
           ? { title: "No build waits on you", body: <>Runs whose design is done are on <Link className="underline" href="/os/build/ready">Ready to build</Link>.</> }
           : view === "active" ? { title: "No run is building", body: <>See <Link className="underline" href="/os/build/ready">Ready to build</Link>.</> }
           : { title: "No run has finished its build yet" }}>
-          {rows.map((r) => <RunCard key={r.run_id} run={r} href={select(r.run_id)} mine={runNeedsMe(r, access)} />)}
+          {grouped.map((g) => <WorkflowGroupCard key={g.key} group={g} selectHref={select} currentRunId={run?.run_id} />)}
         </BoardList>
       )}
     </div>
@@ -79,7 +124,17 @@ export default async function BuildBoard({ searchParams }: { searchParams: Param
 /** The selected run: today's workbench. */
 async function Workbench({ runId, access }: { runId: string; access: OsAccess }) {
   const persona = access.persona;
-  const bundle = await loadRunBundle(runId);
+  let bundle = await loadRunBundle(runId);
+  if (bundle.data?.run.table_runs?.length && !bundle.data.run.run.parent_run_id) {
+    const kids = bundle.data.run.table_runs;
+    const pick = kids.find((t) => ["STTM_APPROVED", "SODA_PENDING", "SODA_REVIEW", "SODA_APPROVED", "DBT_PENDING", "VALIDATION_PENDING", "VALIDATION_FAILED"].includes(t.current_state))
+      ?? kids.find((t) => t.current_state !== "COMPLETED" && t.current_state !== "DBT_APPROVED")
+      ?? kids[0];
+    if (pick && pick.run_id !== runId) {
+      runId = pick.run_id;
+      bundle = await loadRunBundle(runId);
+    }
+  }
   const b = bundle.data;
   if (!b) {
     return (
@@ -90,6 +145,8 @@ async function Workbench({ runId, access }: { runId: string; access: OsAccess })
     );
   }
   const { run } = b;
+  const tableRuns = run.table_runs ?? [];
+  const readyTableRuns = tableRuns.filter((t) => ["STTM_APPROVED", "SODA_PENDING", "SODA_REVIEW", "SODA_APPROVED", "DBT_PENDING"].includes(t.current_state));
   const pipeline = pipelineOf(run.run.pipeline);
   const score = scoreOf(b.checks);
   // the code standards agent's areas in the latest validation (STANDARDS_<AREA>, or STANDARDS when it could not run)
@@ -133,9 +190,14 @@ async function Workbench({ runId, access }: { runId: string; access: OsAccess })
   const buildable = ["MAPPING_REVIEW", "STTM_REVIEW", "STTM_APPROVED", "SODA_PENDING", "SODA_REVIEW", "SODA_APPROVED", "DBT_PENDING",
                      "VALIDATION_PENDING", "VALIDATION_PASSED", "DBT_REVIEW"].includes(run.current_state)
     && pipeline !== "GOLD" && actMode(access, "RUN.OPERATE") === "do";
-  const primary = validationFailed
-    ? <Btn href={`/os/review?run=${runId}`} variant="red"><ShieldAlert className="h-3.5 w-3.5" /> See validation findings</Btn>
-    : buildable ? <BuildEndToEnd runId={runId} previewing={!!access.preview} />
+  const primary = validationFailed ? (
+    <>
+      {actMode(access, "RUN.OPERATE") === "do" && (
+        <BuildEndToEnd runId={runId} previewing={!!access.preview} label="Resume from checkpoint" />
+      )}
+      <Btn href={`/os/review?run=${runId}`} variant="red"><ShieldAlert className="h-3.5 w-3.5" /> See validation findings</Btn>
+    </>
+  ) : buildable ? <BuildEndToEnd runId={runId} previewing={!!access.preview} />
     : <Action access={access} id="workStep" href={osHref(runId, now, domainId)} label={`Open ${now.label.toLowerCase()}`} variant="primary" />;
 
   return (
@@ -145,6 +207,9 @@ async function Workbench({ runId, access }: { runId: string; access: OsAccess })
         title={<>{run.run.domain_name ?? "No domain"}{table && <span className="os-muted"> · </span>}{table}<span className="os-muted text-[18px] font-bold"> · {pipeline === "GOLD" ? "Gold" : "Silver"} build</span></>}
         subtitle="Deterministic tools, specialised agents, independent validation and the delivery handoff, in one workspace."
         actions={<>
+          {readyTableRuns.length > 1 && pipeline !== "GOLD" && actMode(access, "RUN.OPERATE") === "do" && (
+            <BuildAllReady runIds={readyTableRuns.map((t) => t.run_id)} previewing={!!access.preview} />
+          )}
           {primary}
         </>}
         meta={<>
@@ -155,6 +220,45 @@ async function Workbench({ runId, access }: { runId: string; access: OsAccess })
           {score.score !== null && <Tag tone={passed ? "green" : "red"} className="ml-auto">Validation {score.score}% · {passed ? "Pass" : "Below gate"}</Tag>}
         </>}
       />
+
+      <WorkflowJourneyBar
+        runId={runId}
+        currentStage="build"
+        generated={!!b.generation}
+        validated={score.total > 0}
+        validationPassed={passed}
+        score={score.score}
+        prPublished={!!(b.publication?.pr_url || b.publication?.status === "PUBLISHED")}
+        released={["COMPLETED", "DEPLOYED", "PIPELINE_ENABLED"].includes(run.current_state)}
+      />
+
+      {tableRuns.length > 1 && (
+        <div className="os-card mb-4 p-3.5" data-testid="table-runs-switcher">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-[12px]">
+            <span><b>Target tables in this workflow ({tableRuns.length})</b> <span className="os-muted">· {tableRuns.filter((t) => t.current_state === "COMPLETED" || t.current_state === "DBT_APPROVED").length} built, {readyTableRuns.length} ready to build</span></span>
+            <Link href="/os/build/ready" className="os-faint text-[11.5px] font-bold hover:text-[var(--os-ink)]">Ready to build board →</Link>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {tableRuns.map((t) => {
+              const name = t.model_entity ?? tableOf(t.target_model) ?? t.run_name;
+              const active = t.run_id === runId;
+              const done = t.current_state === "COMPLETED" || t.current_state === "DBT_APPROVED";
+              const review = t.current_state === "DBT_REVIEW" || t.current_state === "VALIDATION_PASSED";
+              const failed = t.current_state === "VALIDATION_FAILED" || t.current_state === "FAILED";
+              return (
+                <Link key={t.run_id} href={`/os/build?${new URLSearchParams({ view: "selected", run: t.run_id })}`} scroll={false}
+                      aria-current={active ? "page" : undefined}
+                      className={cn("inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11.5px] font-bold transition",
+                        active ? "border-[var(--os-forest)] bg-[var(--os-green-bg)] text-[var(--os-ink)] shadow-sm"
+                               : "border-[var(--os-line)] bg-[var(--os-surface)] hover:border-[var(--os-forest)]")}>
+                  <span>{name}</span>
+                  <Tag tone={done ? "green" : failed ? "red" : review ? "amber" : "blue"}>{stateLabel(t.current_state)}</Tag>
+                </Link>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {validationFailed && (
         <Banner tone="red" icon={ShieldAlert} action={<Btn href={`/os/review?run=${runId}`} variant="red">Open the gate</Btn>}>

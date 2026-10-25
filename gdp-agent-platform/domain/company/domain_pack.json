@@ -661,14 +661,14 @@
         },
         {
           "name": "GDP_IS_ACTIVE",
-          "type": "TEXT",
+          "type": "BOOLEAN",
           "nullable": true,
           "definition": null,
           "business_key": false
         },
         {
           "name": "GDP_INSERTED_TS",
-          "type": "TEXT",
+          "type": "TIMESTAMP_NTZ",
           "nullable": true,
           "definition": null,
           "business_key": false
@@ -682,7 +682,7 @@
         },
         {
           "name": "GDP_UPDATED_TS",
-          "type": "TEXT",
+          "type": "TIMESTAMP_NTZ",
           "nullable": true,
           "definition": null,
           "business_key": false
@@ -797,14 +797,14 @@
         },
         {
           "name": "GDP_IS_ACTIVE",
-          "type": "TEXT",
+          "type": "BOOLEAN",
           "nullable": false,
           "definition": null,
           "business_key": false
         },
         {
           "name": "GDP_INSERTED_TS",
-          "type": "TEXT",
+          "type": "TIMESTAMP_NTZ",
           "nullable": false,
           "definition": null,
           "business_key": false
@@ -818,7 +818,7 @@
         },
         {
           "name": "GDP_UPDATED_TS",
-          "type": "TEXT",
+          "type": "TIMESTAMP_NTZ",
           "nullable": false,
           "definition": null,
           "business_key": false
@@ -955,14 +955,14 @@
         },
         {
           "name": "GDP_IS_ACTIVE",
-          "type": "TEXT",
+          "type": "BOOLEAN",
           "nullable": false,
           "definition": null,
           "business_key": false
         },
         {
           "name": "GDP_INSERTED_TS",
-          "type": "TEXT",
+          "type": "TIMESTAMP_NTZ",
           "nullable": false,
           "definition": null,
           "business_key": false
@@ -976,7 +976,7 @@
         },
         {
           "name": "GDP_UPDATED_TS",
-          "type": "TEXT",
+          "type": "TIMESTAMP_NTZ",
           "nullable": false,
           "definition": null,
           "business_key": false
@@ -1121,14 +1121,14 @@
         },
         {
           "name": "GDP_IS_ACTIVE",
-          "type": "TEXT",
+          "type": "BOOLEAN",
           "nullable": false,
           "definition": null,
           "business_key": false
         },
         {
           "name": "GDP_INSERTED_TS",
-          "type": "TEXT",
+          "type": "TIMESTAMP_NTZ",
           "nullable": false,
           "definition": null,
           "business_key": false
@@ -1142,7 +1142,7 @@
         },
         {
           "name": "GDP_UPDATED_TS",
-          "type": "TEXT",
+          "type": "TIMESTAMP_NTZ",
           "nullable": false,
           "definition": null,
           "business_key": false
@@ -1310,14 +1310,14 @@
         },
         {
           "name": "GDP_IS_ACTIVE",
-          "type": "TEXT",
+          "type": "BOOLEAN",
           "nullable": false,
           "definition": null,
           "business_key": false
         },
         {
           "name": "GDP_INSERTED_TS",
-          "type": "TEXT",
+          "type": "TIMESTAMP_NTZ",
           "nullable": false,
           "definition": null,
           "business_key": false
@@ -1331,7 +1331,7 @@
         },
         {
           "name": "GDP_UPDATED_TS",
-          "type": "TEXT",
+          "type": "TIMESTAMP_NTZ",
           "nullable": false,
           "definition": null,
           "business_key": false

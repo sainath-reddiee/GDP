@@ -3,7 +3,7 @@ import { AlertTriangle, ArrowRight, Ban, CalendarClock, Check, CheckCircle2, Cir
 import { stateLabel } from "@/lib/run-labels";
 import { loadDomains, loadRequest, loadRuns, loadSources } from "@/lib/os/data";
 import { guard } from "@/lib/os/session";
-import { has } from "@/lib/os/access";
+import { waitIsMine } from "@/lib/os/work";
 import { PRIORITY_TONE, actHref, enhancesSource, intentLabel, overdue, phaseOf, requestSteps, waitCta, waitRole, type RequestEvent, type RequestItem } from "@/lib/os/requests";
 import { ActivityRow, Banner, Btn, Card, Empty, Field, PageHeader, SourceError, Tag, ago, pretty, type Tone } from "@/components/os/ui";
 import { AddSource, ItemControls, LinkDomain, RequestControls } from "@/components/os/request-ui";
@@ -68,7 +68,7 @@ export default async function RequestPage({ params, searchParams }: { params: { 
     .filter((x) => !x.is_archived && x.current_state !== "CANCELLED" && (!r.domain_id || x.domain_name === r.domain_name)
       && (product ? x.pipeline === "GOLD" : x.source_system_name === i.source_name))
     .map((x) => ({ run_id: x.run_id, run_name: x.run_name, current_state: x.current_state }));
-  const mine = r.waits.filter((w) => has(access, w.privilege));
+  const mine = r.waits.filter((w) => waitIsMine(w, r.items, access));
 
   return (
     <>
@@ -132,13 +132,13 @@ export default async function RequestPage({ params, searchParams }: { params: { 
                       {i.source_note && <div className="os-muted mt-0.5 text-[11.5px]">{i.source_note}</div>}
                       <div className="os-faint mt-1 text-[11.5px]">{i.status_detail}</div>
                       {i.run_id && (
-                        <div className="mt-1 text-[11.5px]">Run: <Link href={`/os/build?run=${i.run_id}`} className="font-semibold underline">{i.run_name ?? i.run_id.slice(0, 8)}</Link>
+                        <div className="mt-1 text-[11.5px]">Run: <Link href={`/os/build?view=selected&run=${i.active_run_id ?? i.run_id}`} className="font-semibold underline">{i.run_name ?? i.run_id.slice(0, 8)}</Link>
                           {i.run_state && <span className="os-faint"> · {stateLabel(i.run_state)}</span>}</div>
                       )}
                       {i.waits.map((w) => (
                         <div key={w.label} className="mt-1.5 flex items-center gap-1.5 text-[11.5px]">
                           <Hand className="h-3 w-3 text-[var(--os-amber-ink)]" /><span>{w.label}</span>
-                          {has(access, w.privilege) && <Tag tone="green">You</Tag>}
+                          {waitIsMine(w, r.items, access) && <Tag tone="green">You</Tag>}
                         </div>
                       ))}
                     </div>
@@ -174,7 +174,7 @@ export default async function RequestPage({ params, searchParams }: { params: { 
                 {r.waits.map((w) => {
                   const item = r.items.find((i) => i.item_id === w.item_id);
                   const href = actHref(w, item, r.domain_id, product, r.request_id, enhancesSource(r));
-                  const you = has(access, w.privilege);
+                  const you = waitIsMine(w, r.items, access);
                   return (
                     <div key={`${w.privilege}-${w.label}-${w.item_id ?? ""}`} className="flex items-start justify-between gap-3 py-2.5">
                       <div className="min-w-0">

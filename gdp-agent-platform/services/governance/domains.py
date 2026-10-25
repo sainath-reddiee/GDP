@@ -27,6 +27,7 @@ STEWARD_ROLES = ("OWNER", "STEWARD")
 ROLE_RANK = {"OWNER": 0, "STEWARD": 1, "EXPERT": 2}
 ADMIN_ROLES = {"SUPER_ADMIN", "PLATFORM_ADMIN"}
 FALLBACK_ROLE = "DATA_STEWARD"
+PLACEHOLDER_USERS = {"GDP DATA OFFICE"}
 ALL = "*"
 TTL = 60.0
 
@@ -68,9 +69,11 @@ def _model(db) -> Dict[str, Any]:
             pass
         try:
             for r in db.query("SELECT DOMAIN_ID, USER_NAME, ROLE FROM CORE.DOMAIN_MEMBER"):
-                users = members.setdefault(str(r["domain_id"]), {})
                 user, role = _up(r.get("user_name")), _up(r.get("role"))
-                if user and (user not in users or ROLE_RANK.get(role, 9) < ROLE_RANK.get(users[user], 9)):
+                if not user or user in PLACEHOLDER_USERS:
+                    continue
+                users = members.setdefault(str(r["domain_id"]), {})
+                if user not in users or ROLE_RANK.get(role, 9) < ROLE_RANK.get(users[user], 9):
                     users[user] = role
         except Exception:
             pass

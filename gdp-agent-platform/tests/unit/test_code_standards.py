@@ -50,7 +50,10 @@ def test_the_project_budget_cuts_files_and_long_files_are_trimmed():
 
 def test_the_prompt_carries_the_skill_the_standards_the_mapping_and_the_files():
     picked, _ = standards.pick_files(FILES, 40)
-    text = standards.prompt(picked, "REVIEW RULES", "PLAYBOOK RULES", "COMPANY_ID NUMBER", "SILVER")
+    ctx = standards.mapping_context([{"target_column": "COMPANY_ID", "target_datatype": "NUMBER", "mapping_type": "DIRECT",
+                                      "source_column": "ZOOMINFO_ID", "source_datatype": "VARCHAR", "required": True}])
+    assert "COMPANY_ID NUMBER DIRECT <- ZOOMINFO_ID (VARCHAR) required" in ctx
+    text = standards.prompt(picked, "REVIEW RULES", "PLAYBOOK RULES", ctx, "SILVER")
     for part in ("REVIEW RULES", "PLAYBOOK RULES", "COMPANY_ID NUMBER", "=== FILE: models/staging/stg_company.sql ===",
                  "NAMING (Naming and layering)", "SILVER run", "You do not fix code"):
         assert part in text

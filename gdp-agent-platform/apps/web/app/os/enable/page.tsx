@@ -112,7 +112,7 @@ export default async function SourceReadiness({ searchParams }: { searchParams: 
   return (
     <>
       {/* onboarding a source or a domain are Enable's own tabs above, not repeated here */}
-      <PageHeader eyebrow="Enable / Data OS Administrator" title="Source readiness"
+      <PageHeader eyebrow="Initiate / Data OS Administrator" title="Source readiness"
                   subtitle="The Data OS Administrator onboards domains and sources (the Onboard source and Onboard domain tabs): connection, credential reference, landing target, schedule and SnapLogic configuration. Tables and profiles live in the Source Store; this page is configuration."
                   actions={<Btn href="/os/design/sources">Open Source Store</Btn>} />
       <SourceError what="Sources" error={sources.error} />

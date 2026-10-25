@@ -236,7 +236,7 @@ def _source_unique_id(keys: List[Dict[str, Any]], alias: str, sources: Dict[str,
     parts = []
     for i, key in enumerate(keys):
         table = str(key.get("source_table") or "").upper()
-        src_type = (sources.get(table) or {}).get("columns", {}).get(str(key["source_column"]).upper(), "TEXT")
+        src_type = (sources.get(table) or {}).get("columns", {}).get(str(key["source_column"]).upper()) or str(key.get("source_datatype") or "TEXT")
         ref = f"{alias}.{quote(real_name(sources, table, key['source_column']))}"
         ref = ref if family(src_type) == "text" else f"{ref}::varchar"
         parts.append(f"upper(trim({ref}))" if i == 0 else f"coalesce(upper(trim({ref})), '')")
@@ -566,7 +566,7 @@ def generate(inputs: Dict[str, Any], skeleton: Optional[Dict[str, str]] = None) 
         table = str(c.get("source_table") or primary).upper()
         scol = str(c.get("source_column") or "").upper()
         scol_sql = real_name(sources, table, c.get("source_column") or "")
-        stype = sources.get(table, {}).get("columns", {}).get(scol, "")
+        stype = sources.get(table, {}).get("columns", {}).get(scol, "") or str(c.get("source_datatype") or "")
         note, cast = "", None
         if cls == "AUDIT":
             role = audit_role(name, prefix) or "INSERTED_TS"

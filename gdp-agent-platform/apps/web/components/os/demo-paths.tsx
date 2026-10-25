@@ -3,6 +3,7 @@ import { ArrowRight, CheckCircle2, CircleDashed, PlayCircle } from "lucide-react
 import { stateLabel } from "@/lib/run-labels";
 import type { RunSummary } from "@/lib/types";
 import { PHASE, phaseOf, type OnboardingRequest } from "@/lib/os/requests";
+import { leafRuns } from "@/lib/os/work";
 import { Card, Tag } from "./ui";
 import { cn } from "@/lib/utils";
 
@@ -14,14 +15,14 @@ type Step = { who: string; title: string; what: string; href: string | null; sta
 /** A run that has passed validation and waits on (or finished) code review: the Forward Engineering Lead's happy path. */
 export function happyRun(runs: RunSummary[]): RunSummary | null {
   const rank = ["DBT_REVIEW", "VALIDATION_PASSED", "DBT_APPROVED", "COMPLETED"];
-  return [...runs].filter((r) => !r.is_archived && rank.includes(r.current_state))
+  return [...leafRuns(runs)].filter((r) => !r.is_archived && rank.includes(r.current_state))
     .sort((a, b) => rank.indexOf(a.current_state) - rank.indexOf(b.current_state) || (b.updated_at ?? "").localeCompare(a.updated_at ?? ""))[0] ?? null;
 }
 
 /** An open onboarding request to walk end to end: the one furthest along that has a run, else the oldest open one. */
 export function onboardingRequest(requests: OnboardingRequest[]): OnboardingRequest | null {
   const order = ["DOMAIN", "ENABLE", "DESIGN", "BUILD", "REVIEW"];
-  const withRun = requests.filter((r) => r.items.some((i) => i.run_id && !i.removed_at));
+  const withRun = requests.filter((r) => r.items.some((i) => (i.active_run_id || i.run_id) && !i.removed_at));
   const pool = withRun.length ? withRun : requests;
   return [...pool].sort((a, b) => order.indexOf(b.stage) - order.indexOf(a.stage) || a.created_at.localeCompare(b.created_at))[0] ?? null;
 }
@@ -65,7 +66,8 @@ export function DemoPaths({ runs, requests }: { runs: RunSummary[]; requests: On
   ] : [];
 
   const req = onboardingRequest(requests);
-  const runId = req?.items.find((i) => i.run_id && !i.removed_at)?.run_id ?? null;
+  const item = req?.items.find((i) => (i.active_run_id || i.run_id) && !i.removed_at);
+  const runId = item?.active_run_id ?? item?.run_id ?? null;
   const at = req ? ["DOMAIN", "ENABLE", "DESIGN", "BUILD", "REVIEW", "DONE"].indexOf(req.stage) : -1;
   const flagged = req?.phase === "FLAGGED";
   const state = (i: number): Step["state"] => (!req ? "next" : at > i ? "done" : at === i ? "now" : "next");
@@ -73,9 +75,9 @@ export function DemoPaths({ runs, requests }: { runs: RunSummary[]; requests: On
     { who: "GDP Product Owner", title: "File the request", what: req ? `${req.title} · ${req.domain_name ?? req.proposed_domain ?? "no domain"}` : "Intake: a domain and the sources it needs",
       href: req ? `/os/requests/${req.request_id}` : "/os/intake/new", state: req ? "done" : "now" },
     { who: "Data OS Administrator", title: "Onboard the sources", what: "skipped on its own when the sources are already onboarded", href: "/os/enable", state: state(1) },
-    { who: "Data Designer", title: "Profile, model and map", what: "approved design kept in the stores", href: runId ? `/os/review?run=${runId}` : "/os/design", state: state(2) },
-    { who: "Forward Engineering Lead", title: "Build end to end", what: "from Ready to build: code generated and scored by the review and standards agents", href: "/os/build/ready", state: flagged ? "done" : state(3) },
-    { who: "Skill owner", title: "If flagged: improve the skill, validate again", what: "a new skill version, then Validate again; the attempts show the trend",
+    { who: "Data Designer", title: "Profile, model and map", what: "approved design kept in the stores", href: runId ? `/os/design?view=selected&run=${runId}` : "/os/design", state: state(2) },
+    { who: "Forward Engineering Lead", title: "Build end to end", what: "from Ready to build: code generated and scored by the review and standards agents", href: runId ? `/os/build?view=selected&run=${runId}` : "/os/build/ready", state: flagged ? "done" : state(3) },
+    { who: "Skill owner", title: "If flagged: improve the skill, validate again", what: "a new skill version, then Resume from checkpoint; the attempts show the trend",
       href: runId ? `/os/review?run=${runId}` : "/os/skills?skill=CODE-STANDARDS-REVIEW", state: flagged ? "now" : at > 3 ? "done" : "next" },
     { who: "QA & UAT Lead, Data Developer", title: "Pull request, QA and release", what: "publish, sign off QA, review the code", href: runId ? `/os/release?run=${runId}` : "/os/release", state: state(4) },
   ];

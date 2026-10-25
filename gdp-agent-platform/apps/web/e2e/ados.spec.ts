@@ -5,7 +5,7 @@ import { expect, test } from "@playwright/test";
 const BASE = process.env.AIP_WEB_URL ?? "http://localhost:3000";
 
 const SCREENS: [string, RegExp][] = [
-  ["/os", /Platform actions/],
+  ["/os", /Build Workflows/],
   ["/os/intake", /Requests/],
   ["/os/intake/new", /Create an onboarding request/],
   ["/os/requests", /Onboarding requests/],
@@ -150,12 +150,12 @@ test("a viewer sees only the screens their role opens, and is turned back from t
   // the package's ten entries, filtered: a viewer reads requests, domains, the audit trail, knowledge and operations
   // the package's entries a viewer may open; Admin, governance and the audit trail are a super admin's alone
   // Build appears for its read-only Run history tab
-  await expect(railLinks(page)).toHaveText(["Home", "Intake", "Design", "Build", "Knowledge", "Run & DQ", "Help"]);
+  await expect(railLinks(page)).toHaveText(["Home", "Initiate", "Design", "Build", "Knowledge", "Run & DQ", "Help"]);
   await expect(railLinks(page).filter({ hasText: "Build" })).toHaveAttribute("href", "/os/history");
   await expect(page.getByLabel("Persona")).toHaveText("Viewer");
   await page.goto("/os/build");
   await page.waitForURL(/\/os\?denied=build$/);
-  await expect(page.getByText("Build: Workbench is not part of your role.")).toBeVisible();
+  await expect(page.getByText("Build: Build board is not part of your role.")).toBeVisible();
   // the classic pages are gated by the same list
   await page.goto("/runs");
   await page.waitForURL(/\/os\?denied=pipelines$/);
@@ -166,7 +166,7 @@ test("a viewer sees only the screens their role opens, and is turned back from t
 test("a code reviewer gets the build, review and release screens and the developer persona", async ({ page }) => {
   await previewAs(page, "developer");
   await page.goto("/os");
-  await expect(railLinks(page)).toHaveText(["Home", "Intake", "Design", "Build", "Review", "Release", "Knowledge", "Run & DQ", "Help"]);
+  await expect(railLinks(page)).toHaveText(["Home", "Initiate", "Design", "Build", "Validate", "Publish", "Knowledge", "Run & DQ", "Help"]);
   await expect(page.getByLabel("Persona")).toHaveText("Data Developer");
 });
 
@@ -229,7 +229,7 @@ test("skill versions can be made candidate or promoted in place", async ({ page 
 
 test("the rail is the package's ten entries and every page is a tab of one", async ({ page }) => {
   await page.goto("/os");
-  await expect(railLinks(page)).toHaveText(["Home", "Intake", "Enable", "Design", "Build", "Review", "Skills", "Release", "Knowledge", "Run & DQ", "Admin", "Help"]);
+  await expect(railLinks(page)).toHaveText(["Home", "Initiate", "Design", "Build", "Validate", "Skills", "Publish", "Knowledge", "Run & DQ", "Admin", "Help"]);
   // classic pages open inside the shell, under their entry, as one of its tabs
   await page.goto("/runs");
   await expect(page.getByRole("navigation", { name: "Main" })).toHaveCount(0);
@@ -244,9 +244,7 @@ test("the rail is the package's ten entries and every page is a tab of one", asy
   await page.goto("/incidents");
   await expect(railLinks(page).filter({ hasText: "Run & DQ" })).toHaveAttribute("aria-current", "page");
   await page.goto("/os/requests");
-  await expect(railLinks(page).filter({ hasText: "Intake" })).toHaveAttribute("aria-current", "page");
-  // Intake is one board (its form and the older lists sit under it), so it has no tab bar
-  await expect(tabs).toHaveCount(0);
+  await expect(railLinks(page).filter({ hasText: "Initiate" })).toHaveAttribute("aria-current", "page");
 });
 
 test("admins can switch the classic pages back to the classic layout", async ({ page }) => {
@@ -386,26 +384,25 @@ test("Help walks the two demos on live records", async ({ page }) => {
   await expect(demos.getByText("File the request")).toBeVisible();
 });
 
-// Onboarding a source is the Data OS Administrator's alone, in Enable; domains are onboarded from Design.
+// Onboarding a source is the Data OS Administrator's alone, in Initiate; domains are onboarded from Initiate.
 test("only the administrator onboards sources, from Enable; others request them", async ({ page }) => {
   await page.goto("/dashboard/onboarding?type=source");
   await expect(page.getByRole("heading", { name: "Onboard source" })).toBeVisible();
   const tabs = page.getByTestId("section-tabs");
-  await expect(tabs.getByRole("link")).toHaveText(["Source readiness", "Onboard source", "Onboard domain"]);
-  await expect(railLinks(page).filter({ hasText: "Enable" })).toHaveAttribute("aria-current", "page");
+  await expect(tabs.getByRole("link")).toHaveText(["Requests", "Source readiness", "Onboard source", "Onboard domain"]);
+  await expect(railLinks(page).filter({ hasText: "Initiate" })).toHaveAttribute("aria-current", "page");
   await page.goto("/os/intake/new?type=source");
   await expect(page.getByRole("link", { name: "Open the onboarding wizard" })).toHaveCount(0);
   await expect(page.getByText("Sources are onboarded by the Data OS Administrator")).toBeVisible();
   for (const persona of ["designer", "product_owner", "forward_lead"]) {
     await previewAs(page, persona);
     await page.goto("/os");
-    await expect(railLinks(page).filter({ hasText: "Enable" })).toHaveCount(0);
     await page.goto("/dashboard/onboarding?type=source").catch(() => undefined);
     await page.waitForURL(/\/os\?denied=onboarding$/);
   }
   await previewAs(page, "admin");
   await page.goto("/os");
-  await expect(railLinks(page).filter({ hasText: "Enable" })).toBeVisible();
+  await expect(railLinks(page).filter({ hasText: "Initiate" })).toBeVisible();
 });
 
 // Skills: the Forward Engineering Lead (a skill owner) promotes directly; a designer's promotion goes to a skill owner;
@@ -443,7 +440,7 @@ test("a new domain is requested by name and onboarded by the administrator; data
   // the old Design address lands on Enable, Onboard a domain
   await page.goto("/os/design/new-domain?import=1");
   await page.waitForURL(/\/os\/enable\/new-domain\?import=1$/);
-  await expect(railLinks(page).filter({ hasText: "Enable" })).toHaveAttribute("aria-current", "page");
+  await expect(railLinks(page).filter({ hasText: "Initiate" })).toHaveAttribute("aria-current", "page");
   for (const persona of ["product_owner", "designer"]) {
     await previewAs(page, persona);
     await page.goto("/os/enable/new-domain").catch(() => undefined);
@@ -457,7 +454,7 @@ test("Ready to build shows each domain's design readiness and builds ready runs 
   await expect(railLinks(page).filter({ hasText: "Build" })).toHaveAttribute("href", "/os/build");
   await page.goto("/os/build/ready");
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("Ready to build");
-  await expect(page.getByRole("list", { name: "Flow" }).getByRole("link")).toHaveText([/Intake/, /Enable/, /Design/, /Build/, /Review/]);
+  await expect(page.getByRole("list", { name: "Flow" }).getByRole("link")).toHaveText([/Initiate/, /Design/, /Build/, /Validate/, /Publish/]);
   const board = page.getByTestId("ready-board");
   test.skip(!(await board.count()), "no Silver run on record");
   const row = board.getByTestId("ready-row").first();

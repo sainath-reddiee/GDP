@@ -2,7 +2,7 @@ import Link from "next/link";
 import type { ComponentType } from "react";
 import { AlertTriangle, ArrowRight, ArrowUpRight, BookOpen, Boxes, Crown, Database, Lock, Plus, ShieldCheck, Siren, Stamp, Wand2 } from "lucide-react";
 import { stateLabel } from "@/lib/run-labels";
-import { canSee, has } from "@/lib/os/access";
+import { canSee, has, screenOfPath } from "@/lib/os/access";
 import type { Domain } from "@/lib/os/data";
 import type { OsAccess } from "@/lib/os/session";
 import {
@@ -10,7 +10,7 @@ import {
 } from "@/lib/os/requests";
 import { Btn, Tag, ago, pretty } from "./ui";
 import { Track, type TrackStep } from "./stage-board";
-import { RUNNING_STATES, stageHref } from "@/lib/os/work";
+import { stageHref, waitIsMine } from "@/lib/os/work";
 import { RequestFiles } from "@/components/os/request-files";
 import { StartEnhancementRun } from "./request-ui";
 import type { ActionItem } from "@/lib/os/actions";
@@ -31,16 +31,15 @@ const TYPE_TINT: Record<RequestType, string> = {
 
 /** Who the request waits on: the role its wait names ("Model approver: approve the field mapping"), else the stage's owner. */
 const waitingOn = (r: OnboardingRequest, owner: string) => (r.waiting_label?.includes(":") ? r.waiting_label.split(":")[0] : owner);
+const cleanTitle = (title: string) => title.replace(/\s*\(E2E test\)\s*$/i, "").trim();
 
-/** The request's path as a track, waiting on the role its wait names, for how long. */
+/** The request's path as a track, waiting on the role its wait names. */
 export function RequestTrack({ r, className }: { r: OnboardingRequest; className?: string }) {
   const steps = requestSteps(r);
-  const since = r.stage_changed_at ? ago(r.stage_changed_at).replace(/ ago$/, "") : "";
   const now = steps.find((s) => s.state === "current" || s.state === "attention");
   return (
     <Track className={className} steps={steps.map((s) => ({ key: s.stage, label: s.label, owner: s.owner, state: s.state as TrackStep["state"] }))}
-           waiting={r.status === "OPEN" && now ? waitingOn(r, now.owner) || "a person" : null}
-           since={since && since !== "just now" ? since : null} />
+           waiting={r.status === "OPEN" && now ? waitingOn(r, now.owner) || "a person" : null} />
   );
 }
 
@@ -49,12 +48,16 @@ export function WorkflowRow({ r, access, href }: { r: OnboardingRequest; access:
   const I = TYPE_ICON[r.request_type] ?? Database;
   const open = r.status === "OPEN";
   // the viewer's next step, unless an agent is still running it (as requestNeedsMe)
-  const mine = open ? r.waits.find((w) => has(access, w.privilege)
-    && !RUNNING_STATES.has(r.items.find((i) => i.item_id === w.item_id)?.run_state ?? "")) : undefined;
+  const mine = open ? r.waits.find((w) => waitIsMine(w, r.items, access)) : undefined;
   const item = mine ? r.items.find((i) => i.item_id === mine.item_id) : undefined;
   const next = mine ? actHref(mine, item, r.domain_id, r.request_type === "PRODUCT", r.request_id, enhancesSource(r)) : null;
+  const stageUrl = stageHref(r);
+  const stageScreen = stageUrl ? screenOfPath(stageUrl.split("?")[0]) : null;
+  const openHref = (stageUrl && (!stageScreen || canSee(access, stageScreen.key)) ? stageUrl : null) ?? href;
   const sources = r.items.filter((i) => !i.removed_at);
   const domain = r.domain_name ?? (r.proposed_domain ? `${r.proposed_domain} (new)` : null);
+  const title = cleanTitle(r.title);
+  const sourceSummary = sources.length === 1 ? sources[0].source_name : sources.length > 1 ? `${sources.length} sources` : null;
   return (
     <article data-testid="workflow-row" className={cn("os-card os-rise p-3.5 transition hover:shadow-[var(--os-shadow-pop)]",
                                                        mine && "border-l-[3px] border-l-[var(--os-forest)]")}>
@@ -62,58 +65,31 @@ export function WorkflowRow({ r, access, href }: { r: OnboardingRequest; access:
         <div className="flex min-w-[min(100%,260px)] flex-1 items-start gap-3">
           <span className={cn("grid h-9 w-9 shrink-0 place-items-center rounded-lg", TYPE_TINT[r.request_type])}><I className="h-4 w-4" /></span>
           <div className="min-w-0">
-            <Link href={href ?? `/os/requests/${r.request_id}`} className="block truncate text-[14px] font-extrabold tracking-[-0.01em] hover:underline" title={r.title}>{r.title}</Link>
+            <Link href={href ?? `/os/requests/${r.request_id}`} className="block truncate text-[14px] font-extrabold tracking-[-0.01em] hover:underline" title={title}>{title}</Link>
             <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px]">
               <Tag tone={intentOf(r) === "ENHANCE" ? "purple" : "blue"}>{intentLabel(r)}</Tag>
               {domain && <span className="os-muted font-semibold">{domain}</span>}
-              {sources.length > 0 && r.request_type !== "PRODUCT" && <span className="os-faint">· {sources.length} source{sources.length === 1 ? "" : "s"}</span>}
-              {r.priority === "HIGH" && <Tag tone={PRIORITY_TONE.HIGH}>High priority</Tag>}
+              {sourceSummary && r.request_type !== "PRODUCT" && <span className="os-faint">· {sourceSummary}</span>}
               {overdue(r) && <Tag tone="red">Overdue</Tag>}
-              <span className="os-faint">· filed {ago(r.created_at)}</span>
             </div>
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-2">
           {mine ? (
-            <>
-              <Tag tone="green">Your turn</Tag>
-              <Btn href={next ?? `/os/requests/${r.request_id}`} variant="primary" title={mine.label}>{next ? waitCta(mine) : "Open request"} <ArrowRight className="h-3.5 w-3.5" /></Btn>
-            </>
+            <Btn href={next ?? `/os/requests/${r.request_id}`} variant="primary" title={mine.label}>{next ? waitCta(mine) : "Open workflow"} <ArrowRight className="h-3.5 w-3.5" /></Btn>
           ) : open ? (
             // whose step it is, by persona (the step's own wait names it)
             <Tag tone={r.attention ? "red" : "neutral"} title={phaseOf(r).label}>
               {r.attention ? "Needs attention" : `Waiting on ${(r.waits[0] && waitRole(r.waits[0])) || phaseOf(r).label}`}
             </Tag>
           ) : (
-            <Tag tone={r.status === "DONE" ? "green" : "neutral"}>{pretty(r.status)}</Tag>
+            <Tag tone={r.status === "DONE" ? "green" : "neutral"}>{r.status === "DONE" ? "Published" : pretty(r.status)}</Tag>
           )}
-          {href && <Link href={href} className={cn("os-btn", mine && "max-sm:!hidden")} aria-label={`Open ${r.title}`}>Open <ArrowRight className="h-3.5 w-3.5" /></Link>}
+          {openHref && <Link href={openHref} className={cn("os-btn", mine && "max-sm:!hidden")} aria-label={`Open ${title}`}>Open <ArrowRight className="h-3.5 w-3.5" /></Link>}
         </div>
       </div>
-      {href ? <Link href={href} className="block rounded-lg" aria-label={`${r.title}: steps`}><RequestTrack r={r} className="mt-3" /></Link>
+      {href ? <Link href={href} className="block rounded-lg" aria-label={`${title}: steps`}><RequestTrack r={r} className="mt-3" /></Link>
         : <RequestTrack r={r} className="mt-3" />}
-      {open && r.attention && (
-        <p className="mt-2 flex items-start gap-1.5 text-[11.5px] text-[var(--os-red-ink)]"><AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />{r.attention}</p>
-      )}
-      {open && mine && <p className="os-muted mt-2 text-[11.5px]"><b className="text-[var(--os-ink)]">Next for you:</b> {mine.label}</p>}
-      {sources.length > 0 && r.request_type !== "PRODUCT" && (
-        <details className="group mt-2">
-          <summary className="os-faint cursor-pointer select-none text-[11px] font-bold hover:text-[var(--os-ink)]">
-            {sources.length === 1 ? "The source" : `Its ${sources.length} sources`}
-          </summary>
-          <div className="os-divide mt-2 rounded-lg border border-[var(--os-line-soft)] px-3">
-            {sources.map((i) => (
-              <div key={i.item_id} className="flex flex-wrap items-center justify-between gap-2 py-2 text-[11.5px]">
-                <span className="min-w-0">
-                  <b>{i.source_name}</b>
-                  <span className="os-faint"> · {i.run_name ? `${i.run_name}: ${stateLabel(i.run_state).toLowerCase()}` : i.status_detail ?? "no run yet"}</span>
-                </span>
-                <Tag tone={i.status === "ATTENTION" ? "red" : phaseOf(i).tone}>{phaseOf(i).label}</Tag>
-              </div>
-            ))}
-          </div>
-        </details>
-      )}
     </article>
   );
 }
@@ -234,7 +210,7 @@ export function RequestFocus({ r, access }: { r: RequestDetail; access: OsAccess
               {r.waits.map((w) => {
                 const item = r.items.find((i) => i.item_id === w.item_id);
                 const href = actHref(w, item, r.domain_id, product, r.request_id, enhancesSource(r));
-                const you = has(access, w.privilege);
+                const you = waitIsMine(w, r.items, access);
                 return (
                   <div key={`${w.privilege}-${w.label}-${w.item_id ?? ""}`} className="flex items-center justify-between gap-3 py-2.5">
                     <span className="min-w-0 text-[12px]"><b className="block leading-snug">{w.label}</b>
@@ -259,8 +235,8 @@ export function RequestFocus({ r, access }: { r: RequestDetail; access: OsAccess
                     <span className="os-faint block text-[10.5px]">{i.run_name ? `${i.run_name}: ${stateLabel(i.run_state).toLowerCase()}` : i.status_detail ?? "no run yet"}</span></span>
                   <span className="flex shrink-0 items-center gap-2">
                     <Tag tone={i.status === "ATTENTION" ? "red" : phaseOf(i).tone}>{phaseOf(i).label}</Tag>
-                    {i.run_id && ["DESIGN", "BUILD"].includes(i.stage) && (
-                      <Link href={`/os/${i.stage === "DESIGN" ? "design" : "build"}?view=selected&run=${i.run_id}`} className="os-btn px-2 py-1 text-[11px]">Open</Link>
+                    {(i.active_run_id ?? i.run_id) && ["DESIGN", "BUILD"].includes(i.stage) && (
+                      <Link href={`/os/${i.stage === "DESIGN" ? "design" : "build"}?view=selected&run=${i.active_run_id ?? i.run_id}`} className="os-btn px-2 py-1 text-[11px]">Open</Link>
                     )}
                   </span>
                   </div>

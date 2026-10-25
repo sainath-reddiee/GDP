@@ -69,7 +69,7 @@ POST_STTM = (
 
 
 def branch_slug(run_name: str, run_id: str) -> str:
-    return "".join(c.lower() if c.isalnum() else "-" for c in (run_name or run_id)[:40]).strip("-") or "run"
+    return "".join(c.lower() if c.isalnum() else "-" for c in (run_name or run_id)[:72]).strip("-") or "run"
 
 
 def merge_branch_plan(payload: Dict[str, Any], prior: Dict[str, Any], run_name: str, run_id: str,
@@ -165,6 +165,7 @@ def generate_dbt(session, run_id: str, payload_json: str = "{}") -> Dict[str, An
             lines = [{
                 "target_column": r["TARGET_COLUMN"], "target_datatype": r["TARGET_DATATYPE"],
                 "source_column": r["SOURCE_COLUMN"], "source_table": r["SOURCE_TABLE"],
+                "source_datatype": r.get("SOURCE_DATATYPE"),
                 "mapping_type": r["MAPPING_TYPE"], "transformation": r["TRANSFORMATION"],
                 "nullable_rule": r["NULLABLE_RULE"], "uniqueness_rule": r["UNIQUENESS_RULE"],
                 "accepted_values": variant(r["ACCEPTED_VALUES"]) or [],

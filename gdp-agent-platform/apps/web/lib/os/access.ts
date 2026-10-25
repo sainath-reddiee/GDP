@@ -43,8 +43,8 @@ export type Screen = {
   view?: readonly string[]; why: string;
 };
 export const SECTIONS: { key: SectionKey; label: string }[] = [
-  { key: "work", label: "Home" }, { key: "intake", label: "Intake" }, { key: "enable", label: "Enable" }, { key: "design", label: "Design" },
-  { key: "build", label: "Build" }, { key: "review", label: "Review" }, { key: "skills", label: "Skills" }, { key: "release", label: "Release" },
+  { key: "work", label: "Home" }, { key: "intake", label: "Initiate" }, { key: "enable", label: "Initiate" }, { key: "design", label: "Design" },
+  { key: "build", label: "Build" }, { key: "review", label: "Validate" }, { key: "skills", label: "Skills" }, { key: "release", label: "Publish" },
   { key: "knowledge", label: "Knowledge" }, { key: "run", label: "Run & DQ" }, { key: "admin", label: "Admin" },
 ];
 
@@ -75,12 +75,12 @@ export const SCREENS: Screen[] = [
   { key: "requestHistory", section: "intake", href: "/os/requests/history", label: "Request history", paths: ["/os/requests/history"], rail: false, under: "intake",
     why: "everyone signed in (finished, cancelled and rejected requests, read only)" },
 
-  // Enable: onboarding sources is the Data OS Administrator's alone (registering, landing and starting the run)
-  { key: "enable", section: "enable", href: "/os/enable", label: "Source readiness", view: ["SOURCE.CONNECT", "DOMAIN.ONBOARD", "CONFIG.EDIT", "INTEGRATION.MANAGE"], why: "the Data OS Administrator (onboarding sources and domains, configuring ingestion)" },
-  { key: "onboarding", section: "enable", href: "/os/enable/onboarding?type=source", label: "Onboard source", paths: ["/os/enable/onboarding", "/os/design/sources/new"],
+  // Initiate: onboarding sources and domains is the Data OS Administrator's (registering, landing and starting the run)
+  { key: "enable", section: "intake", href: "/os/enable", label: "Source readiness", view: ["SOURCE.CONNECT", "DOMAIN.ONBOARD", "CONFIG.EDIT", "INTEGRATION.MANAGE"], why: "the Data OS Administrator (onboarding sources and domains, configuring ingestion)" },
+  { key: "onboarding", section: "intake", href: "/os/enable/onboarding?type=source", label: "Onboard source", paths: ["/os/enable/onboarding", "/os/design/sources/new"],
     view: ["SOURCE.CONNECT"], why: "the Data OS Administrator (onboarding a source registers it, lands it and starts its run)" },
-  { key: "newDomain", section: "enable", href: "/os/enable/new-domain", label: "Onboard domain", paths: ["/os/design/new-domain"], view: ["DOMAIN.ONBOARD"],
-    why: "the Data OS Administrator (a domain's model, contract and memory); data owners request one on Intake" },
+  { key: "newDomain", section: "intake", href: "/os/enable/new-domain", label: "Onboard domain", paths: ["/os/design/new-domain"], view: ["DOMAIN.ONBOARD"],
+    why: "the Data OS Administrator (a domain's model, contract and memory); data owners request one on Initiate" },
 
   // Design: the domain model and the stores the design is kept in
   { key: "design", section: "design", href: "/os/design", label: "Design board",
@@ -103,8 +103,8 @@ export const SCREENS: Screen[] = [
   // a run's own workspace is where every gate is decided, so it is open to every builder and approver
   { key: "runs", section: "build", href: "/os/build/runs/", label: "Run workspace", paths: ["/os/build/runs/"], rail: false, under: "build", view: BUILDERS, why: "people who build runs or decide their gates" },
 
-  // Review: the gates, the change requests, and the audit trail behind them
-  { key: "review", section: "review", href: "/os/review", label: "Gates", view: [...GATE_DECIDERS, "RUN.OPERATE", "APPROVAL.VIEW", "REQUEST.CHANGES"], why: "people who decide a gate or raise change requests" },
+  // Validate: the gates, the change requests, and the audit trail behind them
+  { key: "review", section: "review", href: "/os/review", label: "Validation gate", view: [...GATE_DECIDERS, "RUN.OPERATE", "APPROVAL.VIEW", "REQUEST.CHANGES"], why: "people who decide a gate or raise change requests" },
   { key: "governance", section: "review", href: "/os/review/approvals", label: "Approvals",
     view: ["APPROVAL.VIEW", "ROLE.MANAGE", "REQUEST.CHANGES", ...GATE_DECIDERS, "MODEL.APPROVE"], why: "people who raise or decide change requests" },
 
@@ -112,8 +112,8 @@ export const SCREENS: Screen[] = [
   { key: "skills", section: "skills", href: "/os/skills", label: "Skill studio", view: ["SKILL.EDIT", "SKILL.RELEASE"], why: "skill authors and owners" },
   { key: "registry", section: "skills", href: "/os/skills/registry", label: "Registry", view: ["SKILL.EDIT", "SKILL.RELEASE"], why: "skill authors and owners" },
 
-  // Release: the PR, source control and QA
-  { key: "release", section: "release", href: "/os/release", label: "Release", view: ["REVIEW.APPROVE", "DBT.EDIT", "QA.EDIT", "QA.SIGNOFF"], why: "developers and QA" },
+  // Publish: the PR, source control and QA
+  { key: "release", section: "release", href: "/os/release", label: "Publish", view: ["REVIEW.APPROVE", "DBT.EDIT", "QA.EDIT", "QA.SIGNOFF"], why: "developers and QA" },
   { key: "sourceControl", section: "release", href: "/os/release/source-control", label: "Source control", view: ["REVIEW.APPROVE", "DBT.EDIT", "APPROVAL.VIEW"], why: "developers and reviewers" },
   { key: "qa", section: "release", href: "/os/release/qa", label: "QA testing", view: ["QA.EDIT", "QA.SIGNOFF"], why: "QA engineers and leads" },
 

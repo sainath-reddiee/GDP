@@ -7,9 +7,22 @@ import {
   BookOpen, ChevronDown, CircleHelp, Eye, Gauge, Hammer, Home, Menu, Plus, Rocket, Settings, ShieldCheck, Sparkles, SquareStack, Wrench, X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { screenOfPath, type ScreenKey, type SectionKey } from "@/lib/os/access";
+import { canSee, screenOfPath, type ScreenKey, type SectionKey } from "@/lib/os/access";
 import { PERSONA_COOKIE } from "@/lib/os/personas";
 import { CopilotButton } from "@/components/copilot/copilot-provider";
+
+const PERSONA_PRIVS: Record<string, string[]> = {
+  super: ["*"],
+  forward_lead: ["RUN.CREATE", "RUN.OPERATE", "PROFILE.RUN", "MAPPING.DECIDE", "STTM.EDIT", "SODA.EDIT", "QA.EDIT", "DBT.EDIT", "SKILL.EDIT", "SKILL.RELEASE", "AI.USE", "REQUEST.CHANGES", "OPS.VIEW", "JIRA.READ"],
+  product_owner: ["DOMAIN.EDIT", "KNOWLEDGE.EDIT", "AI.USE", "REQUEST.CHANGES"],
+  admin: ["SOURCE.CONNECT", "DOMAIN.ONBOARD", "RUN.CREATE", "RUN.OPERATE", "AI.USE", "REQUEST.CHANGES", "OPS.VIEW", "OPS.OPERATE"],
+  designer: ["RUN.CREATE", "PROFILE.RUN", "MODEL.EDIT", "MODEL.APPROVE", "MAPPING.DECIDE", "MAPPING.APPROVE", "STTM.EDIT", "STTM.APPROVE", "SODA.EDIT", "SODA.APPROVE", "SKILL.EDIT", "AI.USE", "REQUEST.CHANGES"],
+  developer: ["REVIEW.APPROVE", "REVIEW.DECIDE", "DBT.EDIT", "AI.USE", "REQUEST.CHANGES", "OPS.VIEW"],
+  qa: ["QA.EDIT", "QA.SIGNOFF", "PACKAGE.EDIT", "PACKAGE.APPROVE", "AI.USE", "REQUEST.CHANGES", "OPS.VIEW"],
+  reliability: ["OPS.VIEW", "OPS.OPERATE", "OPS.FIX_APPROVE", "OPS.FIX_PUBLISH", "CASE.WORK", "JIRA.READ", "AI.USE", "REQUEST.CHANGES"],
+  curator: ["DOMAIN.EDIT", "KNOWLEDGE.EDIT", "SKILL.EDIT", "SKILL.RELEASE", "AI.USE", "REQUEST.CHANGES"],
+  viewer: [],
+};
 
 // The Agentic Data OS shell, around every signed-in page: CBRE header (brand, Copilot, "Preview as role", "View as"
 // persona, new menu, account), the UX package's ten-entry icon rail (plus Admin for
@@ -59,19 +72,25 @@ export function OsShell({ user, sections, screens, personas, persona, preview, s
   const [menu, setMenu] = useState(false);
   useEffect(() => setMenu(false), [path]);
 
-  // a persona narrows what the API allows, so the page on show may close: go to the persona's own start page
-  const choose = (id: string) => {
-    setCookie(PERSONA_COOKIE, id);
-    const home = personas.find((p) => p.id === id)?.home ?? "/os";
-    start(() => { router.push(home); router.refresh(); });
-  };
-  const stopPreview = () => { setCookie(PREVIEW_COOKIE, null); setCookie(PERSONA_COOKIE, null); start(() => router.push("/os/people")); };
   // the page on show: its own tab, or the one it sits under (a run's workspace is under Build's Workbench)
   const here = screenOfPath(path);
   const current = here?.under ?? here?.key ?? null;
   const section = here?.section ?? null;
   const tabs = screens.filter((s) => s.section && s.section === section);
   const help = screens.find((s) => s.key === "help");
+
+  // stay on the current page (and its query params) when the chosen persona can open it; else go to the persona's start page
+  const choose = (id: string) => {
+    setCookie(PERSONA_COOKIE, id);
+    const keep = !here || canSee({ governance: true, privileges: PERSONA_PRIVS[id] ?? [] }, here.key);
+    if (keep) {
+      start(() => { router.refresh(); });
+      return;
+    }
+    const home = personas.find((p) => p.id === id)?.home ?? "/os";
+    start(() => { router.push(home); router.refresh(); });
+  };
+  const stopPreview = () => { setCookie(PREVIEW_COOKIE, null); setCookie(PERSONA_COOKIE, null); start(() => router.push("/os/people")); };
   // what the chosen persona leaves out, on hover of the picker (not a banner: it is not something to act on)
   const scopeHint = !preview?.current && scope && !scope.full && scope.hidden > 0
     ? `Working as ${scope.label}: ${scope.hidden} screen${scope.hidden === 1 ? " is" : "s are"} hidden for this persona. Switch persona to use them.`

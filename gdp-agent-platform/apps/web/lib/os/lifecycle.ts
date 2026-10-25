@@ -20,8 +20,8 @@ export type LifecycleStep = {
 };
 
 export const LIFECYCLE: LifecycleStep[] = [
-  { key: "intake", label: "Intake", owner: "GDP Product Owner", actor: "Person", what: "Request and scope", states: ["CREATED"], slug: "" },
-  { key: "enable", label: "Enable", owner: "Data OS Administrator", actor: "Tool", what: "Source access",
+  { key: "intake", label: "Initiate", owner: "GDP Product Owner", actor: "Person", what: "Request and scope", states: ["CREATED"], slug: "" },
+  { key: "enable", label: "Readiness", owner: "Data OS Administrator", actor: "Tool", what: "Source access",
     states: ["SOURCE_REGISTERED", "ACCESS_VALIDATION", "ACCESS_APPROVED"], slug: "source" },
   { key: "ingest", label: "Ingest", owner: "Data OS Administrator", actor: "Tool", what: "Land to bronze",
     states: ["LANDING_PENDING", "LANDING_RUNNING", "LANDING_COMPLETE"], slug: "source" },
@@ -36,7 +36,7 @@ export const LIFECYCLE: LifecycleStep[] = [
   { key: "validate", label: "Validate", owner: "Independent Review Agent", actor: "Agent", what: "Policy checks",
     states: ["VALIDATION_PENDING", "VALIDATION_RUNNING", "VALIDATION_PASSED", "VALIDATION_FAILED"], slug: "validation" },
   { key: "pr", label: "PR", owner: "Data Developer", actor: "Person", what: "Code review", states: ["DBT_REVIEW", "DBT_APPROVED"], slug: "review" },
-  { key: "release", label: "Release", owner: "Data Developer", actor: "Person", what: "Deploy and observe",
+  { key: "release", label: "Publish", owner: "Data Developer", actor: "Person", what: "Deploy and observe",
     states: ["COMPLETED", "DEPLOYMENT_PENDING", "DEPLOYED", "PIPELINE_ENABLED"], slug: "audit" },
 ];
 

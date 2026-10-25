@@ -159,6 +159,8 @@ def next_action(state: str, facts: Dict[str, Any]) -> Dict[str, Any]:
     if state == "STTM_REVIEW":
         return _act("approve_sttm") if auto else _gate("Review and approve the transformations (STTM)", "sttm")
     if state == "VALIDATION_FAILED":
+        if facts.get("resume"):
+            return _act("generate_dbt") if auto else _act("validate")
         return {"kind": "BLOCKED", "label": "Validation failed: open Validation, fix the findings and regenerate"}
     if auto and state in POST_STTM_BUILD:
         return _build(state, facts)

@@ -19,10 +19,10 @@ const STATUS: Record<BuildStatus, { tone: Tone; label: string }> = {
 
 /** Where the next step of a run that is not ready happens, by who acts. */
 function elsewhere(r: BuildRun): { href: string; label: string } | null {
-  if (r.status === "ENABLE") return { href: "/os/enable", label: "Enable" };
+  if (r.status === "ENABLE") return { href: "/os/enable", label: "Initiate" };
   if (r.status === "DESIGN" || r.status === "MODEL") return { href: `/os/review?run=${r.run_id}`, label: "Design gate" };
-  if (r.status === "FLAGGED" || r.status === "REVIEW") return { href: `/os/review?run=${r.run_id}`, label: "Review" };
-  if (r.status === "BUILT") return { href: `/os/release?run=${r.run_id}`, label: "Release" };
+  if (r.status === "FLAGGED" || r.status === "REVIEW") return { href: `/os/review?run=${r.run_id}`, label: "Validate" };
+  if (r.status === "BUILT") return { href: `/os/release?run=${r.run_id}`, label: "Publish" };
   return null;
 }
 
@@ -34,7 +34,7 @@ function Check3({ on, label }: { on: boolean; label: string }) {
   );
 }
 
-/** Build, Ready to build: the Forward Engineering Lead's landing. Intake asks, Enable onboards, Design models and maps;
+/** Build, Ready to build: the Forward Engineering Lead's landing. Initiate asks and onboards, Design models and maps;
  *  here every run whose design is done (domain model, mapping and transformations approved) is built end to end by
  *  autopilot up to the code review gate. Runs still on their way show where they are and who acts next. */
 export default async function ReadyToBuild({ searchParams }: { searchParams: { built?: string } }) {
@@ -49,11 +49,11 @@ export default async function ReadyToBuild({ searchParams }: { searchParams: { b
   const waitingDesign = t ? t.DESIGN + t.MODEL + t.ENABLE : 0;
 
   const flow: { label: string; n: number | undefined; href: string; who: string }[] = [
-    { label: "Intake", n: undefined, href: "/os/requests", who: "Data owner asks" },
-    { label: "Enable", n: t?.ENABLE, href: "/os/enable", who: "Administrator onboards" },
+    { label: "Initiate", n: t?.ENABLE, href: "/os/intake", who: "Request & source setup" },
     { label: "Design", n: t ? t.DESIGN + t.MODEL : undefined, href: "/os/design", who: "Designer models and maps" },
     { label: "Build", n: t ? t.READY + t.BUILDING + t.FLAGGED : undefined, href: "/os/build/ready", who: "Autopilot builds" },
-    { label: "Review", n: t?.REVIEW, href: "/os/review", who: "Developer reviews" },
+    { label: "Validate", n: t?.REVIEW, href: "/os/review", who: "Reviewer & gate checks" },
+    { label: "Publish", n: t?.BUILT, href: "/os/release", who: "PR, QA & release" },
   ];
 
   return (

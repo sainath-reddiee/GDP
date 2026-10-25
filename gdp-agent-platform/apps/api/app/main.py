@@ -442,7 +442,7 @@ def list_runs(include_test: bool = False, status: str = "all", limit: int = 200,
                    S.SOURCE_SYSTEM_NAME, D.DOMAIN_NAME,
                    DATEDIFF('minute', R.CREATED_AT, CURRENT_TIMESTAMP()) AS AGE_MINUTES,
                    COALESCE(SEL.N, 0) AS SELECTED_TABLES, COALESCE(LAND.N, 0) AS LANDED_TABLES,
-                   COALESCE(R.PIPELINE, 'SILVER') AS PIPELINE, COUNT(*) OVER () AS TOTAL_MATCHES
+                   COALESCE(R.PIPELINE, 'SILVER') AS PIPELINE, R.PARENT_RUN_ID, COUNT(*) OVER () AS TOTAL_MATCHES
               FROM CORE.WORKFLOW_RUN R
               LEFT JOIN CORE.SOURCE_REGISTRY S ON S.SOURCE_SYSTEM_ID = R.SOURCE_SYSTEM_ID
               LEFT JOIN CORE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = R.DOMAIN_ID
@@ -827,6 +827,17 @@ def get_run(run_id: str, db: Db = Depends(current_db)):
 
             state["stages"] = apply(state.get("stages") or [], state.get("current_state"), lanes)
             state["lanes"] = lanes
+        try:
+            parent_id = state["run"].get("parent_run_id") or run_id
+            kids = db.query("""SELECT RUN_ID, RUN_NAME, MODEL_ENTITY, TARGET_MODEL, CURRENT_STATE, CURRENT_STAGE, STATUS
+                                 FROM CORE.WORKFLOW_RUN
+                                WHERE PARENT_RUN_ID = %s AND DELETED_AT IS NULL AND NOT COALESCE(IS_ARCHIVED, FALSE)
+                                ORDER BY CREATED_AT""", (parent_id,))
+            if kids:
+                state["table_runs"] = kids
+                state["parent_run_id"] = parent_id
+        except Exception:
+            pass
         return state
 
     return _cached_run(db, run_id, load)

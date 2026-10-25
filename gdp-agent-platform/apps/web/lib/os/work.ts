@@ -2,7 +2,8 @@ import type { RunSummary } from "@/lib/types";
 import { GATES } from "@/lib/run-labels";
 import { LIFECYCLE, type StepKey } from "@/lib/os/lifecycle";
 import { has, type Grants } from "@/lib/os/access";
-import type { OnboardingRequest } from "@/lib/os/requests";
+import { waitRole, type OnboardingRequest, type RequestItem, type Wait } from "@/lib/os/requests";
+import { PERSONAS } from "@/lib/os/personas";
 
 // Which stage board a workflow belongs on, whether it waits on the viewer, and where Home sends a click. Shared by Home
 // and the Intake, Design and Build boards (components/os/stage-board.tsx). Server-safe.
@@ -39,6 +40,29 @@ export function mergeRuns<T extends { run_id: string }>(...lists: T[][]): T[] {
   return lists.flat().filter((r) => (seen.has(r.run_id) ? false : (seen.add(r.run_id), true)));
 }
 
+/** A run mapped to several tables fans out into its table runs; the leaf runs are the ones boards list and work on. */
+export function leafRuns<T extends { run_id: string; parent_run_id?: string | null; is_archived?: boolean; current_state?: string }>(runs: T[]): T[] {
+  const parents = new Set(
+    runs.filter((r) => !r.is_archived && r.current_state !== "CANCELLED").map((r) => r.parent_run_id).filter(Boolean) as string[],
+  );
+  return runs.filter((r) => !parents.has(r.run_id));
+}
+
+/** Resolves a run id from the URL: when it names a parent run whose work continues in its table runs, picks the
+ *  table run waiting on the viewer (or at the board's stage). */
+export function resolveBoardRun(runs: RunSummary[], runId: string | undefined,
+                                access: Grants & { persona?: { states: string[] } }, stage: Stage): RunSummary | null {
+  if (!runId) return null;
+  const kids = runs.filter((r) => !r.is_archived && r.current_state !== "CANCELLED" && r.parent_run_id === runId);
+  if (kids.length) {
+    return kids.find((r) => runNeedsMe(r, access))
+      ?? kids.find((r) => stageOfRun(r) === stage)
+      ?? kids.find((r) => r.current_state !== "COMPLETED" && r.current_state !== "DBT_APPROVED")
+      ?? kids[0];
+  }
+  return runs.find((r) => r.run_id === runId) ?? null;
+}
+
 /** A run waits on the viewer: a gate they decide, a failed validation or run they operate, or a step their persona
  *  works. One rule for Home and the Design and Build boards (a gate the viewer may only raise a change request on is
  *  not theirs to act on, so it is not "Action required"). */
@@ -56,21 +80,33 @@ export function runNeedsMe(run: Pick<RunSummary, "current_state" | "lifecycle">,
 /** States where an agent is working: nobody has anything to do until it finishes. */
 export const RUNNING_STATES = new Set(["ACCESS_VALIDATION", "LANDING_RUNNING", "PROFILING_RUNNING", "DBT_GENERATING", "VALIDATION_RUNNING"]);
 
+/** Whether a wait on a request belongs to the viewer's current persona and privilege, while no agent is running it. */
+export function waitIsMine(w: Wait, items: RequestItem[], access: Grants & { persona?: { id: string; label: string } }): boolean {
+  if (!has(access, w.privilege)) return false;
+  if (access.persona && access.persona.id !== "super") {
+    const role = waitRole(w);
+    if (role && PERSONAS.some((p) => p.label.toLowerCase() === role.toLowerCase())
+      && access.persona.label.toLowerCase() !== role.toLowerCase()) {
+      return false;
+    }
+  }
+  const item = w.item_id ? items.find((i) => i.item_id === w.item_id) : undefined;
+  return !(item?.run_state && RUNNING_STATES.has(item.run_state));
+}
+
 /** A workflow whose next step is the viewer's: open, a wait on a privilege they hold, and not a step an agent is still
  *  running (a landing or validation in progress is shown as active, not as something to do). */
-export function requestNeedsMe(r: Pick<OnboardingRequest, "status" | "waits" | "items">, access: Grants): boolean {
+export function requestNeedsMe(r: Pick<OnboardingRequest, "status" | "waits" | "items">,
+                               access: Grants & { persona?: { id: string; label: string } }): boolean {
   if (r.status !== "OPEN") return false;
-  return r.waits.some((w) => {
-    if (!has(access, w.privilege)) return false;
-    const item = w.item_id ? r.items.find((i) => i.item_id === w.item_id) : undefined;
-    return !(item?.run_state && RUNNING_STATES.has(item.run_state));
-  });
+  return r.waits.some((w) => waitIsMine(w, r.items, access));
 }
 
 /** The run holding a request at its stage: the first live source whose run is at that stage, else any linked run. */
 export function requestRun(r: OnboardingRequest): string | null {
-  const live = r.items.filter((i) => !i.removed_at && i.run_id);
-  return (live.find((i) => i.stage === r.stage) ?? live[0])?.run_id ?? null;
+  const live = r.items.filter((i) => !i.removed_at && (i.active_run_id || i.run_id));
+  const pick = live.find((i) => i.stage === r.stage) ?? live[0];
+  return pick?.active_run_id ?? pick?.run_id ?? null;
 }
 
 /** Where Home sends a workflow: Intake, with it selected (the request's steps, who acts now, its sources). */

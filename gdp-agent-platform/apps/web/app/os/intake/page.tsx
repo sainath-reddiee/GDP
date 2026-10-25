@@ -8,7 +8,7 @@ import { RequestFocus, StartPanel, WorkflowRow } from "@/components/os/home";
 import { HomeSearch } from "@/components/os/home-search";
 
 export const dynamic = "force-dynamic";
-export const metadata = { title: "Intake" };
+export const metadata = { title: "Initiate" };
 
 // Intake: every onboarding request by Selected, Action required, Active and Completed, and New or Enhance on the right.
 // The form that files one is /os/intake/new.
@@ -44,7 +44,7 @@ export default async function IntakeBoard({ searchParams }: { searchParams: { vi
       <section className="min-w-0" aria-labelledby="intake-title">
         <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
           <div>
-            <div className="os-eyebrow">Intake</div>
+            <div className="os-eyebrow">Initiate</div>
             <h1 id="intake-title" className="text-[22px] font-extrabold tracking-[-0.03em]">Requests{intent && <span className="os-muted text-[15px] font-bold"> · {intent === "new" ? "New" : "Enhance"} only</span>}</h1>
           </div>
           <HomeSearch />

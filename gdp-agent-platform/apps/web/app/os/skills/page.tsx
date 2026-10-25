@@ -4,6 +4,8 @@ import { stateLabel } from "@/lib/run-labels";
 import { loadRuns, loadSkill, loadSkillDiff, loadSkillProposalFor, loadSkills } from "@/lib/os/data";
 import { guard } from "@/lib/os/session";
 import { Action } from "@/components/os/action";
+import { BuildEndToEnd } from "@/components/os/build-run";
+import { leafRuns } from "@/lib/os/work";
 import { ActivityRow, Banner, Bar, Btn, Card, Empty, Kpi, PageHeader, SourceError, Tag, ago, pretty } from "@/components/os/ui";
 import { cn } from "@/lib/utils";
 import { SkillLabel } from "@/components/os/decide";
@@ -14,10 +16,11 @@ export const metadata = { title: "Skill studio" };
 
 const rate = (n: number | undefined) => (n === undefined ? null : Math.round((n <= 1 ? n * 100 : n)));
 
-export default async function SkillStudio({ searchParams }: { searchParams: { skill?: string } }) {
+export default async function SkillStudio({ searchParams }: { searchParams: { skill?: string; run?: string } }) {
   const access = await guard("skills");
   const persona = access.persona;
   const [skills, runs] = await Promise.all([loadSkills(), loadRuns("sort=updated&limit=150")]);
+  const leaves = leafRuns(runs.data.runs);
   const list = skills.data.skills;
   const name = searchParams.skill
     ?? list.find((s) => s.candidate && s.production && s.candidate.skill_id !== s.production.skill_id)?.skill_name
@@ -34,7 +37,12 @@ export default async function SkillStudio({ searchParams }: { searchParams: { sk
   const skillMd = d?.selected?.files.find((f) => f.path === "SKILL.md")?.content ?? d?.selected?.files[0]?.content ?? "";
   const evalOf = (v?: typeof prod) => v?.eval_json ?? null;
   const testRun = evalOf(after) ?? evalOf(prod);
-  const failing = runs.data.runs.filter((r) => !r.is_archived && (r.current_state === "VALIDATION_FAILED" || r.current_state === "FAILED")).slice(0, 5);
+  const focusedRun = searchParams.run ? leaves.find((r) => r.run_id === searchParams.run) ?? runs.data.runs.find((r) => r.run_id === searchParams.run) : undefined;
+  const failing = [
+    ...(focusedRun ? [focusedRun] : []),
+    ...leaves.filter((r) => !r.is_archived && r.run_id !== focusedRun?.run_id && (r.current_state === "VALIDATION_FAILED" || r.current_state === "FAILED")),
+  ].slice(0, 5);
+  const canOperate = actMode(access, "RUN.OPERATE") === "do";
   const stats = skills.data.stats;
 
   return (
@@ -42,6 +50,7 @@ export default async function SkillStudio({ searchParams }: { searchParams: { sk
       <PageHeader eyebrow={`${persona.label} / Skills and tooling`} title={<>Improve skill{name ? <span className="os-muted"> · {name.toLowerCase()}</span> : null}</>}
                   subtitle="Versioned, tested engineering skills the agents load at each stage. A fix becomes a reviewed skill version, then the affected steps rerun without redoing discovery."
                   actions={<>
+                    {focusedRun && <Btn href={`/os/review?run=${encodeURIComponent(focusedRun.run_id)}`}>Validation gate</Btn>}
                     <Btn href="/os/skills/registry/proposed">Proposed skills</Btn>
                     {name && <Action access={access} id="editSkill" label="Edit and version in the registry" href={`/os/skills/registry/${encodeURIComponent(name)}`} variant="primary" icon={<Sparkles className="h-3.5 w-3.5" />} />}
                   </>} />
@@ -162,10 +171,18 @@ export default async function SkillStudio({ searchParams }: { searchParams: { sk
                 {failing.map((r) => {
                   const href = r.current_state === "VALIDATION_FAILED" ? `/os/review?run=${r.run_id}` : `/os/build?run=${r.run_id}`;
                   return (
-                    <Link key={r.run_id} href={href} className="flex items-center justify-between gap-2 py-2 hover:underline">
-                      <span className="min-w-0 truncate text-[12px] font-semibold">{r.run_name}</span>
-                      <Tag tone="red">{stateLabel(r.current_state)}</Tag>
-                    </Link>
+                    <div key={r.run_id} className="py-2.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <Link href={href} className="min-w-0 truncate text-[12px] font-semibold hover:underline">{r.run_name}</Link>
+                        <Tag tone={r.current_state === "VALIDATION_FAILED" || r.current_state === "FAILED" ? "red" : "green"}>{stateLabel(r.current_state)}</Tag>
+                      </div>
+                      {canOperate && r.current_state === "VALIDATION_FAILED" && (
+                        <div className="mt-2 flex flex-wrap items-center gap-2">
+                          <BuildEndToEnd runId={r.run_id} previewing={!!access.preview} label="Resume from checkpoint" />
+                          <Btn href={`/os/review?run=${encodeURIComponent(r.run_id)}`}>Open validation gate</Btn>
+                        </div>
+                      )}
+                    </div>
                   );
                 })}
               </div>

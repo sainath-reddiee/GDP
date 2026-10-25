@@ -33,6 +33,7 @@ def _files(session, generation_id: str) -> Dict[str, str]:
 def _sttm_lines(session, sttm_id: str) -> List[Dict[str, Any]]:
     return [{
         "target_column": r["TARGET_COLUMN"], "target_datatype": r["TARGET_DATATYPE"],
+        "source_table": r.get("SOURCE_TABLE"), "source_column": r.get("SOURCE_COLUMN"),
         "source_datatype": r.get("SOURCE_DATATYPE"), "mapping_type": r["MAPPING_TYPE"], "transformation": r["TRANSFORMATION"],
         "nullable_rule": r["NULLABLE_RULE"], "uniqueness_rule": r["UNIQUENESS_RULE"],
         "accepted_values": variant(r["ACCEPTED_VALUES"]) or [],

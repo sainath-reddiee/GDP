@@ -4,7 +4,7 @@ import { GATES, stateLabel } from "@/lib/run-labels";
 import { gateHref } from "@/lib/os/lifecycle";
 import { has } from "@/lib/os/access";
 import type { OsAccess } from "@/lib/os/session";
-import { RUNNING_STATES, runNeedsMe, stageOfRun } from "@/lib/os/work";
+import { RUNNING_STATES, leafRuns, runNeedsMe, stageOfRun } from "@/lib/os/work";
 import { PERSONA_FOR_PRIVILEGE, PERSONA_FOR_ROLE, personaById, personaLabel, type PersonaId } from "@/lib/os/personas";
 import { loadBoardRuns } from "@/lib/os/data";
 
@@ -76,8 +76,9 @@ export async function loadActions(access: OsAccess, covered: Set<string>): Promi
   };
 
   // every run at a person's step: a gate, a failure, a working step; unless its workflow on Home already shows it
-  for (const run of runs.runs) {
-    if (run.is_archived || run.current_state === "CANCELLED" || covered.has(run.run_id) || RUNNING_STATES.has(run.current_state)) continue;
+  for (const run of leafRuns(runs.runs)) {
+    if (run.is_archived || run.current_state === "CANCELLED" || covered.has(run.run_id)
+      || (run.parent_run_id && covered.has(run.parent_run_id)) || RUNNING_STATES.has(run.current_state)) continue;
     const s = run.current_state;
     const gate = GATES[s];
     const working = !gate && s !== "FAILED" && s !== "VALIDATION_FAILED" ? stepPersona(s) : null;

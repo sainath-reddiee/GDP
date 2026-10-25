@@ -6,14 +6,17 @@ import {
 } from "@/lib/os/data";
 import { guard } from "@/lib/os/session";
 import { Action } from "@/components/os/action";
+import { leafRuns, resolveBoardRun, runNeedsMe, type BoardView } from "@/lib/os/work";
 import { ActivityRow, Banner, Btn, Card, Empty, Field, Kpi, PageHeader, SourceError, Tag, ago, pretty, type Tone } from "@/components/os/ui";
+import { BoardList, BoardTabs, StageFilterBar, WorkflowGroupCard, WorkflowJourneyBar, groupRunsByWorkflow } from "@/components/os/stage-board";
+import { HomeSearch } from "@/components/os/home-search";
 import { RunPicker } from "@/components/os/run-picker";
 import { PublishPr, QaSignoffPanel } from "@/components/os/decide";
 import { ACTIONS, actMode } from "@/lib/os/access";
 import { cn } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
-export const metadata = { title: "Code and release" };
+export const metadata = { title: "Publish" };
 
 type Gate = { label: string; sub: string; state: "done" | "active" | "blocked" | "pending" };
 const GATE_STYLE: Record<Gate["state"], { tone: Tone; icon: typeof CheckCircle2 }> = {
@@ -21,31 +24,128 @@ const GATE_STYLE: Record<Gate["state"], { tone: Tone; icon: typeof CheckCircle2 
 };
 const AFTER_REVIEW = ["DBT_APPROVED", "COMPLETED", "DEPLOYMENT_PENDING", "DEPLOYED", "PIPELINE_ENABLED"];
 
-export default async function CodeAndRelease({ searchParams }: { searchParams: { run?: string } }) {
+type Params = { view?: string; run?: string; q?: string; domain?: string; status?: string };
+
+export default async function CodeAndRelease({ searchParams }: { searchParams: Params }) {
   const access = await guard("release");
   const persona = access.persona;
   const [runs, prs] = await Promise.all([loadRuns("sort=updated&limit=150"), loadPrs()]);
-  const runId = searchParams.run ?? defaultRun(runs.data.runs, ["DBT_REVIEW", "DBT_APPROVED", "COMPLETED", "VALIDATION_PASSED"])?.run_id;
-  const [bundle, qa, feed] = runId
+  const live = runs.data.runs.filter((r) => !r.is_archived && r.current_state !== "CANCELLED");
+  const leaves = leafRuns(live);
+  const q = (searchParams.q ?? "").trim().toLowerCase();
+  const domainFilter = searchParams.domain ?? "all";
+  const statusFilter = searchParams.status ?? "all";
+
+  const searched = leaves.filter((r) => !q || r.run_name.toLowerCase().includes(q) || (r.domain_name ?? "").toLowerCase().includes(q) || (r.source_system_name ?? "").toLowerCase().includes(q));
+  const byDomain = searched.filter((r) => domainFilter === "all" || (r.domain_name ?? "No domain") === domainFilter);
+  const matchesStatus = (r: (typeof leaves)[number]) => {
+    if (statusFilter === "review") return r.current_state === "DBT_REVIEW";
+    if (statusFilter === "ready") return r.current_state === "VALIDATION_PASSED" || r.current_state === "DBT_REVIEW";
+    if (statusFilter === "published") return AFTER_REVIEW.includes(r.current_state);
+    return true;
+  };
+  const listed = byDomain.filter(matchesStatus);
+  const inPublish = listed.filter((r) => ["VALIDATION_PASSED", "DBT_REVIEW", "DEPLOYMENT_PENDING"].includes(r.current_state));
+  const lists = {
+    action: inPublish.filter((r) => runNeedsMe(r, access) || r.current_state === "DBT_REVIEW"),
+    active: inPublish,
+    completed: listed.filter((r) => ["DBT_APPROVED", "COMPLETED", "DEPLOYED", "PIPELINE_ENABLED"].includes(r.current_state)),
+  };
+
+  let runId = resolveBoardRun(live, searchParams.run, access, "review")?.run_id
+    ?? searchParams.run
+    ?? defaultRun(leaves, ["DBT_REVIEW", "DBT_APPROVED", "COMPLETED", "VALIDATION_PASSED"])?.run_id;
+  let [bundle, qa, feed] = runId
     ? await Promise.all([loadRunBundle(runId), loadRunQa(runId), loadKnowledgeFeed(150)])
     : [{ data: null, error: null }, null, { data: [], error: null }];
+  if (bundle.data?.run.table_runs?.length && !bundle.data.run.run.parent_run_id) {
+    const kids = bundle.data.run.table_runs;
+    const pick = kids.find((t) => ["DBT_REVIEW", "VALIDATION_PASSED"].includes(t.current_state))
+      ?? kids.find((t) => ["DBT_APPROVED", "COMPLETED"].includes(t.current_state))
+      ?? kids[0];
+    if (pick && pick.run_id !== runId) {
+      runId = pick.run_id;
+      [bundle, qa] = await Promise.all([loadRunBundle(runId), loadRunQa(runId)]);
+    }
+  }
   const b = bundle.data;
-  const releaseQueue = runs.data.runs.filter((r) => !r.is_archived && ["DBT_REVIEW", "DBT_APPROVED", "DEPLOYMENT_PENDING"].includes(r.current_state));
+  const view: BoardView = (searchParams.view === "action" || searchParams.view === "active" || searchParams.view === "completed")
+    ? searchParams.view
+    : b && qa ? "selected" : "active";
+  const boardRows = view === "selected" ? [] : lists[view];
+  const grouped = groupRunsByWorkflow(boardRows, live, (r) => runNeedsMe(r, access) || r.current_state === "DBT_REVIEW");
+  const select = (id: string) => `/os/release?${new URLSearchParams({ view: "selected", run: id })}`;
 
-  if (!b || !qa) {
+  const domainCounts = new Map<string, number>();
+  for (const r of searched) {
+    const d = r.domain_name ?? "No domain";
+    domainCounts.set(d, (domainCounts.get(d) ?? 0) + 1);
+  }
+  const domainOptions = [
+    { key: "all", label: "All domains", count: searched.length },
+    ...[...domainCounts.entries()].sort((a, b) => b[1] - a[1]).map(([k, count]) => ({ key: k, label: k, count })),
+  ];
+  const statusOptions = [
+    { key: "all", label: "All states", count: byDomain.length },
+    { key: "review", label: "Awaiting review", count: byDomain.filter((r) => r.current_state === "DBT_REVIEW").length, dot: byDomain.some((r) => r.current_state === "DBT_REVIEW") },
+    { key: "ready", label: "Ready for PR", count: byDomain.filter((r) => r.current_state === "VALIDATION_PASSED" || r.current_state === "DBT_REVIEW").length },
+    { key: "published", label: "Published", count: byDomain.filter((r) => AFTER_REVIEW.includes(r.current_state)).length },
+  ];
+  const filterUrl = (patch: Partial<Params>) => {
+    const next = { view: view === "selected" ? "active" : view, q: searchParams.q ?? "", domain: domainFilter, status: statusFilter, ...patch };
+    const p = new URLSearchParams(Object.entries(next).filter(([k, v]) => v && (k === "view" || v !== "all")) as [string, string][]);
+    return `/os/release?${p}`;
+  };
+  const releaseQueue = leaves.filter((r) => !r.is_archived && ["DBT_REVIEW", "DBT_APPROVED", "DEPLOYMENT_PENDING"].includes(r.current_state));
+
+  if (!b || !qa || view !== "selected") {
     return (
-      <>
-        <PageHeader eyebrow={`${persona.label} / SDLC`} title="Code, test and release" />
+      <div data-testid="publish-board">
+        <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <div className="os-eyebrow">Publish · {persona.label}</div>
+            <h1 className="text-[22px] font-extrabold tracking-[-0.03em]">Code, test and release</h1>
+          </div>
+          <HomeSearch placeholder="Search workflows, tables or domains" />
+        </div>
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          <BoardTabs base="/os/release" view={view} selection={runId ? ["run", runId] : null}
+                     fallback={lists.action[0] ? ["run", lists.action[0].run_id] : lists.active[0] ? ["run", lists.active[0].run_id] : null}
+                     counts={{ action: lists.action.length, active: lists.active.length, completed: lists.completed.length }} />
+          <span className="mx-1 hidden h-5 w-px bg-[var(--os-line)] sm:block" aria-hidden />
+          <StageFilterBar
+            domains={domainOptions}
+            activeDomain={domainFilter}
+            domainHref={(d) => filterUrl({ domain: d })}
+            statuses={statusOptions}
+            activeStatus={statusFilter}
+            statusHref={(s) => filterUrl({ status: s })}
+          />
+        </div>
         <SourceError what="Release data" error={bundle.error ?? runs.error} />
-        <Empty icon={Rocket} title="Nothing to release yet">A run appears here once its generated code passes validation.</Empty>
-      </>
+        <BoardList count={grouped.length} empty={view === "action"
+          ? { title: "No publish step waits on you", body: "Runs awaiting code review, PR publication or QA signoff appear here." }
+          : view === "active" ? { title: "Nothing is currently in publish review" }
+          : { title: "No published runs match these filters" }}>
+          {grouped.map((g) => <WorkflowGroupCard key={g.key} group={g} selectHref={select} currentRunId={runId} />)}
+        </BoardList>
+      </div>
     );
   }
 
   const { run } = b;
   const score = scoreOf(b.checks);
   const validated = gatePassed(score, b.gate);
-  const runPrs = prs.data.prs.filter((p) => (p.href ?? "").includes(run.run_id) || (p.asset_name && run.run.target_model?.includes(p.asset_name)));
+  const pubPr = b.publication && (b.publication.status === "PUBLISHED" || b.publication.pr_url) ? [{
+    title: `${run.run.domain_name ?? "dbt"} · ${tableOf(run.run.target_model) ?? run.run.run_name}` + (b.publication.pr_number ? ` (#${b.publication.pr_number})` : ""),
+    asset_name: run.run.target_model ?? run.run.run_name,
+    state: "OPEN",
+    pr_url: b.publication.pr_url ?? null,
+    opened_by: b.publication.head_branch ?? "autopilot",
+    opened_at: b.publication.created_at ?? run.run.created_at,
+    href: `/os/release?run=${run.run_id}`,
+  }] : [];
+  const runPrs = [...pubPr, ...prs.data.prs.filter((p) => (p.href ?? "").includes(run.run_id) || (p.asset_name && run.run.target_model?.includes(p.asset_name)))];
   const reviewed = AFTER_REVIEW.includes(run.current_state);
   const released = ["COMPLETED", "DEPLOYED", "PIPELINE_ENABLED"].includes(run.current_state);
   const qaPassed = qa.results.filter((r) => r.outcome === "PASSED").length;
@@ -54,29 +154,76 @@ export default async function CodeAndRelease({ searchParams }: { searchParams: {
   const repo = prs.data.repos[0];
   const publishMode = actMode(access, ACTIONS.publishPr.privilege);
   const signoffMode = actMode(access, ACTIONS.signoffQa.privilege);
+  const tableRuns = run.table_runs ?? [];
 
   const gates: Gate[] = [
     { label: "Validation", sub: score.score === null ? "not run" : `${score.score}% · ${score.critical} errors`, state: score.score === null ? "pending" : validated ? "done" : "blocked" },
     { label: "Pull request", sub: runPrs.length ? `${runPrs.length} PR · ${pretty(runPrs[0].state)}` : "not published", state: runPrs.length ? "done" : validated ? "active" : "pending" },
     { label: "QA signoff", sub: qa.signoff ? `${pretty(qa.signoff.decision)} by ${qa.signoff.decided_by}` : `${qa.tests.length} tests planned`, state: qa.signoff ? (qa.signoff.decision === "APPROVED" ? "done" : "blocked") : run.lanes?.QA?.status === "REVIEW_REQUIRED" ? "active" : "pending" },
     { label: "Code review", sub: reviewed ? "approved" : run.current_state === "DBT_REVIEW" ? "awaiting reviewer" : "not yet", state: reviewed ? "done" : run.current_state === "DBT_REVIEW" ? "active" : "pending" },
-    { label: "Release", sub: released ? stateLabel(run.current_state) : "controlled, never automatic", state: released ? "done" : reviewed ? "active" : "pending" },
+    { label: "Publish", sub: released ? stateLabel(run.current_state) : "controlled, never automatic", state: released ? "done" : reviewed ? "active" : "pending" },
   ];
 
   return (
-    <>
+    <div data-testid="publish-board">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+        <BoardTabs base="/os/release" view={view} selection={["run", run.run_id]}
+                   fallback={lists.action[0] ? ["run", lists.action[0].run_id] : ["run", run.run_id]}
+                   counts={{ action: lists.action.length, active: lists.active.length, completed: lists.completed.length }} />
+        <HomeSearch placeholder="Search workflows, tables or domains" />
+      </div>
+
       <PageHeader
-        eyebrow={`${persona.label} / SDLC and release`}
+        eyebrow={`Publish · ${persona.label}`}
         title={<>Code, test and release · {run.run.domain_name ?? ""} {tableOf(run.run.target_model)}</>}
         subtitle="Agent-generated code enters the normal SDLC: a pull request, CI evidence, QA and UAT signoff, then a controlled release. Nothing is merged or deployed automatically."
         actions={<>
-          <RunPicker base="/os/release" current={run.run_id} runs={runOptions(runs.data.runs)} />
+          <RunPicker base="/os/release" current={run.run_id} runs={runOptions(leaves)} />
           <Action access={access} id="openDbtStudio" label="dbt studio" href={`/os/build/runs/${run.run_id}/dbt`} icon={<FileCode2 className="h-3.5 w-3.5" />} />
           {run.current_state === "DBT_REVIEW"
-            ? <Action access={access} id="reviewCode" label="Review and decide" href={`/os/review?run=${run.run_id}`} variant="primary" />
+            ? <Action access={access} id="reviewCode" label="Validate and decide" href={`/os/review?view=selected&run=${run.run_id}`} variant="primary" />
             : <Btn href="/os/release/source-control" variant="primary"><GitPullRequest className="h-3.5 w-3.5" /> Source control</Btn>}
         </>}
       />
+
+      <WorkflowJourneyBar
+        runId={run.run_id}
+        currentStage="publish"
+        generated={!!b.generation}
+        validated={score.total > 0}
+        validationPassed={validated}
+        score={score.score}
+        prPublished={runPrs.length > 0}
+        released={released}
+      />
+
+      {tableRuns.length > 1 && (
+        <div className="os-card mb-4 p-3.5" data-testid="table-runs-switcher">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-[12px]">
+            <span><b>Target tables in this workflow ({tableRuns.length})</b></span>
+            <Link href={`/os/build?view=selected&run=${run.run_id}`} className="os-faint text-[11.5px] font-bold hover:text-[var(--os-ink)]">Build workbench →</Link>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {tableRuns.map((t) => {
+              const name = t.model_entity ?? tableOf(t.target_model) ?? t.run_name;
+              const active = t.run_id === run.run_id;
+              const done = t.current_state === "COMPLETED" || t.current_state === "DBT_APPROVED";
+              const review = t.current_state === "DBT_REVIEW" || t.current_state === "VALIDATION_PASSED";
+              const isFailed = t.current_state === "VALIDATION_FAILED" || t.current_state === "FAILED";
+              return (
+                <Link key={t.run_id} href={`/os/release?run=${encodeURIComponent(t.run_id)}`} scroll={false}
+                      aria-current={active ? "page" : undefined}
+                      className={cn("inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11.5px] font-bold transition",
+                        active ? "border-[var(--os-forest)] bg-[var(--os-green-bg)] text-[var(--os-ink)] shadow-sm"
+                               : "border-[var(--os-line)] bg-[var(--os-surface)] hover:border-[var(--os-forest)]")}>
+                  <span>{name}</span>
+                  <Tag tone={done ? "green" : isFailed ? "red" : review ? "amber" : "blue"}>{stateLabel(t.current_state)}</Tag>
+                </Link>
+              );
+            })}
+          </div>
+        </div>
+      )}
       {validated
         ? <Banner icon={ShieldCheck}>Independent validation passed ({score.score}%, {score.critical} critical) for generation v{b.generation?.generation_version ?? "–"}. Code review, QA and UAT remain in human control.</Banner>
         : <Banner tone="amber" icon={Hand} action={<Btn href={`/os/review?run=${run.run_id}`} variant="warn">Open the gate</Btn>}>This run has not passed validation, so it is not ready for a pull request.</Banner>}
@@ -213,6 +360,6 @@ export default async function CodeAndRelease({ searchParams }: { searchParams: {
           </Card>
         </div>
       </div>
-    </>
+    </div>
   );
 }

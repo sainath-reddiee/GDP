@@ -114,8 +114,14 @@ def prompt(picked: List[Tuple[str, str]], skill: str, standards: str, context: s
 
 
 def mapping_context(lines: List[Dict[str, Any]], limit: int = 4000) -> str:
-    text = "\n".join(f"{line.get('target_column')} {line.get('target_datatype') or ''} {line.get('mapping_type') or ''}"
-                     f"{' required' if line.get('required') else ''}" for line in lines if line.get("target_column"))
+    def _row(line: Dict[str, Any]) -> str:
+        src = line.get("source_column") or ""
+        sdt = line.get("source_datatype") or ""
+        from_part = f" <- {src} ({sdt})" if src and sdt else f" <- {src}" if src else f" ({sdt})" if sdt else ""
+        req = " required" if line.get("required") else ""
+        return f"{line.get('target_column')} {line.get('target_datatype') or ''} {line.get('mapping_type') or ''}{from_part}{req}"
+
+    text = "\n".join(_row(line) for line in lines if line.get("target_column"))
     return text[:limit] or "(no approved mapping lines)"
 
 

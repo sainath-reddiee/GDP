@@ -304,8 +304,9 @@ def refresh(db: Db, requests: List[Dict[str, Any]], write: bool = True) -> List[
                        "phase": a["items"][i["item_id"]]["phase"],
                        "stage": a["items"][i["item_id"]]["stage"], "waits": a["items"][i["item_id"]]["waits"],
                        "attention": a["items"][i["item_id"]].get("attention"),
+                       "active_run_id": a["items"][i["item_id"]].get("run_id") or i.get("run_id"),
                        "run_name": runs.get(i.get("run_id") or "", {}).get("run_name"),
-                       "run_state": runs.get(i.get("run_id") or "", {}).get("current_state")} for i in its],
+                       "run_state": a["items"][i["item_id"]].get("state") or runs.get(i.get("run_id") or "", {}).get("current_state")} for i in its],
         })
     return out
 

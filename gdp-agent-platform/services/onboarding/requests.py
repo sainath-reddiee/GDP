@@ -127,8 +127,11 @@ def _up(v: Optional[str]) -> str:
     return (v or "").strip().upper()
 
 
-def _wait(privilege: str, label: str, item_id: Optional[str] = None) -> Dict[str, Any]:
-    return {"privilege": privilege, "label": label, "item_id": item_id}
+def _wait(privilege: str, label: str, item_id: Optional[str] = None, run_id: Optional[str] = None) -> Dict[str, Any]:
+    out: Dict[str, Any] = {"privilege": privilege, "label": label, "item_id": item_id}
+    if run_id:
+        out["run_id"] = run_id
+    return out
 
 
 def run_status(run: Dict[str, Any], children: Iterable[Dict[str, Any]] = ()) -> Dict[str, Any]:
@@ -139,13 +142,14 @@ def run_status(run: Dict[str, Any], children: Iterable[Dict[str, Any]] = ()) -> 
         parts = [run_status(c) for c in live]
         worst = min(parts, key=lambda p: (stage_index(p["stage"]), p["status"] != "ATTENTION"))
         # the earliest table run's wait first, so the request names the step its stage is at
-        waits = [w for p in sorted(parts, key=lambda p: stage_index(p["stage"])) for w in p["waits"]]
+        waits = [w for p in sorted(parts, key=lambda p: (stage_index(p["stage"]), p["status"] != "ATTENTION")) for w in p["waits"]]
         attention = "; ".join(p["attention"] for p in parts if p["attention"]) or None
         done = sum(p["stage"] == "DONE" for p in parts)
         return {**worst, "waits": _dedupe(waits), "attention": attention,
                 "detail": f"{done} of {len(parts)} table runs done" + (f"; {worst['detail']}" if worst["detail"] and worst["stage"] != "DONE" else "")}
     state = _up(run.get("current_state"))
-    name = run.get("run_name") or run.get("run_id")
+    rid = run.get("run_id")
+    name = run.get("run_name") or rid
     if run.get("is_archived") or run.get("deleted_at"):
         return {"stage": "DESIGN", "status": "ATTENTION", "detail": f"Run {name} was archived",
                 "waits": [_wait("RUN.CREATE", "Start a new run for this source, or link another")],
@@ -159,17 +163,17 @@ def run_status(run: Dict[str, Any], children: Iterable[Dict[str, Any]] = ()) -> 
         stage = RUN_STATES.get(frm, ("DESIGN",))[0] if frm not in DONE_STATES else "BUILD"
         reason = (run.get("failure_reason") or "no reason recorded")[:300]
         return {"stage": stage, "status": "ATTENTION", "detail": f"Run failed: {reason}",
-                "waits": [_wait("RUN.OPERATE", f"{_BUILD}: the run failed; retry or fix it")],
-                "attention": f"Run {name} failed: {reason}"}
+                "waits": [_wait("RUN.OPERATE", f"{_BUILD}: the run failed; retry or fix it", run_id=rid)],
+                "attention": f"Run {name} failed: {reason}", "state": state, "run_id": rid}
     if state in DONE_STATES:
         return {"stage": "DONE", "status": "DONE", "detail": "Code approved" if state == "DBT_APPROVED" else "Completed",
-                "waits": [], "attention": None, "state": state}
+                "waits": [], "attention": None, "state": state, "run_id": rid}
     stage, privilege, label = RUN_STATES.get(state, ("DESIGN", "RUN.OPERATE", f"{_DESIGN}: continue the run ({state.lower()})"))
     status = {"ENABLE": "NOT_LANDED", "DESIGN": "DESIGN", "BUILD": "BUILD", "REVIEW": "REVIEW"}[stage]
     attention = f"Validation failed on {name}" if state == "VALIDATION_FAILED" else None
-    waits = [_wait(privilege, label)] + [_wait(p, text) for p, text in ALSO_WAITS.get(state, [])]
+    waits = [_wait(privilege, label, run_id=rid)] + [_wait(p, text, run_id=rid) for p, text in ALSO_WAITS.get(state, [])]
     return {"stage": stage, "status": "ATTENTION" if attention else status, "detail": label, "waits": waits,
-            "attention": attention, "state": state}
+            "attention": attention, "state": state, "run_id": rid}
 
 
 def _dedupe(waits: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

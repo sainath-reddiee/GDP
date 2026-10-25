@@ -127,6 +127,8 @@ def test_a_multi_table_run_stands_where_its_slowest_table_run_stands():
                      run("CANCELLED", run_id="c3", parent_run_id="run1")]}
     a = assess([item(run_id="run1")], runs={"run1": run("MAPPING_APPROVED")}, children=kids)
     assert a["stage"] == "DESIGN" and a["waiting_on"] == "STTM.APPROVE" and "1 of 2 table runs done" in a["items"]["i1"]["detail"]
+    assert a["items"]["i1"]["run_id"] == "c2" and a["items"]["i1"]["state"] == "STTM_REVIEW"
+    assert a["waits"][0]["run_id"] == "c2"
     done = {"run1": [run("COMPLETED", run_id="c1", parent_run_id="run1"), run("DBT_APPROVED", run_id="c2", parent_run_id="run1")]}
     assert assess([item(run_id="run1")], runs={"run1": run("MAPPING_APPROVED")}, children=done)["stage"] == "DONE"
 

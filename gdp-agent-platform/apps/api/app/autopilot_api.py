@@ -277,6 +277,8 @@ def drive(db: Db, run_id: str, job: Dict[str, Any], log: Optional[Callable[[Dict
     waits = 0
     for _ in range(ap.MAX_STEPS):
         state, facts, _run = _facts(db, run_id)
+        if not done and state == "VALIDATION_FAILED":
+            facts = {**facts, "resume": True}
         nxt = ap.next_action(state, facts)
         if nxt["kind"] == "WAIT":
             waits += 1
@@ -335,16 +337,26 @@ def _start(db: Db, run_id: str) -> Dict[str, Any]:
         try:
             stop = drive(db, run_id, job)
             _state, facts, run = _facts(db, run_id)
-            if facts.get("has_children"):   # a Gold run drives its table runs to their own next gates
+            if facts.get("has_children"):   # a parent run drives its table runs to their own next gates
                 from app.gold_api import _children
 
                 for child in _children(db, run_id):
-                    child_job = {"steps": []}
-                    child_stop = drive(db, child["run_id"], child_job)
-                    job["children"].append({"run_id": child["run_id"], "entity": child.get("entity"),
+                    if str(child.get("current_state") or "").upper() in ("COMPLETED", "DBT_APPROVED", "CANCELLED"):
+                        continue
+                    tag = child.get("entity") or (child.get("fqn") or "").split(".")[-1] or child.get("run_name") or child["run_id"][:8]
+                    child_job: Dict[str, Any] = {"steps": []}
+                    child_stop = drive(db, child["run_id"], child_job,
+                                       log=lambda s, t=tag: job["steps"].append({**s, "label": f"{t}: {s['label']}"}))
+                    job["children"].append({"run_id": child["run_id"], "entity": child.get("entity") or tag,
                                             "steps": child_job["steps"], "stop": child_stop})
-                stop = {"kind": "GATE", "label": "Each table run went as far as autopilot can take it; see the star schema",
-                        "where": "star schema"}
+                if str(run.get("pipeline") or "SILVER").upper() == "GOLD":
+                    stop = {"kind": "GATE", "label": "Each table run went as far as autopilot can take it; see the star schema",
+                            "where": "star schema"}
+                else:
+                    blocked = next((c["stop"] for c in job["children"] if (c.get("stop") or {}).get("kind") == "BLOCKED"), None)
+                    stop = blocked or {"kind": "GATE",
+                                       "label": f"Built {len(job['children'])} table run{'s' if len(job['children']) != 1 else ''} to code review",
+                                       "where": "code review"}
             job.update(status="STOPPED", stop=stop)
         except Exception as exc:
             job.update(status="FAILED", stop={"kind": "BLOCKED", "label": str(exc)[:600]})

@@ -8,7 +8,7 @@ import { guard } from "@/lib/os/session";
 import { actMode } from "@/lib/os/access";
 import { Action } from "@/components/os/action";
 import { gateHref } from "@/lib/os/lifecycle";
-import { boardView, pastStage, runNeedsMe, stageOfRun } from "@/lib/os/work";
+import { boardView, leafRuns, pastStage, resolveBoardRun, runNeedsMe, stageOfRun } from "@/lib/os/work";
 import { Bar, Btn, Card, Empty, Field, SourceError, Tag, ago, pretty } from "@/components/os/ui";
 import { BoardList, BoardTabs, RunCard, Segmented, Track, runTrack } from "@/components/os/stage-board";
 import { HomeSearch } from "@/components/os/home-search";
@@ -33,7 +33,8 @@ export default async function DesignBoard({ searchParams }: { searchParams: Para
   const [domains, runs, sources] = await Promise.all([loadDomains(), loadBoardRuns(), loadSources()]);
   const q = (searchParams.q ?? "").trim().toLowerCase();
   const live = runs.data.runs.filter((r) => !r.is_archived && r.current_state !== "CANCELLED");
-  const listed = live.filter((r) => !q || r.run_name.toLowerCase().includes(q) || (r.domain_name ?? "").toLowerCase().includes(q));
+  const leaves = leafRuns(live);
+  const listed = leaves.filter((r) => !q || r.run_name.toLowerCase().includes(q) || (r.domain_name ?? "").toLowerCase().includes(q));
   const step = TABS.find((t) => t.key === searchParams.tab)?.key ?? null;
   // a failed run is at the step it failed in (its stage name), else the step of its state
   const stepOf = (r: (typeof live)[number]): Tab => r.current_state === "FAILED"
@@ -46,8 +47,8 @@ export default async function DesignBoard({ searchParams }: { searchParams: Para
   const active = lists.active;
   // ?domain= (older links) selects that domain's newest run in design, else its newest run
   const byDomain = searchParams.domain ? domains.data.find((d) => d.domain_id === searchParams.domain)?.domain_name : null;
-  const run = live.find((r) => r.run_id === searchParams.run)
-    ?? (byDomain ? active.find((r) => r.domain_name === byDomain) ?? live.find((r) => r.domain_name === byDomain) : undefined) ?? null;
+  const run = resolveBoardRun(live, searchParams.run, access, "design")
+    ?? (byDomain ? active.find((r) => r.domain_name === byDomain) ?? leaves.find((r) => r.domain_name === byDomain) : undefined) ?? null;
   // Selected with nothing selected opens the first run waiting on the viewer, else the first in design
   const fallback = lists.action[0] ?? lists.active[0] ?? lists.completed[0] ?? null;
   const picked = run ?? (searchParams.view === "selected" ? fallback : null);

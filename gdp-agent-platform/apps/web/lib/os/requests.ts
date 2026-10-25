@@ -6,12 +6,13 @@ export type RequestStatus = "OPEN" | "DONE" | "CANCELLED" | "REJECTED";
 export type RequestType = "SOURCE" | "DOMAIN" | "PRODUCT";
 /** A new domain, source or product, or more from one already on the platform (V078; NEW before it). */
 export type RequestIntent = "NEW" | "ENHANCE";
-export type Wait = { privilege: string; label: string; item_id?: string | null };
+export type Wait = { privilege: string; label: string; item_id?: string | null; run_id?: string | null };
 /** What a request (or one of its sources) is doing, in its owner's words (services/onboarding/requests.py PHASES). */
 export type RequestPhase = "DOMAIN" | "ENABLE" | "ONBOARDED" | "READY" | "IMPACT" | "DESIGN" | "STORED" | "BUILD" | "FLAGGED" | "REVIEW" | "DONE" | "CLOSED";
 
 export type RequestItem = {
   item_id: string; source_system_id: string | null; source_name: string; source_note: string | null; run_id: string | null;
+  active_run_id?: string | null;
   status: string; status_detail: string | null; stage: RequestStage; phase?: RequestPhase; waits: Wait[]; attention: string | null;
   run_name?: string | null; run_state?: string | null; added_by: string; added_at: string; removed_at: string | null;
 };
@@ -43,22 +44,22 @@ export type Duplicate = RequestDetail["duplicates"][number];
 /** The request's path through the platform, in order (DOMAIN only for a request for a new domain). */
 export const REQUEST_STEPS: { stage: RequestStage; label: string; owner: string }[] = [
   { stage: "DOMAIN", label: "Domain", owner: "Data steward" },
-  { stage: "ENABLE", label: "Enable", owner: "Data OS Administrator" },
+  { stage: "ENABLE", label: "Initiate", owner: "Data OS Administrator" },
   { stage: "DESIGN", label: "Design", owner: "Data Designer" },
   { stage: "BUILD", label: "Build", owner: "Forward Engineering Lead" },
-  { stage: "REVIEW", label: "Review", owner: "Data Developer" },
-  { stage: "DONE", label: "Done", owner: "" },
+  { stage: "REVIEW", label: "Validate", owner: "Data Developer" },
+  { stage: "DONE", label: "Publish", owner: "" },
 ];
 
 /** An Enhance source request's own path, the delta flow: the source is already onboarded, so the administrator only
  *  lands what is added (Land the delta, shown only while it is needed) and the Data Designer maps only the delta. */
 export const ENHANCE_SOURCE_STEPS: { stage: RequestStage; label: string; owner: string }[] = [
-  { stage: "NEW", label: "Scope", owner: "Requester" },
-  { stage: "ENABLE", label: "Land the delta", owner: "Data OS Administrator" },
+  { stage: "NEW", label: "Initiate", owner: "Requester" },
+  { stage: "ENABLE", label: "Initiate", owner: "Data OS Administrator" },
   { stage: "DESIGN", label: "Impact & delta mapping", owner: "Data Designer" },
   { stage: "BUILD", label: "Regenerate & regression", owner: "Forward Engineering Lead" },
-  { stage: "REVIEW", label: "Review", owner: "Data Developer" },
-  { stage: "DONE", label: "Done", owner: "" },
+  { stage: "REVIEW", label: "Validate", owner: "Data Developer" },
+  { stage: "DONE", label: "Publish", owner: "" },
 ];
 
 export const stageOwner = (stage: RequestStage) => REQUEST_STEPS.find((s) => s.stage === stage)?.owner ?? "";
@@ -88,7 +89,7 @@ export function requestSteps(r: Pick<OnboardingRequest, "stage" | "status" | "at
 
 export const PHASE: Record<RequestPhase, { label: string; tone: "neutral" | "blue" | "amber" | "green" | "red" | "purple" }> = {
   DOMAIN: { label: "Waiting on the domain", tone: "amber" },
-  ENABLE: { label: "Waiting on admin", tone: "amber" },
+  ENABLE: { label: "Initiate", tone: "amber" },
   ONBOARDED: { label: "Source onboarded", tone: "blue" },
   READY: { label: "Ready to build", tone: "blue" },
   IMPACT: { label: "Impact and delta mapping", tone: "blue" },
@@ -96,8 +97,8 @@ export const PHASE: Record<RequestPhase, { label: string; tone: "neutral" | "blu
   STORED: { label: "Design stored", tone: "purple" },
   BUILD: { label: "Building", tone: "purple" },
   FLAGGED: { label: "Validation flagged", tone: "red" },
-  REVIEW: { label: "In review", tone: "amber" },
-  DONE: { label: "Done", tone: "green" },
+  REVIEW: { label: "In validation", tone: "amber" },
+  DONE: { label: "Published", tone: "green" },
   CLOSED: { label: "Closed", tone: "neutral" },
 };
 
@@ -123,11 +124,13 @@ export function actHref(w: Wait, item: RequestItem | undefined, domainId: string
   if (w.privilege === "DOMAIN.ONBOARD") return `/os/enable/new-domain?${new URLSearchParams({ request: requestId })}`;
   if (w.privilege === "DOMAIN.EDIT") return "/os/knowledge?view=domains";
   if (w.privilege === "MODEL.APPROVE" || w.privilege === "MODEL.EDIT") return domainId ? `/os/knowledge/domains/${domainId}` : "/os/knowledge?view=domains";
-  if (item?.run_id) {
-    const run = encodeURIComponent(item.run_id);
+  const runId = w.run_id ?? item?.active_run_id ?? item?.run_id;
+  if (runId) {
+    const run = encodeURIComponent(runId);
     if (["MAPPING.APPROVE", "STTM.APPROVE", "SODA.APPROVE", "REVIEW.APPROVE", "QA.SIGNOFF"].includes(w.privilege)) {
       return w.privilege === "QA.SIGNOFF" ? `/os/release?run=${run}` : `/os/review?run=${run}`;
     }
+    if (item?.run_state === "VALIDATION_FAILED" || /validation failed/i.test(w.label)) return `/os/review?run=${run}`;
     // the Data Designer's own steps are worked on Design (Build is not theirs: it would refuse them)
     if (["PROFILE.RUN", "MAPPING.DECIDE", "STTM.EDIT", "MODEL.EDIT"].includes(w.privilege)) return `/os/design?view=selected&run=${run}`;
     return `/os/build?view=selected&run=${run}`;

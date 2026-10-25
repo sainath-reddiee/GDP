@@ -69,6 +69,18 @@ def load_inputs(query: Query, run_id: str, plan: Dict[str, Any], sttm: Dict[str,
                     names[str(col["COLUMN_NAME"]).upper()] = str(col["COLUMN_NAME"])
             except Exception:
                 columns, names = {}, {}
+        if not columns and row.get("SOURCE_TABLE"):
+            try:
+                parent_id = run.get("PARENT_RUN_ID") or run_id
+                for col in query("""SELECT COLUMN_NAME, DATA_TYPE
+                                      FROM CORE.PROFILE_REGISTRY
+                                     WHERE RUN_ID IN (?, ?) AND IS_CURRENT AND UPPER(TABLE_NAME) = UPPER(?)
+                                     QUALIFY ROW_NUMBER() OVER (PARTITION BY UPPER(COLUMN_NAME) ORDER BY CREATED_AT DESC) = 1""",
+                                 [run_id, parent_id, str(row["SOURCE_TABLE"])]):
+                    columns[str(col["COLUMN_NAME"]).upper()] = str(col.get("DATA_TYPE") or "")
+                    names[str(col["COLUMN_NAME"]).upper()] = str(col["COLUMN_NAME"])
+            except Exception:
+                pass
         # columns is keyed upper case for matching; names maps back to the exact stored spelling for SQL.
         sources.append({"name": str(row["SOURCE_TABLE"]).upper(), "identifier": table, "database": db,
                         "schema": schema, "columns": columns, "names": names})
@@ -162,7 +174,7 @@ def assemble(inputs: Dict[str, Any], sttm: Dict[str, Any], soda_yaml: str,
     files["mappings/sttm.json"] = json.dumps({
         "sttm_id": sttm.get("sttm_id"), "table_design": sttm.get("table_design"),
         "lines": [{k: l.get(k) for k in ("target_column", "target_datatype", "source_table", "source_column",
-                                         "mapping_type", "transformation", "business_definition")} for l in lines],
+                                         "source_datatype", "mapping_type", "transformation", "business_definition")} for l in lines],
     }, indent=2, default=str)
     files["mappings/sttm.csv"] = render_csv([{k: l.get(k) for k in (
         "target_column", "target_datatype", "mapping_type", "source_table", "source_column", "source_datatype",
