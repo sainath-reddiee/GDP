@@ -31,3 +31,4 @@ deploy-logs/
 .venv/
 
 tests/ui/artifacts/
+tests/ui/snapshots/FAILED_*.png

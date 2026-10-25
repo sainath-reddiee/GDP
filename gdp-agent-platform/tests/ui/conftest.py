@@ -28,8 +28,31 @@ def pytest_configure(config):
         ("smoke", "fast critical-path checks"),
         ("writes", "creates or changes data; needs AIP_UI_ALLOW_WRITES=1"),
         ("pat_only", "only meaningful when AIP_AUTH=pat"),
+        ("journey", "end-to-end user flow"),
+        ("component", "component / page feature test"),
+        ("crawler", "generic every-control crawler"),
+        ("behavior", "cross-cutting behaviour (scroll, keyboard, resilience, browser)"),
+        ("scroll", "scrolling behaviour"),
+        ("keyboard", "keyboard and focus"),
+        ("responsive", "breakpoints, zoom, colour scheme"),
+        ("visual", "visual regression snapshots"),
+        ("resilience", "network failure, session, hostile input"),
+        ("quality", "a11y, performance, console, links"),
     ]:
         config.addinivalue_line("markers", f"{name}: {desc}")
+
+
+# file name prefix -> markers applied automatically, so any category can be run with -m
+_FILE_MARKERS = {
+    "test_journey_": ["journey"], "test_e2e_": ["journey"],
+    "test_interactions_exhaustive": ["crawler"],
+    "test_behavior_scrolling": ["behavior", "scroll"],
+    "test_behavior_keyboard": ["behavior", "keyboard"],
+    "test_behavior_responsive": ["behavior", "responsive"],
+    "test_behavior_resilience": ["behavior", "resilience"],
+    "test_behavior_browser": ["behavior"],
+    "test_quality_gates": ["quality"],
+}
 
 
 def pytest_collection_modifyitems(config, items):
@@ -39,6 +62,12 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         if here in Path(str(item.fspath)).parents:
             item.add_marker(pytest.mark.ui)
+            fname = Path(str(item.fspath)).stem
+            marks = next((m for p, m in _FILE_MARKERS.items() if fname.startswith(p)), ["component"])
+            for m in marks:
+                item.add_marker(getattr(pytest.mark, m))
+            if "test_visual_snapshot" in item.name:
+                item.add_marker(pytest.mark.visual)
         if "writes" in item.keywords and not settings.ALLOW_WRITES:
             item.add_marker(skip_writes)
         if "pat_only" in item.keywords and settings.AUTH_MODE != "pat":

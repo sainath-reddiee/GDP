@@ -19,3 +19,7 @@ EXPECT_TIMEOUT_MS = int(os.environ.get("AIP_UI_EXPECT_TIMEOUT_MS", "30000"))
 ARTIFACTS_DIR = os.environ.get(
     "AIP_UI_ARTIFACTS", os.path.join(os.path.dirname(__file__), "artifacts")
 )
+
+# Visual regression: rewrite baselines, and max share of changed pixels before failing.
+UPDATE_SNAPSHOTS = os.environ.get("AIP_UI_UPDATE_SNAPSHOTS", "0") == "1"
+VISUAL_THRESHOLD = float(os.environ.get("AIP_UI_VISUAL_THRESHOLD", "0.02"))

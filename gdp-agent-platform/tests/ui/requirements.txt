@@ -5,3 +5,4 @@ pytest-xdist>=3.5
 pytest-rerunfailures>=14.0
 pytest-html>=4.1
 httpx>=0.27
+pillow>=10.0
