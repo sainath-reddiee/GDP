@@ -13,6 +13,13 @@ Fully automated browser tests for `apps/web`, covering:
 | `test_quality_gates.py` | Per page: a11y basics, load-time budget, console errors, broken internal links |
 | `test_interactions_exhaustive.py` | On every page and every discovered detail page: clicks **every button** (must respond), selects every tab, toggles every checkbox/switch, picks every dropdown option, types in every field, opens every menu, closes every dialog with Escape, follows every link |
 | `test_classic_topbar.py` | Classic layout: New menu, tickets shortcut, theme toggle, account menu, sign out, layout switch |
+| `test_journey_intake.py` | Request types/intents, form validation, files, new-source chips, file → comment → upload → cancel → reopen → reject, add source, link domain |
+| `test_journey_onboarding.py` | Source wizard choices, share wizard (share → schema → tables → landing → load), ingestion wizard (sections, tables, check, save), domain onboarding paths & import |
+| `test_journey_runs_review.py` | Run list filters/paging, Gold run modal & start, stage rail, run menu, cancel/archive, every stage's primary action, modeling tabs, decision bar, review gate approve/send back, release signoff & publish PR, preview-role lockout |
+| `test_journey_ops.py` | Incident inbox filters/bulk, detail ack/assign/resolve/mute/reopen/retry/diagnose, resolutions, known fix create/save/retire, permanent fix review |
+| `test_journey_skills_copilot.py` | Skill scout, proposals, skill detail/edit/compare, skill builder (all modes), copilot compose/attach/Jira/conversation/publish |
+| `test_journey_ops_admin_tools.py` | Tickets views/filters/sprints, QA suites/assistant, DQ store/suite, people personas/preview, every admin section, lineage trace/direction, code search |
+| `test_e2e_business_flows.py` | Chained use cases: persona tours, request → onboarding handoff → history, Silver pipeline happy path, knowledge contribute → find → verify → retire, incident → known fix |
 
 Destructive buttons (delete/approve/publish/save/run...) are only clicked by the crawler when `AIP_UI_ALLOW_WRITES=1`.
 API tests live in `tests/api` (see its README).

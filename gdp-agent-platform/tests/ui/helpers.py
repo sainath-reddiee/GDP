@@ -68,3 +68,25 @@ def first_link_matching(page: Page, pattern: str) -> str | None:
         if h and rx.search(h):
             return h
     return None
+
+
+def discover(page: Page, list_path: str, pattern: str) -> str:
+    """Open a list page and return the first matching detail href, or skip the test."""
+    import pytest
+
+    open_page(page, list_path)
+    href = first_link_matching(page, pattern)
+    if not href:
+        pytest.skip(f"no record matching {pattern} on {list_path}")
+    return href
+
+
+def unique(prefix: str = "UI-AUTOTEST") -> str:
+    import time
+
+    return f"{prefix} {int(time.time() * 1000) % 10**10}"
+
+
+def status_text(page: Page, text):
+    """Locator for a transient status / alert message."""
+    return page.get_by_text(text).first
