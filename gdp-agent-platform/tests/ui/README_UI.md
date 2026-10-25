@@ -33,6 +33,8 @@ Fully automated browser tests for `apps/web`, covering:
 | `test_behavior_resilience.py` | BFF 500/502/401/403 and aborted requests, slow network, failed server actions, offline → online, static assets, back/forward/reload state, session expiry (page + mid-action), two tabs, sign-out across tabs, XSS / 5000-char / unicode / SQL-ish input in 8 fields, bad query params & ids, double-click submit, paste, rapid navigation |
 | `test_behavior_browser_misc.py` | Hover feedback, icon-button tooltips, safe external links & new tabs, unique page titles, meta/lang/favicon, images load, layout shift (CLS) & LCP, JS memory growth, diagram drag/zoom, copy-to-clipboard, downloads, httpOnly cookies, no secrets in storage, empty and loading states |
 
+| `test_source_driven_controls.py` | Generated from the source: one test per `aria-label` (427) and per `data-testid` (349) in apps/web. Finds the page that renders it, then clicks / types / selects / toggles it by type. Not rendered in this environment = skipped with the source file named. New controls get tests automatically. |
+
 ## Running the framework
 
 ```powershell

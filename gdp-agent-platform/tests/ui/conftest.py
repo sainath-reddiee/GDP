@@ -46,6 +46,7 @@ def pytest_configure(config):
 _FILE_MARKERS = {
     "test_journey_": ["journey"], "test_e2e_": ["journey"],
     "test_interactions_exhaustive": ["crawler"],
+    "test_source_driven": ["crawler", "component"],
     "test_behavior_scrolling": ["behavior", "scroll"],
     "test_behavior_keyboard": ["behavior", "keyboard"],
     "test_behavior_responsive": ["behavior", "responsive"],

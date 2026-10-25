@@ -23,3 +23,5 @@ $env:AIP_API_ALLOW_WRITES="1"; pytest tests/api   # include data-changing tests 
 | `AIP_API_ALLOW_WRITES` | `1` enables write lifecycle tests |
 
 Live tests are skipped automatically when the API is unreachable.
+
+| `test_api_every_route.py` | Generated from the code: every registered route (~700). Offline: each method+path resolves (no 404/405). Live: every GET answers < 500 with real ids; every write rejects malformed JSON with < 500 (writes only). Falls back to parsing router decorators when app.main can't be imported. |
