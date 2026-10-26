@@ -50,6 +50,7 @@ MAX_STEPS = 24
 POST_STTM_BUILD = ("STTM_APPROVED", "SODA_PENDING", "SODA_REVIEW", "SODA_APPROVED", "DBT_PENDING",
                    "VALIDATION_PENDING", "VALIDATION_PASSED", "DBT_REVIEW")
 JUSTIFICATION = "Autopilot: {what}. Review or reopen it from the store."
+DEFAULT_CONFIDENCE_THRESHOLD = 0.85
 
 
 def _act(action: str) -> Dict[str, Any]:
@@ -60,10 +61,52 @@ def _gate(label: str, where: str) -> Dict[str, Any]:
     return {"kind": "GATE", "label": label, "where": where}
 
 
+def mapping_confidence_gate(candidates: List[Dict[str, Any]],
+                            threshold: float = DEFAULT_CONFIDENCE_THRESHOLD,
+                            hard_gate: bool = False) -> Dict[str, Any]:
+    """Evaluate rank-1 AI mapping candidates against a confidence threshold (pure).
+    Returns {total, confident, below_threshold, min_score, avg_score, threshold, requires_human, label}."""
+    best: Dict[Tuple[str, Optional[str]], float] = {}
+    for c in candidates or []:
+        if int(c.get("rank") or 0) != 1:
+            continue
+        key = (str(c.get("source_column_id") or ""), c.get("target_table_id"))
+        score = float(c.get("final_score") or 0.0)
+        if key not in best or score > best[key]:
+            best[key] = score
+    scores = list(best.values())
+    total = len(scores)
+    confident = sum(1 for s in scores if s >= threshold)
+    below = total - confident
+    min_score = round(min(scores), 4) if scores else 0.0
+    avg_score = round(sum(scores) / total, 4) if total else 0.0
+    pct = int(round(threshold * 100))
+    requires_human = bool(hard_gate or total == 0 or below > 0)
+    if total == 0:
+        label = "Review and approve the field mapping"
+    elif below > 0:
+        label = (f"Review and approve the AI field mapping ({confident} of {total} columns >= {pct}% confidence; "
+                 f"{below} below threshold need human verification)")
+    else:
+        label = f"Review and approve the AI field mapping (all {total} columns >= {pct}% confidence; human gate required before autonomous build)"
+    return {
+        "total": total,
+        "confident": confident,
+        "below_threshold": below,
+        "min_score": min_score,
+        "avg_score": avg_score,
+        "threshold": threshold,
+        "requires_human": requires_human,
+        "label": label,
+    }
+
+
 def auto_mapping_decisions(candidates: List[Dict[str, Any]], decided: Iterable[Tuple[str, Optional[str]]],
-                           claimed: Iterable[Tuple[str, Optional[str]]]) -> List[Dict[str, Any]]:
+                           claimed: Iterable[Tuple[str, Optional[str]]],
+                           min_confidence: float = 0.0) -> List[Dict[str, Any]]:
     """One decision per undecided (source column, target table): its rank-1 candidate, approved, best score first; a
-    target column another source already feeds is rejected instead (pure).
+    target column another source already feeds is rejected instead (pure). When `min_confidence > 0`, candidates below
+    `min_confidence` are left undecided for human verification.
 
     candidates: candidate_id, source_column_id, target_column_id, target_table_id, rank, final_score, recommendation.
     decided: (source_column_id, target_table_id) already decided; claimed: (target_column_id, target_table_id) mapped."""
@@ -76,9 +119,11 @@ def auto_mapping_decisions(candidates: List[Dict[str, Any]], decided: Iterable[T
         key = (c["source_column_id"], c.get("target_table_id"))
         if key in done:
             continue
+        score = float(c.get("final_score") or 0)
+        if min_confidence > 0.0 and score < min_confidence:
+            continue
         done.add(key)
         target = (c.get("target_column_id"), c.get("target_table_id"))
-        score = float(c.get("final_score") or 0)
         if not c.get("target_column_id") or target in taken:
             out.append({"candidate_id": c["candidate_id"], "decision": "REJECTED",
                         "business_justification": JUSTIFICATION.format(what="target already mapped from a better match")})
@@ -146,7 +191,10 @@ def next_action(state: str, facts: Dict[str, Any]) -> Dict[str, Any]:
             return _gate("Choose the target model on Modeling", "target model")
         return _act("generate_mapping")
     if state == "MAPPING_REVIEW":
-        return _act("approve_mapping") if auto else _gate("Review and approve the field mapping", "mapping")
+        gate = facts.get("mapping_gate") or {}
+        if not auto or gate.get("requires_human"):
+            return _gate(gate.get("label") or "Review and approve the field mapping", "mapping")
+        return _act("approve_mapping")
     if state in ("MAPPING_APPROVED", "STTM_PENDING") and facts.get("has_children") and not gold:
         runs = facts.get("table_runs") or {}
         if runs.get("total") and runs.get("done") == runs.get("total"):

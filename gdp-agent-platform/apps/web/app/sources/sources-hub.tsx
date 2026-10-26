@@ -524,8 +524,8 @@ export function SourcesHub({
               <RefreshCw className="h-3.5 w-3.5" /> Force re-profile
             </Button>
             <Button size="sm" disabled={!canModel} onClick={() => setModeling([...checked].sort())}
-                    title={canModel ? "Open the modeling panel for these tables" : "Every selected table must be ready (profiled and unchanged)"}>
-              Send to modeling <ArrowRight className="h-3.5 w-3.5" />
+                    title={canModel ? "Select domain and target models to start build" : "Every selected table must be ready (profiled and unchanged)"}>
+              Start build <ArrowRight className="h-3.5 w-3.5" />
             </Button>
             <button type="button" aria-label="Clear selection" onClick={() => setChecked([])}
                     className="ml-1 rounded-full p-1 text-muted-foreground hover:bg-muted hover:text-foreground">

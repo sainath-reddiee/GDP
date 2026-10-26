@@ -206,6 +206,19 @@ def _friendly(exc: BaseException) -> str:
 
 
 def _open_dev():
+    dev_pat = (os.environ.get("AIP_DEV_PAT") or "").strip()
+    if dev_pat:
+        return snowflake.connector.connect(
+            account=ACCOUNT or "ANBLICKSORG-ANBLICKSORG_AWS",
+            user=os.environ.get("AIP_DEV_USER") or "SATYASAINATH",
+            authenticator="PROGRAMMATIC_ACCESS_TOKEN",
+            token=dev_pat,
+            warehouse=WAREHOUSE,
+            database=DATABASE,
+            role=ROLE or "SYSADMIN",
+            client_session_keep_alive=True,
+            login_timeout=30,
+        )
     kwargs: dict[str, Any] = {
         "connection_name": CONNECTION,
         "warehouse": WAREHOUSE,

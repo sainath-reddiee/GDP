@@ -46,6 +46,7 @@ export async function catalogModelingRun(body: {
   modeling_standard: "GDP" | "GENERIC";
   targets: { fqn: string; target_table: string; domain_name?: string | null; target_table_id?: string | null }[];
   proposed_name?: string | null; proposed_schema?: string | null;
+  autopilot?: boolean;
 }) {
   const result = await attemptValue(() =>
     api<{ run_id: string; stage: string; error?: string }>("/api/catalog/modeling-run", {

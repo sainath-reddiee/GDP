@@ -393,7 +393,9 @@ def list_requests(scope: str = Query("all", pattern="^(all|mine|waiting)$"), sta
     rows = _visible(db, who, _load(db, " AND ".join(where), tuple(params)))
     live = [r for r in rows if r.get("status") == rq.OPEN]
     closed = [r for r in rows if r.get("status") != rq.OPEN][: max(0, limit - len(live)) if status == "ALL" else limit]
-    out = refresh(db, live) + [{**_out(r), "items": [], "waits": []} for r in closed]
+    recent_closed = closed[:15]
+    older_closed = closed[15:]
+    out = refresh(db, live + recent_closed) + [{**_out(r), "items": [], "waits": []} for r in older_closed]
     if scope == "waiting":
         out = [r for r in out if r.get("status") == rq.OPEN and any(_holds(who, w["privilege"]) for w in r.get("waits", []))]
     out.sort(key=lambda r: (r.get("status") == rq.OPEN, str(r.get("updated_at") or "")), reverse=True)

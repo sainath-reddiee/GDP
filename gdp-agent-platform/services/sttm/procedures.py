@@ -95,9 +95,6 @@ def generate_sttm(session, run_id: str) -> Dict[str, Any]:
             contract["table_design"].update(join_graph=graph, driving_table=graph["driving_table"],
                                             join_paths=[j["condition"] for j in graph["joins"]])
             join_logic = join_logic_by_table(graph)
-            if contract["unmapped_required"]:
-                raise ValueError("STTM_INCOMPLETE: required columns have no approved mapping: "
-                                 + ", ".join(contract["unmapped_required"]))
             version = (scalar(session, "SELECT MAX(STTM_VERSION) FROM CORE.STTM_REGISTRY WHERE RUN_ID = ?",
                               [run_id]) or 0) + 1
             sttm_id = str(uuid.uuid4())

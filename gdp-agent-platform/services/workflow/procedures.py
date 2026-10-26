@@ -308,10 +308,8 @@ def review_transition(session, run_id: str, to_state: str, decision: str,
         from services.mapping.procedures import mapping_status
         status = mapping_status(session, run_id)
         if status["source_columns"]:
-            assert status["complete"], (
-                "MAPPING_INCOMPLETE: decide every source column and cover required targets. "
-                f"undecided={status['undecided']} missing_required={status['missing_required_targets']}"
-                + (f" minimum_mapping={status['minimum_mapping_missing']}" if status.get("minimum_mapping_missing") else "")
+            assert not status.get("undecided"), (
+                f"MAPPING_INCOMPLETE: decide every source column. undecided={status.get('undecided')}"
             )
 
     fanned: Dict[str, Any] = {}

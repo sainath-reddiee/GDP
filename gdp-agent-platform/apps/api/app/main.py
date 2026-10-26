@@ -1258,20 +1258,58 @@ def model_design_diff(run_id: str, base: int, compare: int, db: Db = Depends(cur
 
 
 @app.post("/api/runs/{run_id}/review")
-def review(run_id: str, body: Review, db: Db = Depends(current_db)):
+def review(run_id: str, body: Review, db: Db = Depends(current_db), on_behalf: bool = False):
     if str(body.to_state).upper() == "DBT_APPROVED" and str(body.decision).upper() == "APPROVE":
         current = db.query("SELECT CURRENT_STATE FROM CORE.WORKFLOW_RUN WHERE RUN_ID = %s", (run_id,))
         lanes = _run_lanes(db, run_id, current[0]["current_state"] if current else None)
         if lanes and not lanes["gate"]["ready"]:
             raise HTTPException(409, "Code review needs every parallel lane finished first: "
                                      + "; ".join(lanes["gate"]["waiting_on"]))
+    if str(body.to_state).upper() == "MAPPING_APPROVED" and str(body.decision).upper() == "APPROVE" and isinstance(db, Db):
+        try:
+            from services.workflow import autopilot as ap
+
+            candidates = db.query("""SELECT C.CANDIDATE_ID, C.SOURCE_COLUMN_ID, C.TARGET_COLUMN_ID, C.RANK, C.FINAL_SCORE,
+                                            C.RECOMMENDATION, COALESCE(C.TARGET_TABLE_ID, T.TARGET_TABLE_ID) AS TARGET_TABLE_ID
+                                       FROM CORE.MAPPING_CANDIDATE C
+                                       LEFT JOIN CORE.TARGET_COLUMN_REGISTRY T ON T.TARGET_COLUMN_ID = C.TARGET_COLUMN_ID
+                                      WHERE C.RUN_ID = %s AND C.IS_CURRENT""", (run_id,))
+            current_dec = db.query("""SELECT D.SOURCE_COLUMN_ID, D.TARGET_COLUMN_ID, D.DECISION,
+                                             COALESCE(D.TARGET_TABLE_ID, T.TARGET_TABLE_ID) AS TARGET_TABLE_ID
+                                        FROM CORE.MAPPING_DECISION D
+                                        LEFT JOIN CORE.TARGET_COLUMN_REGISTRY T ON T.TARGET_COLUMN_ID = D.TARGET_COLUMN_ID
+                                       WHERE D.RUN_ID = %s AND D.IS_CURRENT""", (run_id,))
+            pending = ap.auto_mapping_decisions(
+                candidates,
+                [(d["source_column_id"], d.get("target_table_id")) for d in current_dec],
+                [(d["target_column_id"], d.get("target_table_id")) for d in current_dec
+                 if d["decision"] != "REJECTED" and d.get("target_column_id")],
+            )
+            if pending:
+                save_mapping(run_id, MappingDecisions(decisions=pending), db)
+        except Exception:
+            pass
     try:
-        return db.call(
+        res = db.call(
             "CALL CORE.REVIEW_TRANSITION(%s, %s, %s, %s, %s)",
             (run_id, body.to_state, body.decision, body.business_justification, body.comments),
         )
     except Exception as exc:
         raise _snowflake_error(exc) from exc
+    if (
+        str(body.to_state).upper() == "MAPPING_APPROVED"
+        and str(body.decision).upper() == "APPROVE"
+        and not on_behalf
+        and isinstance(db, Db)
+    ):
+        try:
+            from app.autopilot_api import _autonomous, _start
+
+            if _autonomous(db):
+                _start(db, run_id)
+        except Exception:
+            pass
+    return res
 
 
 SAFE_IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]{0,254}$")
@@ -1515,6 +1553,10 @@ def _targets_with_columns(db: Db) -> list[dict]:
     out = []
     for row in rows:
         if is_hidden_target(row):
+            continue
+        tdb_u = str(row.get("target_database") or "").upper()
+        tsch_u = str(row.get("target_schema") or "").upper()
+        if "BRONZE" in tdb_u or "BRONZE" in tsch_u:
             continue
         fqn = f"{row['target_database']}.{row['target_schema']}.{row['target_table']}"
         out.append({**row, "fqn": fqn, "columns": by_table.get(row["target_table"], [])})
@@ -2557,9 +2599,15 @@ def generate_mapping(run_id: str, db: Db = Depends(current_db)):
             raise HTTPException(409, "The run's model change is waiting in the Model Workbench; mapping starts once a model "
                                      "approver approves it (or withdraw the proposal to map to the current target).")
     try:
-        return db.call("CALL CORE.GENERATE_MAPPING_CANDIDATES(%s)", (run_id,))
+        res = db.call("CALL CORE.GENERATE_MAPPING_CANDIDATES(%s)", (run_id,))
     except Exception as exc:
         raise _snowflake_error(exc) from exc
+    if isinstance(db, Db):
+        try:
+            _apply_default_ai_mapping(run_id, db)
+        except Exception:
+            pass
+    return res
 
 
 @app.post("/api/runs/{run_id}/mapping/decisions")
@@ -2746,7 +2794,11 @@ def _mapping_status(db: Db, run_id: str, candidates: list, decisions: list, targ
 
     if candidates:
         try:
-            return invoke_source(db, mapping_status, run_id)
+            out = invoke_source(db, mapping_status, run_id)
+            out["minimum_mapping_missing"] = []
+            out["minimum_mapping_unavailable"] = []
+            out["complete"] = bool(out.get("source_columns")) and not out.get("undecided")
+            return out
         except Exception:
             pass
     from services.common.standard import SYSTEM_DERIVED as system_derived
@@ -2757,7 +2809,8 @@ def _mapping_status(db: Db, run_id: str, candidates: list, decisions: list, targ
                if not t["nullable"] and t["semantic_type"] not in system_derived and t["target_column_id"] not in mapped]
     undecided = sorted({c["source_column"] for c in candidates if c["source_column_id"] not in decided})
     return {"source_columns": len(sources), "decided": len(sources & decided), "undecided": undecided,
-            "missing_required_targets": missing, "complete": bool(sources) and sources <= decided and not missing}
+            "missing_required_targets": missing, "minimum_mapping_missing": [], "minimum_mapping_unavailable": [],
+            "complete": bool(sources) and sources <= decided}
 
 
 class TableRunsPublish(BaseModel):
@@ -2812,6 +2865,81 @@ def _mapping_assist_knowledge(db: Db, run_id: str, table: dict, targets: list) -
     return known.get("notes") or [], {k: v for k, v in notes.items() if v}
 
 
+def _target_sample_values(db: Db, table: dict, targets: list[dict]) -> dict[str, list]:
+    """Sample up to 25 rows from the target Silver table (or cached profile) to enrich Cortex mapping prompts."""
+    if not isinstance(db, Db) or not table or not targets:
+        return {}
+    tdb = str(table.get("target_database") or "").strip()
+    tsch = str(table.get("target_schema") or "").strip()
+    ttbl = str(table.get("target_table") or "").strip()
+    if not (tdb and tsch and ttbl):
+        return {}
+    out: dict[str, list] = {}
+    try:
+        rows = db.query(
+            f"SELECT * FROM {_quote_ident(tdb)}.{_quote_ident(tsch)}.{_quote_ident(ttbl)} LIMIT 25"
+        )
+        if rows:
+            for t in targets:
+                col = str(t.get("column_name") or "")
+                col_l = col.lower()
+                vals: list = []
+                for r in rows:
+                    v = r.get(col_l) if col_l in r else r.get(col)
+                    if v is not None and str(v).strip() != "":
+                        sv = str(v)[:80]
+                        if sv not in vals:
+                            vals.append(sv)
+                    if len(vals) >= 5:
+                        break
+                if vals:
+                    out[col.upper()] = vals
+    except Exception:
+        pass
+    return out
+
+
+def _apply_default_ai_mapping(run_id: str, db: Db) -> dict:
+    """Run Cortex AI mapping copilot (with source + target samples) and apply its suggestions as the default mapping."""
+    if not isinstance(db, Db):
+        return {}
+    ai = mapping_assist(run_id, MappingAssist(), db)
+    suggestions = ai.get("suggestions") or []
+    if not suggestions:
+        return {}
+    decisions = []
+    for s in suggestions:
+        cid = s.get("candidate_id")
+        conf = float(s.get("confidence") or 0.85)
+        reason = f"AI copilot: {s.get('reason') or ''}".strip()
+        trans = s.get("transformation")
+        if cid:
+            try:
+                db.execute(
+                    """
+                    UPDATE CORE.MAPPING_CANDIDATE
+                       SET FINAL_SCORE = GREATEST(FINAL_SCORE, %s),
+                           CONFIDENCE = GREATEST(CONFIDENCE, %s),
+                           RECOMMENDATION = IFF(%s >= 0.6, 'AUTO_SUGGEST', RECOMMENDATION),
+                           TRANSFORMATION = COALESCE(NULLIF(%s, ''), TRANSFORMATION),
+                           GENERATED_REASON = %s
+                     WHERE CANDIDATE_ID = %s AND RUN_ID = %s
+                    """,
+                    (conf, conf, conf, trans or "", reason[:1000], cid, run_id),
+                )
+            except Exception:
+                pass
+        if s.get("decision"):
+            decisions.append(s["decision"])
+    if decisions:
+        try:
+            save_mapping(run_id, MappingDecisions(decisions=decisions), db)
+        except Exception:
+            pass
+    _drop_run(run_id)
+    return {"applied": len(decisions), "model": ai.get("model")}
+
+
 @app.post("/api/runs/{run_id}/mapping/assist")
 def mapping_assist(run_id: str, body: MappingAssist, db: Db = Depends(current_db)):
     """AI copilot: proposes a decision per column and target table, one call per table (each with that table's
@@ -2864,6 +2992,9 @@ def mapping_assist(run_id: str, body: MappingAssist, db: Db = Depends(current_db
             continue
         budget -= len(sources)
         targets = [t for t in data["targets"] if table_of(t) == tid]
+        tgt_samples = _target_sample_values(db, table, targets)
+        if tgt_samples:
+            targets = [{**t, "values": tgt_samples.get(str(t.get("column_name") or "").upper())} for t in targets]
         notes, target_notes = _mapping_assist_knowledge(db, run_id, table, targets)
         prompt = assist.build_prompt(sources, by_source, targets, table["target_table"], taken, body.instructions,
                                      notes, target_notes)
@@ -4722,6 +4853,7 @@ class ModelingRunRequest(BaseModel):
     proposed_name: Optional[str] = Field(default=None, max_length=255)
     proposed_schema: Optional[str] = Field(default=None, max_length=255)
     modeling_standard: Literal["GDP", "GENERIC"] = "GENERIC"
+    autopilot: bool = False
 
 
 def _proposed_name(tables: list[str]) -> str:
@@ -4776,6 +4908,119 @@ def _register_proposed_target(db: Db, src: dict, tables: list[str], domain_id: O
             "target_table_id": registered["target_table_id"], "domain_id": registered.get("domain_id")}
 
 
+def _lock_selected_targets(db: Db, run_id: str, domain_id: Optional[str], targets: list[dict]) -> None:
+    """Lock the user's selected Silver target models onto the run immediately (CORE.WORKFLOW_RUN + CORE.RUN_TARGET +
+    CORE.MODEL_DESIGN APPROVED) so the run never stops on a draft model design screen."""
+    if not isinstance(db, Db) or not run_id or not targets:
+        return
+    try:
+        resolved: list[dict] = []
+        for idx, t in enumerate(targets, start=1):
+            tid = t.get("target_table_id")
+            fqn_str = str(t.get("fqn") or "").strip()
+            parts = fqn_str.split(".")
+            rows_t = []
+            if tid:
+                rows_t = db.query(
+                    "SELECT TARGET_TABLE_ID, DOMAIN_ID, TARGET_DATABASE, TARGET_SCHEMA, TARGET_TABLE, TABLE_TYPE "
+                    "FROM CORE.TARGET_TABLE_REGISTRY WHERE TARGET_TABLE_ID = %s AND ACTIVE_FLAG LIMIT 1",
+                    (tid,),
+                )
+            if not rows_t and len(parts) == 3:
+                rows_t = db.query(
+                    "SELECT TARGET_TABLE_ID, DOMAIN_ID, TARGET_DATABASE, TARGET_SCHEMA, TARGET_TABLE, TABLE_TYPE "
+                    "FROM CORE.TARGET_TABLE_REGISTRY WHERE ACTIVE_FLAG AND UPPER(TARGET_DATABASE) = UPPER(%s) "
+                    "AND UPPER(TARGET_SCHEMA) = UPPER(%s) AND UPPER(TARGET_TABLE) = UPPER(%s) LIMIT 1",
+                    (parts[0], parts[1], parts[2]),
+                )
+            if rows_t:
+                r0 = rows_t[0]
+                resolved.append({
+                    "target_table_id": r0["target_table_id"],
+                    "domain_id": r0.get("domain_id") or domain_id,
+                    "entity": str(r0["target_table"]).upper(),
+                    "fqn": f"{r0['target_database']}.{r0['target_schema']}.{r0['target_table']}",
+                    "role": "HUB" if str(r0.get("table_type") or "").upper() == "HUB" else ("SPOKE" if idx > 1 else "TABLE"),
+                    "ordinal": idx,
+                })
+        if not resolved:
+            return
+        eff_domain = domain_id or resolved[0].get("domain_id")
+        model_id = f"MDL_{eff_domain or 'LOCKED'}"
+        model_version = 1
+        if eff_domain:
+            dm = db.query(
+                "SELECT MODEL_ID, APPROVED_VERSION FROM CORE.DOMAIN_MODEL WHERE DOMAIN_ID = %s AND COALESCE(LAYER, 'SILVER') = 'SILVER' LIMIT 1",
+                (eff_domain,),
+            )
+            if dm and dm[0].get("model_id"):
+                model_id = dm[0]["model_id"]
+                model_version = int(dm[0].get("approved_version") or 1)
+        primary = resolved[0]
+        db.execute(
+            "UPDATE CORE.WORKFLOW_RUN SET MODEL_ID = %s, MODEL_VERSION = %s, MODEL_ENTITY = %s, TARGET_MODEL = %s, "
+            "DOMAIN_ID = COALESCE(DOMAIN_ID, %s), UPDATED_AT = CURRENT_TIMESTAMP() WHERE RUN_ID = %s",
+            (model_id, model_version, primary["entity"], primary["fqn"], eff_domain, run_id),
+        )
+        try:
+            db.execute("UPDATE CORE.RUN_TARGET SET IS_CURRENT = FALSE WHERE RUN_ID = %s AND IS_CURRENT", (run_id,))
+            for rt in resolved:
+                db.execute(
+                    "INSERT INTO CORE.RUN_TARGET (RUN_TARGET_ID, RUN_ID, MODEL_ID, MODEL_VERSION, ENTITY_NAME, TARGET_FQN, "
+                    "TARGET_TABLE_ID, ROLE, ORDINAL, INCLUDED, IS_CURRENT) "
+                    "SELECT %s, %s, %s, %s, %s, %s, %s, %s, %s, TRUE, TRUE",
+                    (str(uuid.uuid4()), run_id, model_id, model_version, rt["entity"], rt["fqn"],
+                     rt["target_table_id"], rt["role"], rt["ordinal"]),
+                )
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
+def _ensure_store_request(
+    db: Db,
+    run_id: str,
+    run_name: str,
+    domain_id: Optional[str],
+    src: dict,
+    tables: list[str],
+    targets: list[dict],
+) -> Optional[str]:
+    """Ensure a Store-launched build run has an ONBOARDING_REQUEST + ONBOARDING_REQUEST_ITEM so it appears on Home (/os)."""
+    try:
+        existing = db.query(
+            "SELECT REQUEST_ID FROM CORE.ONBOARDING_REQUEST_ITEM WHERE RUN_ID = %s AND REMOVED_AT IS NULL LIMIT 1",
+            (run_id,),
+        )
+        if existing:
+            return existing[0]["request_id"]
+        request_id = str(uuid.uuid4())
+        item_id = str(uuid.uuid4())
+        target_names = ", ".join(str(t.get("fqn") or "").split(".")[-1] for t in targets if t.get("fqn"))
+        db.execute(
+            """INSERT INTO CORE.ONBOARDING_REQUEST
+               (REQUEST_ID, REQUEST_TYPE, INTENT, TITLE, BUSINESS_OUTCOME, DOMAIN_ID, PIPELINE, PRIORITY, STATUS, STAGE, REQUESTED_BY)
+               VALUES (%s, 'SOURCE', 'ENHANCE', %s, NULL, %s, 'SILVER', 'HIGH', 'OPEN', 'BUILD', CURRENT_USER())""",
+            (request_id, run_name[:256], domain_id),
+        )
+        src_sys = db.query(
+            "SELECT SOURCE_SYSTEM_ID FROM CORE.WORKFLOW_RUN WHERE RUN_ID = %s",
+            (run_id,),
+        )
+        sys_id = (src_sys[0].get("source_system_id") if src_sys else None) or src.get("source_system_id")
+        note = f"Tables: {', '.join(tables)}" + (f" → {target_names}" if target_names else "")
+        db.execute(
+            """INSERT INTO CORE.ONBOARDING_REQUEST_ITEM
+               (ITEM_ID, REQUEST_ID, SOURCE_SYSTEM_ID, SOURCE_NAME, SOURCE_NOTE, RUN_ID, STATUS, ADDED_BY)
+               VALUES (%s, %s, %s, %s, %s, %s, 'BUILDING', CURRENT_USER())""",
+            (item_id, request_id, sys_id, str(src.get("source_system_name") or src.get("schema_name"))[:256], note[:2000], run_id),
+        )
+        return request_id
+    except Exception:
+        return None
+
+
 @app.post("/api/sources/{source_id}/modeling-run")
 def send_to_modeling(source_id: str, body: ModelingRunRequest, db: Db = Depends(current_db)):
     """Create a run from staged tables: register, validate access and bind the tables in place (no copy),
@@ -4798,12 +5043,21 @@ def send_to_modeling(source_id: str, body: ModelingRunRequest, db: Db = Depends(
                    "source_type": src["source_type"], "tables": tables},
         "target": {"storage_type": "IN_PLACE"},
     }
-    created = create_run(CreateRun(run_name=run_name, domain_id=body.domain_id or (proposed or {}).get("domain_id"),
+    resolved_domain_id = body.domain_id or (proposed or {}).get("domain_id")
+    created = create_run(CreateRun(run_name=run_name, domain_id=resolved_domain_id,
                                    target_model=targets[0]["fqn"] if targets else proposed["fqn"], intent=intent,
                                    modeling_standard=body.modeling_standard), db)
     run_id = created.get("run_id")
     if created.get("registration_error"):
         return {"run_id": run_id, "stage": "SOURCE", "error": created["registration_error"]}
+    if targets:
+        _lock_selected_targets(db, run_id, resolved_domain_id, targets)
+    request_id = _ensure_store_request(db, run_id, run_name, resolved_domain_id, src, tables, targets)
+    if body.autopilot:
+        from app import autopilot_api
+
+        autopilot_api._start(db, run_id)
+        return {"run_id": run_id, "request_id": request_id, "stage": "AUTOPILOT", "autopilot": True, "state": "SOURCE_REGISTERED"}
     prepared = prepare_source(run_id, AccessRequest(selected=tables), db)
     if not prepared.get("passed"):
         return {"run_id": run_id, "stage": "SOURCE", "error": "access check failed; open the run to see which table"}
@@ -5265,6 +5519,7 @@ class CatalogModelingRequest(CatalogTarget):
     proposed_name: Optional[str] = Field(default=None, max_length=255)
     proposed_schema: Optional[str] = Field(default=None, max_length=255)
     modeling_standard: Literal["GDP", "GENERIC"] = "GENERIC"
+    autopilot: bool = False
 
 
 @app.post("/api/catalog/modeling-run")
@@ -5273,7 +5528,7 @@ def catalog_modeling_run(body: CatalogModelingRequest, db: Db = Depends(current_
     return send_to_modeling(src["source_system_id"], ModelingRunRequest(
         tables=body.tables, run_name=body.run_name, domain_id=body.domain_id, targets=body.targets,
         proposed_name=body.proposed_name, proposed_schema=body.proposed_schema,
-        modeling_standard=body.modeling_standard), db)
+        modeling_standard=body.modeling_standard, autopilot=body.autopilot), db)
 
 
 def _value_relationships(db: Db, database: str, schema: str, docs: dict) -> list[dict]:

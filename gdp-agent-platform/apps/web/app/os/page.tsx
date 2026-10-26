@@ -62,7 +62,12 @@ export default async function Home({ searchParams }: { searchParams: Params }) {
   const [list, domains, searched] = await Promise.all([loadRequests("all", "ALL", undefined, true), loadDomains(),
     query ? loadWorkflowSearch(query) : Promise.resolve(null)]);
   const all = list.data.requests;
-  const active = all.filter((r) => r.status === "OPEN");
+  const recentDoneCutoff = Date.now() - 2 * 3600 * 1000;
+  const active = all.filter(
+    (r) =>
+      r.status === "OPEN" ||
+      (r.status === "DONE" && new Date(r.closed_at ?? r.updated_at).getTime() >= recentDoneCutoff),
+  );
   const action = active.filter((r) => yours(r, access));
   const views = { active, action, all };
 

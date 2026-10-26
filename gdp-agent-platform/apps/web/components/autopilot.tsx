@@ -17,11 +17,17 @@ export function Autopilot({ runId, disabled }: { runId: string; disabled?: boole
   const [error, setError] = useState("");
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const prevSteps = useRef<number>(0);
   const poll = () => {
     void autopilotStatus(runId).then((r) => {
       if (!r.ok) { setError(r.error); return; }
       setJob(r.data);
-      if (r.data.status === "RUNNING") timer.current = setTimeout(poll, 3000);
+      const count = (r.data.steps?.length ?? 0) + (r.data.children?.reduce((n, c) => n + (c.steps?.length ?? 0), 0) ?? 0);
+      if (count !== prevSteps.current) {
+        prevSteps.current = count;
+        router.refresh();
+      }
+      if (r.data.status === "RUNNING") timer.current = setTimeout(poll, 2000);
       else router.refresh();
     });
   };

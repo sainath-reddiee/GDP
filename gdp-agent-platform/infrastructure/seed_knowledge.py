@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DOMAIN_DIR = ROOT / "domain"
 DOMAIN_PACK = DOMAIN_DIR / "gdp" / "domain_pack.json"
 RUNBOOK_PACK = DOMAIN_DIR / "general" / "airflow_runbook_pack.json"
+ERROR_PACK = DOMAIN_DIR / "general" / "airflow_error_pack.json"
 SKILLS_DIR = ROOT / "snowflake" / "skills"
 FRONTMATTER = re.compile(r"^---\n(.*?)\n---\n(.*)$", re.S)
 
@@ -43,6 +44,14 @@ PLATFORM_CONFIG = [
      "Catalog objects hidden from task screens and product tokens stripped from suggested names (editable in Admin)"),
     ("INGESTION_INTAKE_FORM", INTAKE_FORM,
      "Questions the Source Hub asks for an external pipeline; answers go to CORE.INGESTION_PIPELINE_CATALOG"),
+    ("AUTONOMOUS_HAPPY_PATH", True,
+     "Autonomous end-to-end happy-path execution without manual gate stops unless validation fails"),
+    ("AUTOPILOT_APPROVES_DQ", True,
+     "Autopilot approves proposed Soda Data Quality expectations on behalf of the steward"),
+    ("MAPPING_CONFIDENCE_THRESHOLD", 0.85,
+     "Minimum AI candidate score (0.85 = 85%) for pre-selecting field mappings at the Mapping Human Gate"),
+    ("MAPPING_HARD_GATE", True,
+     "Require human confirmation at MAPPING_REVIEW before running the post-mapping autonomous pipeline"),
 ]
 
 
@@ -711,10 +720,15 @@ def seed_platform(cur, database: str) -> List[str]:
 
 
 def load_runbooks() -> List[Dict[str, Any]]:
-    """The shipped AIRFLOW_RUNBOOK items (the Airflow knowledge pack's runbooks)."""
-    if not RUNBOOK_PACK.exists():
-        return []
-    return list(json.loads(RUNBOOK_PACK.read_text(encoding="utf-8")).get("knowledge") or [])
+    """The shipped AIRFLOW_RUNBOOK items (airflow_runbook_pack.json plus learned airflow_error_pack.json)."""
+    by_key: Dict[str, Dict[str, Any]] = {}
+    for pack in (RUNBOOK_PACK, ERROR_PACK):
+        if not pack.exists():
+            continue
+        for item in json.loads(pack.read_text(encoding="utf-8")).get("knowledge") or []:
+            if item.get("key"):
+                by_key[item["key"]] = item
+    return list(by_key.values())
 
 
 class _CursorDb:

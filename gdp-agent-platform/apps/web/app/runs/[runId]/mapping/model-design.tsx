@@ -275,7 +275,9 @@ export function ModelDesign({ runId, data, canApply, state, canEdit = true, canA
   const toast = useToast();
   // approving or proposing refreshes the run layout, which can remount this section: the toast outlives it
   const say = (ok: boolean, text: string) => { setMessage({ ok, text }); toast(ok ? "ok" : "error", text); };
-  const [collapsed, setCollapsed] = useState(Boolean(data.approved) && !["DOMAIN_IDENTIFIED", "PROFILING_COMPLETE"].includes(state));
+  const [collapsed, setCollapsed] = useState(
+    Boolean(data.approved || data.workbench?.model_id || data.target_model),
+  );
 
   // after a generate/save the page refreshes with the new version: load it unless the user is mid-edit
   useEffect(() => {

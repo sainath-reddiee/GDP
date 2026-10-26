@@ -46,6 +46,7 @@ def build_prompt(sources: List[Dict[str, Any]], candidates: Dict[str, List[Dict[
         + (" (already mapped by the reviewer)" if t["target_column_id"] in taken else "")
         + (f": {t['definition']}" if t.get("definition") else "")
         + (f" [{target_notes[t['column_name']]}]" if target_notes.get(t["column_name"]) else "")
+        + (f" (sample values: {', '.join(map(str, t['values'][:5]))})" if t.get("values") else "")
         for t in targets
     ]
     blocks = []

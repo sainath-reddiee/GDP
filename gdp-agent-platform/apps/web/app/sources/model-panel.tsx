@@ -61,7 +61,19 @@ export function ModelPanel({ database, schema, tables, domains, onClose }: {
     return () => { live = false; window.removeEventListener("keydown", onKey); };
   }, [database, schema, tables, domains, onClose]);
 
-  const existing = (data?.models.suggestions ?? []).filter((s) => s.kind === "existing");
+  const selectedDomainName = useMemo(
+    () => domains.find((d) => d.domain_id === domainId)?.domain_name?.toUpperCase() ?? data?.domain?.detected?.domain_name?.toUpperCase() ?? "",
+    [domains, domainId, data],
+  );
+  const existing = useMemo(() => {
+    const raw = (data?.models.suggestions ?? []).filter(
+      (s) => s.kind === "existing" && !/(\.|^)[^.]*bronze/i.test(s.fqn),
+    );
+    if (!selectedDomainName) return raw;
+    const inDom = raw.filter((s) => (s.domain_name ?? "").toUpperCase() === selectedDomainName || s.fqn.toUpperCase().includes(`.${selectedDomainName}.`));
+    const other = raw.filter((s) => !inDom.includes(s));
+    return [...inDom, ...other];
+  }, [data, selectedDomainName]);
   const proposed = (data?.models.suggestions ?? []).find((s) => s.kind === "proposed");
 
   const graph: ModelGraph | null = useMemo(() => {
@@ -91,10 +103,13 @@ export function ModelPanel({ database, schema, tables, domains, onClose }: {
     const r = await catalogModelingRun({
       database, schema, tables, run_name: runName || null, domain_id: domainId || null, targets,
       modeling_standard: standard ?? "GENERIC",
+      autopilot: true,
       ...(mode === "new" ? { proposed_name: proposedName.trim() || null, proposed_schema: proposedSchema.trim() || null } : {}),
     });
     if (!r.ok) { setError(r.error); return; }
-    router.push(r.data.error ? `/os/build/runs/${r.data.run_id}/source` : `/os/build/runs/${r.data.run_id}/modeling?tab=mapping`);
+    onClose();
+    router.push(r.data.error ? `/os/build/runs/${r.data.run_id}/source` : `/os`);
+    router.refresh();
   });
 
   const rec = data?.models.recommendation;
@@ -119,7 +134,7 @@ export function ModelPanel({ database, schema, tables, domains, onClose }: {
         <header className="flex items-start gap-3 border-b px-6 py-4">
           <Layers className="mt-0.5 h-5 w-5 text-primary" />
           <div>
-            <h3 className="text-base font-semibold">Model {tables.length} staged table{tables.length === 1 ? "" : "s"}</h3>
+            <h3 className="text-base font-semibold">Start build · {tables.length} staged table{tables.length === 1 ? "" : "s"}</h3>
             <p className="font-mono text-[11px] text-muted-foreground">{database}.{schema}</p>
           </div>
           <button type="button" onClick={onClose} className="ml-auto rounded-md p-1 hover:bg-muted" aria-label="Close">
@@ -206,10 +221,31 @@ export function ModelPanel({ database, schema, tables, domains, onClose }: {
               <section className="space-y-3">
                 <div className="flex flex-wrap items-center gap-2">
                   <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Target model</h4>
+                  {mode === "existing" && existing.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const domFqns = selectedDomainName
+                          ? existing
+                              .filter((s) => (s.domain_name ?? "").toUpperCase() === selectedDomainName || s.fqn.toUpperCase().includes(`.${selectedDomainName}.`))
+                              .map((s) => s.fqn)
+                          : existing.map((s) => s.fqn);
+                        const targetsToPick = domFqns.length ? domFqns : existing.map((s) => s.fqn);
+                        const allChosen = targetsToPick.every((f) => picked.includes(f));
+                        setPicked(allChosen ? [] : targetsToPick);
+                      }}
+                      className="rounded-md border bg-card px-2 py-0.5 text-[11px] font-medium text-primary hover:bg-muted/50"
+                    >
+                      {selectedDomainName ? `Select all ${selectedDomainName} models` : "Select all models"}
+                    </button>
+                  )}
                   <div role="tablist" className="ml-auto inline-flex rounded-lg border bg-muted/40 p-0.5">
                     {([["existing", `Map to existing · ${existing.length}`], ["new", "New model"]] as const).map(([value, label]) => (
                       <button key={value} type="button" role="tab" aria-selected={mode === value} disabled={value === "existing" && !existing.length}
-                              onClick={() => setMode(value)}
+                              onClick={() => {
+                                setMode(value);
+                                if (value === "existing" && !picked.length && existing.length) setPicked([existing[0].fqn]);
+                              }}
                               className={cn("rounded-md px-3 py-1 text-xs font-medium disabled:opacity-40", mode === value ? "bg-card shadow-sm" : "text-muted-foreground")}>
                         {label}
                       </button>
@@ -358,11 +394,11 @@ export function ModelPanel({ database, schema, tables, domains, onClose }: {
 
         <footer className="flex flex-wrap items-center gap-3 border-t px-6 py-3">
           <p className="text-xs text-muted-foreground">
-            The run reads these tables in place and reuses their staged profiles, then opens at mapping. Nothing is copied.
+            Locks the selected target models, reuses staged profiles, and runs the autonomous happy-path build in the background.
           </p>
           <Button className="ml-auto" disabled={!data || !standard || pending || (mode === "existing" && picked.length === 0)} onClick={create}>
             {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
-            {pending ? "Creating run…" : "Create modeling run"}
+            {pending ? "Starting build…" : "Lock Models & Start Build"}
           </Button>
         </footer>
       </aside>

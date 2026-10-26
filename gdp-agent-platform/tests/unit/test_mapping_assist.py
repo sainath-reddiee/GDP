@@ -26,6 +26,15 @@ def test_prompt_lists_targets_flags_and_candidates():
     assert "prefer street level" in prompt
 
 
+def test_prompt_includes_target_sample_values_when_profiled():
+    targets_with_samples = [
+        {**TARGETS[0], "values": ["100 Main St", "200 Broadway"]},
+        *TARGETS[1:],
+    ]
+    prompt = build_prompt(SOURCES, CANDS, targets_with_samples, "SILVER_ADDRESS", {})
+    assert "(sample values: 100 Main St, 200 Broadway)" in prompt
+
+
 def test_normalize_validates_ids_and_resolves_collisions():
     raw = {"columns": [
         {"source_column_id": "s1", "action": "APPROVE", "target_column": "ADDRESS", "confidence": 0.9, "reason": "a"},

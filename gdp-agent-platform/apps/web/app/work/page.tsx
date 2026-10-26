@@ -176,7 +176,7 @@ export default async function MyWorkPage() {
             )}
           </Section>
 
-          <Section id="runs" title="Your runs the agent is working on" icon={Bot} tone="agent" count={w.running.length} href="/os/build/runs?status=running" hrefLabel="All runs"
+          <Section id="runs" title="Your active & recent build runs" icon={Bot} tone="agent" count={w.running.length} href="/os/build/runs" hrefLabel="All runs"
                    empty={<span>You have no runs in flight. {mayOnboard
                      ? <><Link href="/os/enable/onboarding?type=source" className="font-medium text-primary hover:underline">Onboard a source</Link> to start one.</>
                      : <><Link href="/os/intake/new" className="font-medium text-primary hover:underline">Request a source</Link> and the Data OS Administrator onboards it.</>}</span>}>
@@ -184,19 +184,30 @@ export default async function MyWorkPage() {
               <ul className="divide-y">
                 {w.running.map((r) => {
                   const info = stageInfo(r);
+                  const isDone = r.status === "COMPLETED" || r.current_state === "COMPLETED" || r.current_state === "DBT_APPROVED";
                   return (
-                    <Row key={r.run_id} href={runHref(r)}>
+                    <Row key={r.run_id} href={`/os/build/runs/${r.run_id}`}>
                       <div className="flex items-center gap-3">
                         <div className="min-w-0 flex-1">
-                          <p className="truncate text-sm font-medium group-hover:text-primary">{r.run_name}</p>
+                          <p className="flex flex-wrap items-center gap-2 text-sm font-medium">
+                            <span className={cn(
+                              "rounded-full px-2 py-0.5 text-[10px] font-semibold",
+                              isDone ? "bg-emerald-500/10 text-emerald-600" : "bg-agent/10 text-agent"
+                            )}>
+                              {isDone ? "Completed" : "In flight"}
+                            </span>
+                            <span className="truncate group-hover:text-primary">{r.run_name}</span>
+                            {r.domain_name && <span className="rounded border px-1.5 py-0.2 text-[10px] text-muted-foreground">{r.domain_name}</span>}
+                          </p>
                           <p className="truncate text-xs text-muted-foreground">
+                            {r.target_model ? `${r.target_model.split(".").pop()} · ` : ""}
                             {r.current_stage ? stageLabel(r.current_stage === "DOMAIN" ? "PROFILING" : r.current_stage, pipelineOf(r.pipeline)) : "Not started"}
                             {" · "}<span title={r.current_state}>{stateLabel(r.current_state)}</span> · updated {ago(r.updated_at ?? r.created_at)}
                           </p>
                         </div>
                         <span className="hidden items-center gap-0.5 sm:flex" aria-label={`Step ${info.index + 1} of ${STAGE_ORDER.length}`}>
                           {STAGE_ORDER.map((st, i) => (
-                            <span key={st} className={cn("h-1.5 w-3 rounded-full", i < info.index ? "bg-emerald-400" : i === info.index ? "bg-agent" : "bg-muted")} />
+                            <span key={st} className={cn("h-1.5 w-3 rounded-full", isDone || i < info.index ? "bg-emerald-400" : i === info.index ? "bg-agent" : "bg-muted")} />
                           ))}
                         </span>
                       </div>

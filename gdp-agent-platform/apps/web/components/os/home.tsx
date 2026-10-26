@@ -12,7 +12,7 @@ import { Btn, Tag, ago, pretty } from "./ui";
 import { Track, type TrackStep } from "./stage-board";
 import { stageHref, waitIsMine } from "@/lib/os/work";
 import { RequestFiles } from "@/components/os/request-files";
-import { StartEnhancementRun } from "./request-ui";
+import { LiveWorkflowRefresh, StartEnhancementRun } from "./request-ui";
 import type { ActionItem } from "@/lib/os/actions";
 import { personaForPrivilege } from "@/lib/os/personas";
 import { cn } from "@/lib/utils";
@@ -51,7 +51,8 @@ export function WorkflowRow({ r, access, href }: { r: OnboardingRequest; access:
   const mine = open ? r.waits.find((w) => waitIsMine(w, r.items, access)) : undefined;
   const item = mine ? r.items.find((i) => i.item_id === mine.item_id) : undefined;
   const next = mine ? actHref(mine, item, r.domain_id, r.request_type === "PRODUCT", r.request_id, enhancesSource(r)) : null;
-  const stageUrl = stageHref(r);
+  const doneItem = !open ? r.items.find((i) => !i.removed_at && (i.active_run_id ?? i.run_id)) : undefined;
+  const stageUrl = stageHref(r) ?? (doneItem ? `/os/build/runs/${doneItem.active_run_id ?? doneItem.run_id}` : null);
   const stageScreen = stageUrl ? screenOfPath(stageUrl.split("?")[0]) : null;
   const openHref = (stageUrl && (!stageScreen || canSee(access, stageScreen.key)) ? stageUrl : null) ?? href;
   const sources = r.items.filter((i) => !i.removed_at);
@@ -61,6 +62,7 @@ export function WorkflowRow({ r, access, href }: { r: OnboardingRequest; access:
   return (
     <article data-testid="workflow-row" className={cn("os-card os-rise p-3.5 transition hover:shadow-[var(--os-shadow-pop)]",
                                                        mine && "border-l-[3px] border-l-[var(--os-forest)]")}>
+      <LiveWorkflowRefresh active={open} />
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex min-w-[min(100%,260px)] flex-1 items-start gap-3">
           <span className={cn("grid h-9 w-9 shrink-0 place-items-center rounded-lg", TYPE_TINT[r.request_type])}><I className="h-4 w-4" /></span>
@@ -177,6 +179,7 @@ export function RequestFocus({ r, access }: { r: RequestDetail; access: OsAccess
   const at = stageHref(r);
   return (
     <section className="os-card os-rise p-5" data-testid="request-focus">
+      <LiveWorkflowRefresh active={r.status === "OPEN"} />
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex min-w-0 items-start gap-3">
           <span className={cn("grid h-10 w-10 shrink-0 place-items-center rounded-xl", TYPE_TINT[r.request_type])}><I className="h-5 w-5" /></span>
@@ -185,7 +188,6 @@ export function RequestFocus({ r, access }: { r: RequestDetail; access: OsAccess
             <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11.5px]">
               <Tag tone={intentOf(r) === "ENHANCE" ? "purple" : "blue"}>{intentLabel(r)}</Tag>
               <span className="os-muted font-semibold">{r.domain_name ?? (r.proposed_domain ? `${r.proposed_domain} (new)` : "no domain")}</span>
-              <Tag tone={PRIORITY_TONE[r.priority] ?? "neutral"}>{pretty(r.priority)} priority</Tag>
               {overdue(r) && <Tag tone="red">Overdue</Tag>}
               <span className="os-faint">· filed by {r.requested_by} {ago(r.created_at)}</span>
             </div>
@@ -196,7 +198,9 @@ export function RequestFocus({ r, access }: { r: RequestDetail; access: OsAccess
           <Btn href={`/os/requests/${r.request_id}`}>Full request</Btn>
         </div>
       </div>
-      {r.business_outcome && <p className="os-muted mt-3 max-w-3xl text-[12.5px] leading-relaxed">{r.business_outcome}</p>}
+      {r.business_outcome && !r.business_outcome.startsWith("Store build of ") && (
+        <p className="os-muted mt-3 max-w-3xl text-[12.5px] leading-relaxed">{r.business_outcome}</p>
+      )}
       <RequestTrack r={r} className="mt-5" />
       {r.status === "OPEN" && r.attention && (
         <p className="mt-3 flex items-start gap-1.5 text-[12px] text-[var(--os-red-ink)]"><AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />{r.attention}</p>

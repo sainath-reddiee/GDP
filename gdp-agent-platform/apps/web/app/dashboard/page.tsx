@@ -45,8 +45,9 @@ export default async function Dashboard() {
   const runQs = (extra: string) => `/api/runs?${extra}${domainId ? `&domain_id=${domainId}` : ""}`;
   // the table lists the 8 most recently updated runs in flight; every count comes from the overview (exact, not a
   // list length) so the greeting, the chips, the tiles and the table header agree
-  const [active, audit, incidents, jira, failingChecks] = await Promise.all([
+  const [active, recentRuns, audit, incidents, jira, failingChecks] = await Promise.all([
     api<{ runs: RunSummary[]; total?: number }>(runQs("status=running&limit=8&sort=updated")).catch(() => ({ runs: [] as RunSummary[], total: undefined })),
+    api<{ runs: RunSummary[] }>(runQs("limit=8&sort=updated")).catch(() => ({ runs: [] as RunSummary[] })),
     api<{ events: AuditEvent[] }>("/api/audit?limit=6").catch(() => ({ events: [] as AuditEvent[] })),
     can(me, "OPS.VIEW") ? api<IncidentSummary>("/api/ops/incidents/summary").catch(() => null) : Promise.resolve(null),
     can(me, "JIRA.READ") || can(me, "CASE.WORK") ? ticketsCard() : Promise.resolve(null),
@@ -55,7 +56,11 @@ export default async function Dashboard() {
   const o = overview;
   const user = (me?.user ?? "").split(/[._@ ]/)[0];
   const name = user ? user.charAt(0) + user.slice(1).toLowerCase() : "";
-  const inFlight = active.runs;
+  const activeIds = new Set(active.runs.map((r) => r.run_id));
+  const inFlight = [
+    ...active.runs,
+    ...(recentRuns.runs ?? []).filter((r) => !activeIds.has(r.run_id) && r.current_state !== "CANCELLED"),
+  ].slice(0, 8);
   const inFlightCount = o?.runs?.in_flight ?? active.total ?? inFlight.length;
   const reviewCount = o?.runs?.needs_review ?? 0;
   const failedCount = o?.runs?.failed_7d ?? 0;

@@ -100,6 +100,30 @@ def test_auto_mapping_decisions_best_first_and_one_source_per_target():
     every = auto_mapping_decisions(cands, [], [("T3", "TB")])
     assert {d["candidate_id"]: d["decision"] for d in every}["c"] == "REJECTED"
     assert all(d["business_justification"].startswith("Autopilot:") for d in every)
+    # min_confidence filters out candidates below threshold so a human reviews them
+    filtered = {d["candidate_id"]: d["decision"] for d in auto_mapping_decisions(cands, [("S4", "TB")], [], min_confidence=0.85)}
+    assert filtered == {"b": "APPROVED"}
+
+
+def test_mapping_confidence_gate_pauses_at_mapping_review():
+    from services.workflow.autopilot import mapping_confidence_gate
+
+    cands = [
+        {"candidate_id": "b", "source_column_id": "S2", "target_column_id": "T1", "target_table_id": "TB", "rank": 1, "final_score": 0.92},
+        {"candidate_id": "c", "source_column_id": "S3", "target_column_id": "T3", "target_table_id": "TB", "rank": 1, "final_score": 0.72},
+    ]
+    gate = mapping_confidence_gate(cands, threshold=0.85, hard_gate=False)
+    assert gate["requires_human"] is True and gate["confident"] == 1 and gate["below_threshold"] == 1
+    out = next_action("MAPPING_REVIEW", {**AUTO, "mapping_gate": gate})
+    assert out["kind"] == "GATE" and out["where"] == "mapping" and "1 of 2 columns >= 85%" in out["label"]
+    # With hard_gate=True, even 100% confident mappings require human sign-off before autonomous post-mapping build
+    all_high = mapping_confidence_gate([cands[0]], threshold=0.85, hard_gate=True)
+    assert all_high["requires_human"] is True
+    assert next_action("MAPPING_REVIEW", {**AUTO, "mapping_gate": all_high})["kind"] == "GATE"
+    # With hard_gate=False and all candidates >= threshold, autonomous can proceed
+    all_high_auto = mapping_confidence_gate([cands[0]], threshold=0.85, hard_gate=False)
+    assert all_high_auto["requires_human"] is False
+    assert next_action("MAPPING_REVIEW", {**AUTO, "mapping_gate": all_high_auto})["action"] == "approve_mapping"
 
 
 def test_gold_run_proposes_waits_for_approval_then_builds_its_star_schema():

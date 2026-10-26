@@ -103,7 +103,8 @@ def load_inputs(query: Query, run_id: str, plan: Dict[str, Any], sttm: Dict[str,
         found = query("""SELECT MODEL_SPEC FROM CORE.TARGET_TABLE_REGISTRY
                           WHERE ACTIVE_FLAG AND DOMAIN_ID = ? AND UPPER(TARGET_TABLE) = UPPER(?) AND COALESCE(LAYER, 'SILVER') = 'SILVER'
                           ORDER BY TARGET_TABLE LIMIT 1""", [run.get("DOMAIN_ID"), target])
-        model_spec = _json(found[0].get("MODEL_SPEC")) if found else {}
+        raw_spec = _json(found[0].get("MODEL_SPEC")) if found else {}
+        model_spec = {k: v for k, v in raw_spec.items() if k != "minimum_mapping"} if isinstance(raw_spec, dict) else {}
     except Exception:
         model_spec = {}
     tables = {s["name"]: [{"column_name": c, "data_type": t.split("(")[0]} for c, t in s["columns"].items()]

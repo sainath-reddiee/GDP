@@ -55,9 +55,10 @@ const safe = <T>(p: Promise<T>, fallback: T) => p.catch(() => fallback);
 export async function loadMyWork(me: WhoAmI | null): Promise<MyWork> {
   const user = me?.user ?? "";
   const approves = Object.values(GATES).filter((g) => can(me, g.privilege));
-  const [review, running, failed, requests, inbox, myDomains, tickets, incidents, prs, fixApprovals, permanent, proposed, dqFailing, dqDigests] = await Promise.all([
+  const [review, running, recentRuns, failed, requests, inbox, myDomains, tickets, incidents, prs, fixApprovals, permanent, proposed, dqFailing, dqDigests] = await Promise.all([
     safe(api<{ runs: RunSummary[] }>("/api/runs?needs_review=true&sort=updated&limit=200"), { runs: [] }),
     safe(api<{ runs: RunSummary[]; total?: number }>("/api/runs?status=running&sort=updated&limit=200"), { runs: [], total: 0 }),
+    safe(api<{ runs: RunSummary[] }>("/api/runs?sort=updated&limit=25"), { runs: [] }),
     safe(api<{ runs: RunSummary[] }>("/api/runs?status=failed&sort=updated&limit=100"), { runs: [] }),
     safe(api<{ requests: ChangeRequest[] }>("/api/governance/requests?scope=inbox"), { requests: [] }),
     safe(api<{ items: InboxItem[] }>("/api/knowledge/inbox"), { items: [] }),
@@ -110,6 +111,19 @@ export async function loadMyWork(me: WhoAmI | null): Promise<MyWork> {
       .then((r) => (r.questions ?? []).map((q) => ({ ...q, domain_name: d.name })))))).flat()
     .sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, 8);
 
+  const dayAgo = Date.now() - 24 * 3600 * 1000;
+  const myInFlight = running.runs.filter(mine);
+  const inFlightIds = new Set(myInFlight.map((r) => r.run_id));
+  const myRecentDone = (recentRuns.runs ?? []).filter(
+    (r) =>
+      mine(r) &&
+      !inFlightIds.has(r.run_id) &&
+      r.current_state !== "CANCELLED" &&
+      r.status !== "FAILED" &&
+      new Date(r.updated_at ?? r.created_at).getTime() >= dayAgo,
+  );
+  const combinedRuns = [...myInFlight, ...myRecentDone].slice(0, 8);
+
   return {
     gates,
     requests: requests.requests ?? [],
@@ -118,7 +132,7 @@ export async function loadMyWork(me: WhoAmI | null): Promise<MyWork> {
     proposedSkills: proposed.slice(0, 5),
     inbox: (inbox.items ?? []).filter((i) => !i.own).slice(0, 6),
     questions,
-    running: running.runs.filter(mine).slice(0, 8),
+    running: combinedRuns,
     fix,
     tickets: tickets ? tickets.slice(0, 6) : null,
     incidents: incidents ? incidents.slice(0, 5) : null,

@@ -58,42 +58,52 @@ function Steps({ steps }: { steps: Step[] }) {
 export function DemoPaths({ runs, requests }: { runs: RunSummary[]; requests: OnboardingRequest[] }) {
   const run = happyRun(runs);
   const happy: Step[] = run ? [
-    { who: "Forward Engineering Lead", title: "Ready to build", what: "every run whose design is done, domain by domain; Build end to end", href: "/os/build/ready", state: "done" },
-    { who: "Forward Engineering Lead", title: "Build workbench", what: `${run.domain_name ?? "run"} · ${run.run_name}: agents, generated dbt, tests`, href: `/os/build?run=${run.run_id}`, state: "done" },
-    { who: "Review and standards agents", title: "Validation gate", what: "the score against the gate, each standards area, every attempt", href: `/os/review?run=${run.run_id}`, state: run.current_state === "VALIDATION_PASSED" ? "now" : "done" },
-    { who: "Data Developer", title: "Pull request and code review", what: `publish the pull request, then review the code (${stateLabel(run.current_state).toLowerCase()})`, href: `/os/release?run=${run.run_id}`,
+    { who: "Forward Engineering Lead", title: "Store: Lock Models & Start Build", what: "pick staged source tables, lock domain target models, start autonomous build", href: "/os/design/sources", state: "done" },
+    { who: "Forward Engineering Lead", title: "Build workbench", what: `${run.domain_name ?? "run"} · ${run.run_name}: generated dbt, DAG, Soda tests`, href: `/os/build?run=${run.run_id}`, state: "done" },
+    { who: "Review and standards agents", title: "Validation gate", what: "the % score against the gate, each standards area, every attempt", href: `/os/review?run=${run.run_id}`, state: run.current_state === "VALIDATION_PASSED" ? "now" : "done" },
+    { who: "Data Developer", title: "PR and Developer handoff", what: `publish the pull request, then review the code (${stateLabel(run.current_state).toLowerCase()})`, href: `/os/release?run=${run.run_id}`,
       state: ["DBT_APPROVED", "COMPLETED"].includes(run.current_state) ? "done" : "now" },
   ] : [];
 
   const req = onboardingRequest(requests);
   const item = req?.items.find((i) => (i.active_run_id || i.run_id) && !i.removed_at);
-  const runId = item?.active_run_id ?? item?.run_id ?? null;
+  const runId = item?.active_run_id ?? item?.run_id ?? run?.run_id ?? null;
   const at = req ? ["DOMAIN", "ENABLE", "DESIGN", "BUILD", "REVIEW", "DONE"].indexOf(req.stage) : -1;
   const flagged = req?.phase === "FLAGGED";
   const state = (i: number): Step["state"] => (!req ? "next" : at > i ? "done" : at === i ? "now" : "next");
   const onboarding: Step[] = [
     { who: "GDP Product Owner", title: "File the request", what: req ? `${req.title} · ${req.domain_name ?? req.proposed_domain ?? "no domain"}` : "Intake: a domain and the sources it needs",
       href: req ? `/os/requests/${req.request_id}` : "/os/intake/new", state: req ? "done" : "now" },
-    { who: "Data OS Administrator", title: "Onboard the sources", what: "skipped on its own when the sources are already onboarded", href: "/os/enable", state: state(1) },
-    { who: "Data Designer", title: "Profile, model and map", what: "approved design kept in the stores", href: runId ? `/os/design?view=selected&run=${runId}` : "/os/design", state: state(2) },
+    { who: "Data OS Administrator", title: "Onboard the sources", what: "Admin readiness: skipped on its own when the sources are already onboarded", href: "/os/enable", state: state(1) },
+    { who: "Data Designer", title: "Profile, model and map", what: "approved design and AI field mappings kept in the stores", href: runId ? `/os/design?view=selected&run=${runId}` : "/os/design", state: state(2) },
     { who: "Forward Engineering Lead", title: "Build end to end", what: "from Ready to build: code generated and scored by the review and standards agents", href: runId ? `/os/build?view=selected&run=${runId}` : "/os/build/ready", state: flagged ? "done" : state(3) },
-    { who: "Skill owner", title: "If flagged: improve the skill, validate again", what: "a new skill version, then Resume from checkpoint; the attempts show the trend",
+    { who: "Skill owner", title: "If flagged: improve the skill, validate again", what: "if validation fails (e.g. 68%) → update skill → Resume from checkpoint → validation passes (≥ 93%)",
       href: runId ? `/os/review?run=${runId}` : "/os/skills?skill=CODE-STANDARDS-REVIEW", state: flagged ? "now" : at > 3 ? "done" : "next" },
-    { who: "QA & UAT Lead, Data Developer", title: "Pull request, QA and release", what: "publish, sign off QA, review the code", href: runId ? `/os/release?run=${runId}` : "/os/release", state: state(4) },
+    { who: "QA & UAT Lead, Data Developer", title: "Pull request, QA and release", what: "publish PR, sign off QA, review the code", href: runId ? `/os/release?run=${runId}` : "/os/release", state: state(4) },
   ];
 
   return (
     <Card className="mt-4" title="Demo paths" subtitle="Two walkthroughs on live records. Each step opens the real run or request; scores are whatever the agents find." pad={false}>
       <div className="grid gap-0 lg:grid-cols-2" data-testid="demo-paths">
         <div className="border-b border-[var(--os-line)] p-4 lg:border-b-0 lg:border-r">
-          <div className="mb-2 flex items-center gap-2 text-[13px] font-extrabold"><PlayCircle className="h-4 w-4 text-[var(--os-emerald)]" />1 · Forward Engineering Lead, happy path</div>
+          <div className="mb-1 flex items-center gap-2 text-[13px] font-extrabold"><PlayCircle className="h-4 w-4 text-[var(--os-emerald)]" />1 · Forward Engineering Lead, happy path</div>
+          <p className="os-faint mb-2 px-2 text-[11px]">Store → Forward Engineering Lead → Build Workbench → Generated dbt/DAG/tests → % validation → PR and Developer handoff.</p>
           {run ? <Steps steps={happy} /> : <p className="os-faint px-2 text-[11.5px]">No run has passed validation yet. Once one does, this path walks it from Home to the pull request.</p>}
+          <div className="mt-3 flex flex-wrap gap-2 px-2">
+            <Link href={run ? `/os/build?view=selected&run=${run.run_id}` : "/os/build"} className="os-btn os-btn-primary text-[11.5px]">View Build Workbench <ArrowRight className="h-3.5 w-3.5" /></Link>
+            <Link href="/os/design/sources" className="os-btn text-[11.5px]">Open Store</Link>
+          </div>
         </div>
         <div className="p-4">
-          <div className="mb-2 flex items-center gap-2 text-[13px] font-extrabold"><PlayCircle className="h-4 w-4 text-[var(--os-emerald)]" />2 · Onboarding with people in the loop</div>
+          <div className="mb-1 flex items-center gap-2 text-[13px] font-extrabold"><PlayCircle className="h-4 w-4 text-[var(--os-emerald)]" />2 · Onboarding with people in the loop</div>
+          <p className="os-faint mb-2 px-2 text-[11px]">Product request → Admin readiness → Designer → Build → if Validation fails at 68% → Update skill → Resume from checkpoint → Validation passes at 93% → PR.</p>
           {req && <div className="os-faint mb-2 px-2 text-[11px]">Request now: <b>{phaseOf(req).label}</b>{req.waiting_label ? ` · ${req.waiting_label}` : ""}</div>}
           {!req && <div className="os-faint mb-2 px-2 text-[11px]">No open request: file one on Intake to start. Phases: {[PHASE.ENABLE, PHASE.ONBOARDED, PHASE.DESIGN, PHASE.STORED, PHASE.BUILD].map((p) => p.label).join(", ")}.</div>}
           <Steps steps={onboarding} />
+          <div className="mt-3 flex flex-wrap gap-2 px-2">
+            <Link href={runId ? `/os/review?run=${runId}` : "/os/review"} className="os-btn os-btn-primary text-[11.5px]">View Validation Gate <ArrowRight className="h-3.5 w-3.5" /></Link>
+            <Link href={runId ? `/os/skills?skill=CODE-STANDARDS-REVIEW&run=${runId}` : "/os/skills?skill=CODE-STANDARDS-REVIEW"} className="os-btn text-[11.5px]">View Skill Studio</Link>
+          </div>
         </div>
       </div>
     </Card>

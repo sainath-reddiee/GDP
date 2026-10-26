@@ -1,6 +1,13 @@
 const { execSync } = require("node:child_process");
 const { EXACT, PREFIXES } = require("./os-routes");
 
+const cwd = process.cwd();
+if (/^[a-z]:/.test(cwd)) {
+  try {
+    process.chdir(cwd[0].toUpperCase() + cwd.slice(1));
+  } catch {}
+}
+
 /** The commit this build was made from, shown in the app (account menu, sidebar) and at /bff/version. */
 function buildSha() {
   try {

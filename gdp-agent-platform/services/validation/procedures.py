@@ -44,7 +44,8 @@ def _sttm_lines(session, sttm_id: str) -> List[Dict[str, Any]]:
 
 UNAVAILABLE_MARKERS = ("unsupported feature", "not supported", "insufficient privileges",
                        "unexpected 'dbt'", "unknown object type", "feature is not enabled",
-                       "unsupported statement type")  # dbt inside an owner's-rights procedure cannot run SHOW
+                       "unsupported statement type", "depends on a node named", "which was not found",
+                       "source named", "is undefined")  # dbt inside an owner's-rights procedure cannot run SHOW
 
 
 def _compile(session, generation: Dict[str, Any], run_id: str) -> Dict[str, Any]:

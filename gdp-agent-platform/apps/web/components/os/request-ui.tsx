@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState, useTransition, type ReactNode } from "react";
+import { useEffect, useState, useTransition, type ReactNode } from "react";
 import { Ban, Check, Link2, Loader2, MessageSquare, Play, Plus, RotateCcw, Send, Trash2, Unlink, X } from "lucide-react";
 import {
   addRequestSource, cancelRequest, commentRequest, createRequest, linkRequestDomain, linkRequestRun, linkRequestSource, rejectRequest,
@@ -48,6 +48,16 @@ export function B({ children, onClick, disabled, variant = "default", title, tes
 }
 
 export const Off = () => <p className="os-faint mt-1 text-[11px]">Off while you preview another role: it would run as you.</p>;
+
+export function LiveWorkflowRefresh({ active }: { active: boolean }) {
+  const router = useRouter();
+  useEffect(() => {
+    if (!active) return;
+    const t = setInterval(() => router.refresh(), 4000);
+    return () => clearInterval(t);
+  }, [active, router]);
+  return null;
+}
 
 /** An Enhance source request's next step for the Data Designer: start the enhancement run of the onboarded source,
  *  carrying what the request asks to add. Shown only to holders of RUN.CREATE while the source has no run. */

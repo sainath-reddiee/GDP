@@ -434,9 +434,19 @@ def get_design(session, run_id: str) -> Dict[str, Any]:
                                                     ORDER BY ORDINAL_POSITION""", [target[0]["TARGET_TABLE_ID"]])]
                 if cols:
                     design = baseline(cols, table, {"naming_case": "as_is"})
+                    if run.get("MODEL_ID"):
+                        design["decision"] = "REUSE_EXISTING"
+                        design["decision_target"] = model
+                        design["reasons"] = [f"Locked to registered domain model {model}"]
                     design.update(target_database=db, target_schema=schema, primary_entity=table)
                     conv = conventions("NONE")
-                    _store(session, run_id, design, conv, [], "REGISTERED")
+                    stored_v = _store(session, run_id, design, conv, [], "REGISTERED")
+                    if run.get("MODEL_ID"):
+                        session.sql(
+                            "UPDATE CORE.MODEL_DESIGN SET STATUS = 'APPROVED', APPROVED_BY = CURRENT_USER(), "
+                            "APPROVED_AT = CURRENT_TIMESTAMP() WHERE RUN_ID = ? AND VERSION = ?",
+                            params=[run_id, int(stored_v["version"])],
+                        ).collect()
                     versions = _versions(session, run_id)
     ctx_run = _run(session, run_id)
     return {"run_id": run_id, "target_model": ctx_run.get("TARGET_MODEL"), "standard": ctx_run.get("MODELING_STANDARD"),

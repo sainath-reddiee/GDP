@@ -75,12 +75,11 @@ export default async function RequestPage({ params, searchParams }: { params: { 
       <PageHeader
         eyebrow={`Onboarding request · ${intentLabel(r)}`}
         title={r.title}
-        subtitle={r.business_outcome ?? undefined}
+        subtitle={r.business_outcome && !r.business_outcome.startsWith("Store build of ") ? r.business_outcome : undefined}
         actions={<Btn href="/os/requests">All requests</Btn>}
         meta={<>
           <Tag tone={r.status === "OPEN" ? phaseOf(r).tone : r.status === "DONE" ? "green" : "neutral"}>{r.status === "OPEN" ? phaseOf(r).label : pretty(r.status)}</Tag>
           <span className="os-muted">Domain: <b className="os-ink">{r.domain_name ?? (r.proposed_domain ? `${r.proposed_domain} (to create)` : "none")}</b></span>
-          <Tag tone={PRIORITY_TONE[r.priority] ?? "neutral"}>{pretty(r.priority)} priority</Tag>
           {r.needed_by && <span className={cn("inline-flex items-center gap-1", overdue(r) ? "text-[var(--os-red-ink)]" : "os-muted")}><CalendarClock className="h-3.5 w-3.5" />Needed by {r.needed_by.slice(0, 10)}{overdue(r) ? " (overdue)" : ""}</span>}
           <span className="os-muted">Filed by <b className="os-ink">{r.requested_by}</b> · {ago(r.created_at)}</span>
         </>}

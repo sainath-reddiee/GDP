@@ -132,8 +132,7 @@
           }
         ],
         "minimum_mapping": [
-          "`source_unique_id`",
-          "`property_name`"
+          "`source_unique_id`"
         ],
         "casts": [
           {
@@ -458,8 +457,7 @@
           }
         ],
         "minimum_mapping": [
-          "`source_unique_id`",
-          "`ref_usage_type_skey`"
+          "`source_unique_id`"
         ],
         "casts": [
           {
@@ -683,11 +681,7 @@
           }
         ],
         "minimum_mapping": [
-          "`source_unique_id`",
-          "`ref_address_type_skey`",
-          "`street_name`",
-          "`state`",
-          "`country`"
+          "`source_unique_id`"
         ],
         "casts": [
           {
@@ -1638,10 +1632,7 @@
       "content": "A source must map at least: `source_unique_id`; `property_name`; `property_address`; `property_usage_desc`",
       "content_json": {
         "required": [
-          "`source_unique_id`",
-          "`property_name`",
-          "`property_address`",
-          "`property_usage_desc`"
+          "`source_unique_id`"
         ]
       }
     },

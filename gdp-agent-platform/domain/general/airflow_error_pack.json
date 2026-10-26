@@ -1,0 +1,622 @@
+{
+  "description": "Airflow errors learned from this platform's own failures (Airflow task logs, incidents and Datadog), one entry per error shape no shipped runbook covers. Built by infrastructure/build_airflow_error_pack.py and seeded with airflow_runbook_pack.json; review the entries before deploying.",
+  "knowledge": [
+    {
+      "key": "ops.runbook.gdp.snaplogic-gate-hard-stop",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "SnapLogic gate stopped the DAG (snaplogic_end: trigger_snaplogic did not succeed)",
+      "content": "Signals: 'AirflowException: trigger_snaplogic did not succeed -- hard-stopping dbt via snaplogic_end'. Meaning: snaplogic_end is a guard task. It fails on purpose when trigger_snaplogic did not succeed (or did not push its snaplogic_details XCom), so the dbt tasks do not run on a partial load. It is never the root cause. Usual causes: the SnapLogic pipeline itself failed: a rejected bearer token (401 'Mismatched bearer token'), an Exit snap threshold exceeded by error documents, a Snaplex outage, or trigger_snaplogic killed before it wrote its XCom. Repair: open trigger_snaplogic in the same run and read its error (it names the SnapLogic runtime id, ruuid); repair that with its own runbook; then clear trigger_snaplogic with downstream so snaplogic_end and dbt run again. Rerunning snaplogic_end alone fails again.",
+      "content_json": {
+        "signals": [
+          "trigger_snaplogic did not succeed",
+          "hard-stopping dbt via snaplogic_end"
+        ],
+        "meaning": "A guard task stopped the DAG because the SnapLogic trigger task did not succeed; the cause is in trigger_snaplogic.",
+        "usual_cause": "SnapLogic pipeline failure: rejected bearer token, Exit snap threshold exceeded, Snaplex outage, or the trigger task killed before writing its XCom.",
+        "action": null,
+        "human_steps": [
+          "Open trigger_snaplogic in the same DAG run and read its error and the SnapLogic runtime id (ruuid).",
+          "Fix the SnapLogic failure with its own runbook (bearer token, Exit threshold, Snaplex).",
+          "Clear trigger_snaplogic with downstream so snaplogic_end and the dbt tasks rerun; do not rerun snaplogic_end alone."
+        ],
+        "related": [
+          "ops.runbook.snaplogic-pipeline-error"
+        ],
+        "evidence": {
+          "runs": 25,
+          "dag_count": 20,
+          "dags": [
+            "gdp_cornerstone_dev",
+            "gdp_edp_qa",
+            "gdp_tpc_qa",
+            "gdp_news_to_leads_dev",
+            "gdp_zoominfo_qa",
+            "gdp_cornerstone_qa",
+            "gdp_spoc_qa",
+            "gdp_zoominfo_5cubes_qa",
+            "gdp_dealiq_qa",
+            "gdp_tcc_qa"
+          ],
+          "tasks": [
+            "gdp_cornerstone_dev.snaplogic_end",
+            "gdp_edp_qa.snaplogic_end",
+            "gdp_tpc_qa.snaplogic_end",
+            "gdp_news_to_leads_dev.snaplogic_end",
+            "gdp_zoominfo_qa.snaplogic_end",
+            "gdp_cornerstone_qa.snaplogic_end",
+            "gdp_spoc_qa.snaplogic_end",
+            "gdp_zoominfo_5cubes_qa.snaplogic_end",
+            "gdp_dealiq_qa.snaplogic_end",
+            "gdp_tcc_qa.snaplogic_end"
+          ],
+          "sources": [
+            "INCIDENT",
+            "TASK_RUN"
+          ],
+          "first_seen": "2026-10-21T19:23:42+00:00",
+          "last_seen": "2026-10-24T20:12:29+00:00",
+          "incidents": 22
+        }
+      },
+      "tags": [
+        "AIRFLOW",
+        "RUNBOOK",
+        "LEARNED",
+        "SNAPLOGIC",
+        "DEPENDENCY"
+      ]
+    },
+    {
+      "key": "ops.runbook.gdp.post-mdm-upstream-engine-failed",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "Post-MDM to gold: upstream engine DAG failed, not publishing to Kafka",
+      "content": "Signals: 'AirflowFailException: [post-mdm-property] (or [post-mdm-company]) gdp_engine_<entity>_incremental_<env> FAILED for run ...; not publishing to Kafka'. Meaning: the gdp_post_mdm_to_gold_<entity> DAG waits (wait_es_sync) for the engine DAG's es_sync_done event for the same run. The engine DAG failed, so the wait task fails fast and nothing is published to Kafka. Usual causes: the engine DAG's Kubernetes task (sync to OpenSearch) failed: container exit, pod not found during cleanup, pod unschedulable, or a dbt failure in the gold OpenSearch models. Repair: open the engine DAG run named in the message and fix it first (see the Kubernetes and dbt runbooks). Once that run succeeds, clear wait_es_sync with downstream in the post-MDM DAG. Do not mark wait_es_sync success by hand: Kafka would get events for data that was not synced.",
+      "content_json": {
+        "signals": [
+          "not publishing to Kafka",
+          "[post-mdm-"
+        ],
+        "meaning": "The post-MDM DAG stopped because the upstream engine DAG failed for the same run.",
+        "usual_cause": "A failure in gdp_engine_<entity>_incremental_<env>: Kubernetes sync task or gold dbt models.",
+        "action": null,
+        "human_steps": [
+          "Open the engine DAG run named in the message and find its failed task.",
+          "Fix and rerun the engine DAG until it succeeds.",
+          "Clear wait_es_sync with downstream in the post-MDM DAG; never mark it success by hand."
+        ],
+        "evidence": {
+          "runs": 17,
+          "dag_count": 3,
+          "dags": [
+            "gdp_post_mdm_to_gold_property_qa",
+            "gdp_post_mdm_to_gold_company_qa",
+            "gdp_post_mdm_to_gold_property_dev"
+          ],
+          "tasks": [
+            "gdp_post_mdm_to_gold_property_qa.wait_es_sync",
+            "gdp_post_mdm_to_gold_company_qa.wait_es_sync",
+            "gdp_post_mdm_to_gold_property_dev.wait_es_sync"
+          ],
+          "sources": [
+            "INCIDENT",
+            "TASK_RUN"
+          ],
+          "first_seen": "2026-10-21T14:23:33+00:00",
+          "last_seen": "2026-10-24T20:06:38+00:00",
+          "incidents": 3
+        }
+      },
+      "tags": [
+        "AIRFLOW",
+        "RUNBOOK",
+        "LEARNED",
+        "DEPENDENCY",
+        "KAFKA"
+      ]
+    },
+    {
+      "key": "ops.runbook.gdp.pipeline-done-marked-failed",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "pipeline_done: pipeline marked FAILED in GDP_BATCH_MASTER (a stage failed earlier)",
+      "content": "Signals: 'ValueError: [pipeline-done] Pipeline marked FAILED in GDP_BATCH_MASTER (overall_status=FAILED; stage failures: SnapLogic=FAILED | dbt (silver)=FAILED)', 'Failing this task to ensure the DAG run state is FAILED in the Airflow UI'. Meaning: pipeline_done is the summary task of the GDP ingestion DAGs. It reads the batch's stage results from GDP_BATCH_MASTER and fails on purpose so the DAG run shows FAILED. The ValueError is not a code bug. Usual causes: an earlier stage failed; the message names it (SnapLogic=FAILED: see the SnapLogic gate and SnapLogic runbooks; dbt (silver)=FAILED: see the dbt task's log, often a transient Snowflake error or a lock on a shared silver table). Repair: find the failed stage task in the same run, fix it with its own runbook, then clear that stage task with downstream; pipeline_done reruns and passes once GDP_BATCH_MASTER shows the stage succeeded.",
+      "content_json": {
+        "signals": [
+          "[pipeline-done] Pipeline marked FAILED",
+          "Failing this task to ensure the DAG run state is FAILED"
+        ],
+        "meaning": "The DAG's summary task failed on purpose because an earlier stage (SnapLogic or dbt) failed for this batch.",
+        "usual_cause": "A failed SnapLogic or dbt (silver) stage, named in 'stage failures:'.",
+        "action": null,
+        "human_steps": [
+          "Read 'stage failures:' in the message to find the failed stage.",
+          "Open that stage's task in the same run and fix it with its own runbook.",
+          "Clear the failed stage task with downstream; pipeline_done reruns after it."
+        ],
+        "related": [
+          "ops.runbook.python-task-error",
+          "ops.runbook.snaplogic-pipeline-error"
+        ],
+        "evidence": {
+          "runs": 14,
+          "dag_count": 11,
+          "dags": [
+            "gdp_cornerstone_dev",
+            "gdp_news_to_leads_dev",
+            "gdp_spoc_qa",
+            "gdp_news_to_leads_qa",
+            "gdp_zoominfo_qa",
+            "gdp_edp_qa",
+            "gdp_mta_qa",
+            "gdp_rcoe_qa",
+            "gdp_tcc_qa",
+            "gdp_lightbox_dev"
+          ],
+          "tasks": [
+            "gdp_cornerstone_dev.pipeline_done",
+            "gdp_news_to_leads_dev.pipeline_done",
+            "gdp_spoc_qa.pipeline_done",
+            "gdp_news_to_leads_qa.pipeline_done",
+            "gdp_zoominfo_qa.pipeline_done",
+            "gdp_edp_qa.pipeline_done",
+            "gdp_mta_qa.pipeline_done",
+            "gdp_rcoe_qa.pipeline_done",
+            "gdp_tcc_qa.pipeline_done",
+            "gdp_lightbox_dev.pipeline_done"
+          ],
+          "sources": [
+            "INCIDENT",
+            "TASK_RUN"
+          ],
+          "first_seen": "2026-10-21T20:00:49+00:00",
+          "last_seen": "2026-10-24T20:54:47+00:00",
+          "incidents": 11
+        }
+      },
+      "tags": [
+        "AIRFLOW",
+        "RUNBOOK",
+        "LEARNED",
+        "DEPENDENCY"
+      ]
+    },
+    {
+      "key": "ops.runbook.gdp.k8s-container-exit-sync-es",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "Kubernetes pod container failed (sync-property-es exit code 1)",
+      "content": "Signals: \"'message': 'sync-property-es: failed'\", \"'terminated': {'container_id'\", \"'exit_code': 1\", pod phase Failed. Meaning: the container that syncs property documents to OpenSearch (gdp_engine_property_incremental_<env>) exited with an error. Airflow only sees the pod status. Usual causes: the sync job failed on OpenSearch (cluster unavailable, index mapping rejected a document, bulk request rejected, credentials), on its Snowflake read, or ran much longer than usual and was stopped. Repair: read the container's own log (the pod log in the task log, or Datadog for the pod name), fix what it reports, then rerun the task. A rerun alone is reasonable when the log shows an OpenSearch or network timeout.",
+      "content_json": {
+        "signals": [
+          "sync-property-es",
+          "'terminated': {'container_id'"
+        ],
+        "meaning": "The OpenSearch sync container in the Kubernetes pod exited with an error.",
+        "usual_cause": "OpenSearch unavailable or rejecting documents, a Snowflake read failure, or a run far longer than usual.",
+        "action": null,
+        "human_steps": [
+          "Read the container log of the pod (task log or Datadog by pod name).",
+          "Check OpenSearch cluster health and index mapping errors.",
+          "Rerun the task after the fix; one rerun is fine for a timeout."
+        ],
+        "evidence": {
+          "runs": 10,
+          "dag_count": 1,
+          "dags": [
+            "gdp_engine_property_incremental_qa"
+          ],
+          "tasks": [
+            "gdp_engine_property_incremental_qa.gdp_engine_incremental"
+          ],
+          "sources": [
+            "INCIDENT",
+            "TASK_RUN"
+          ],
+          "first_seen": "2026-10-22T18:12:27+00:00",
+          "last_seen": "2026-10-23T06:52:32+00:00",
+          "incidents": 1
+        }
+      },
+      "tags": [
+        "AIRFLOW",
+        "RUNBOOK",
+        "LEARNED",
+        "KUBERNETES",
+        "OPENSEARCH"
+      ]
+    },
+    {
+      "key": "ops.runbook.gdp.snaplogic-bearer-token",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "SnapLogic trigger rejected: 401 Mismatched bearer token",
+      "content": "Signals: 'Exception: SnapLogic trigger HTTPError 401 UNAUTHORIZED', '\"message\": \"Mismatched bearer token\"'. Meaning: the SnapLogic triggered task refused the bearer token the DAG sent. Usual causes: the triggered task was recreated or its token regenerated in SnapLogic, while the Airflow connection or the Akeyless secret (under the environment's AKEYLESS_BASE_PATH) still holds the old one; or the DAG points at another environment's task URL. Repair: a human step. In SnapLogic Manager open the triggered task, copy its current bearer token, update the Airflow connection or Akeyless secret for this environment, then clear trigger_snaplogic with downstream. Retries do not help: every try fails the same way.",
+      "content_json": {
+        "signals": [
+          "Mismatched bearer token",
+          "SnapLogic trigger HTTPError"
+        ],
+        "meaning": "SnapLogic rejected the triggered task's bearer token.",
+        "usual_cause": "Token regenerated or task recreated in SnapLogic without updating the Airflow connection / Akeyless secret, or a URL for another environment.",
+        "action": null,
+        "human_steps": [
+          "Open the triggered task in SnapLogic Manager and copy its bearer token.",
+          "Update the Airflow connection or the Akeyless secret under this environment's AKEYLESS_BASE_PATH.",
+          "Clear trigger_snaplogic with downstream."
+        ],
+        "related": [
+          "ops.runbook.auth-expired"
+        ],
+        "evidence": {
+          "runs": 5,
+          "dag_count": 2,
+          "dags": [
+            "gdp_cornerstone_dev",
+            "gdp_news_to_leads_dev"
+          ],
+          "tasks": [
+            "gdp_cornerstone_dev.trigger_snaplogic",
+            "gdp_news_to_leads_dev.trigger_snaplogic"
+          ],
+          "sources": [
+            "INCIDENT",
+            "TASK_RUN"
+          ],
+          "first_seen": "2026-10-21T20:00:37+00:00",
+          "last_seen": "2026-10-24T20:09:32+00:00",
+          "incidents": 2
+        }
+      },
+      "tags": [
+        "AIRFLOW",
+        "RUNBOOK",
+        "LEARNED",
+        "SNAPLOGIC",
+        "AUTH"
+      ]
+    },
+    {
+      "key": "ops.runbook.gdp.snowflake-failed-to-copy-previous-results",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "Snowflake 210012: Failed to copy previous results (dbt execute_via_snowflake)",
+      "content": "Signals: '210012 (P0000): Failed to copy previous results', 'Database Error in model execute_via_snowflake', 'dbt-ol run --select tag:<source>_company_silver ... failed'. Meaning: Snowflake failed internally while reusing a previous query result during the dbt run. The SQL and the data are fine. Usual causes: a transient Snowflake service error, most often when many silver dbt runs (company_merged_pipeline) start at the same time. Repair: one rerun (RERUN_ONLY) of the dbt task normally passes. When it recurs, add retries to the dbt profile (retries: 2) or the task (retries with retry_exponential_backoff), disable result reuse in execute_via_snowflake with a pre_hook 'ALTER SESSION SET USE_CACHED_RESULT = FALSE', stagger the source DAGs, and open a Snowflake support case with the query id.",
+      "content_json": {
+        "signals": [
+          "210012",
+          "Failed to copy previous results"
+        ],
+        "meaning": "A transient Snowflake internal error while reusing a previous query result.",
+        "usual_cause": "Snowflake service error, often when many silver dbt runs start together.",
+        "action": "RERUN_ONLY",
+        "human_steps": [
+          "Rerun the failed dbt task.",
+          "When it recurs, add dbt or Airflow retries with backoff and USE_CACHED_RESULT = FALSE in execute_via_snowflake.",
+          "Open a Snowflake support case with the query id."
+        ],
+        "evidence": {
+          "runs": 5,
+          "dag_count": 5,
+          "dags": [
+            "gdp_zoominfo_qa",
+            "gdp_mta_qa",
+            "gdp_rcoe_qa",
+            "gdp_tcc_qa",
+            "gdp_spoc_qa"
+          ],
+          "tasks": [
+            "gdp_zoominfo_qa.dbt_silver_company",
+            "gdp_mta_qa.dbt_silver_company",
+            "gdp_rcoe_qa.dbt_silver_company",
+            "gdp_tcc_qa.dbt_silver_company",
+            "gdp_spoc_qa.dbt_silver_company"
+          ],
+          "sources": [
+            "INCIDENT",
+            "TASK_RUN"
+          ],
+          "first_seen": "2026-10-24T10:21:31+00:00",
+          "last_seen": "2026-10-24T20:41:47+00:00",
+          "incidents": 5
+        }
+      },
+      "tags": [
+        "AIRFLOW",
+        "RUNBOOK",
+        "LEARNED",
+        "SNOWFLAKE",
+        "DBT"
+      ]
+    },
+    {
+      "key": "ops.runbook.gdp.k8s-pod-not-found",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "Kubernetes pod not found (ApiException 404) while Airflow reads or cleans up the pod",
+      "content": "Signals: 'ApiException: (404)', '\"reason\":\"NotFound\"', '\"kind\":\"pods\"'. Meaning: the KubernetesPodOperator asked for its pod's status or logs and the pod was already gone. Usual causes: the node was scaled in or the pod evicted, a retry of the same task deleted the earlier pod, or the pod was cleaned up before Airflow read it. Repair: one rerun (RERUN_ONLY) usually passes. When it recurs, check the cluster events and the autoscaler around the failure time, use on_finish_action='delete_succeeded_pod' so failed pods stay for inspection, and give the task retries with backoff.",
+      "content_json": {
+        "signals": [
+          "\"reason\":\"NotFound\"",
+          "\"kind\":\"pods\""
+        ],
+        "meaning": "Airflow could not find the task's Kubernetes pod.",
+        "usual_cause": "Node scale-in or eviction, a retry deleting the earlier pod, or early cleanup.",
+        "action": "RERUN_ONLY",
+        "human_steps": [
+          "Rerun the task.",
+          "Check cluster events and the autoscaler at the failure time.",
+          "Set on_finish_action='delete_succeeded_pod' and retries with backoff."
+        ],
+        "related": [
+          "ops.runbook.zombie-or-killed"
+        ],
+        "evidence": {
+          "runs": 4,
+          "dag_count": 1,
+          "dags": [
+            "gdp_engine_property_incremental_qa"
+          ],
+          "tasks": [
+            "gdp_engine_property_incremental_qa.gdp_engine_incremental"
+          ],
+          "sources": [
+            "INCIDENT",
+            "TASK_RUN"
+          ],
+          "first_seen": "2026-10-23T13:50:41+00:00",
+          "last_seen": "2026-10-24T20:03:08+00:00",
+          "incidents": 1
+        }
+      },
+      "tags": [
+        "AIRFLOW",
+        "RUNBOOK",
+        "LEARNED",
+        "KUBERNETES",
+        "INFRASTRUCTURE"
+      ]
+    },
+    {
+      "key": "ops.runbook.gdp.snaplogic-exit-threshold",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "SnapLogic Exit snap: exceeded threshold limit (error documents in the pipeline)",
+      "content": "Signals: \"SnapLogic run for <SOURCE> failed: Snap 'Exit': Exceeded threshold limit -- Number of input documents received is more than 0\". Meaning: the pipeline's Exit snap is a data check. It stops the pipeline when any document reaches the error path. Records failed validation or mapping inside SnapLogic. Usual causes: new or malformed values from the source (a new code, a null in a required field, a changed file layout), or a mapping change in the pipeline. Repair: a human step. Open the runtime by its ruuid in SnapLogic Manager and read the documents in the error view; fix the source data or the pipeline mapping; then clear trigger_snaplogic with downstream. Rerunning without a fix fails the same way.",
+      "content_json": {
+        "signals": [
+          "Exceeded threshold limit",
+          "Number of input documents received is more than"
+        ],
+        "meaning": "Documents reached the SnapLogic pipeline's error path and its Exit snap stopped it.",
+        "usual_cause": "New or malformed source values or a pipeline mapping change.",
+        "action": null,
+        "human_steps": [
+          "Open the runtime (ruuid in the message) in SnapLogic Manager and read the error view documents.",
+          "Fix the source data or the pipeline mapping; tell the source owner when the source changed.",
+          "Clear trigger_snaplogic with downstream."
+        ],
+        "related": [
+          "ops.runbook.snaplogic-pipeline-error",
+          "ops.runbook.schema-drift"
+        ],
+        "evidence": {
+          "runs": 2,
+          "dag_count": 2,
+          "dags": [
+            "gdp_edp_qa",
+            "gdp_tpc_qa"
+          ],
+          "tasks": [
+            "gdp_edp_qa.trigger_snaplogic",
+            "gdp_tpc_qa.trigger_snaplogic"
+          ],
+          "sources": [
+            "INCIDENT",
+            "TASK_RUN"
+          ],
+          "first_seen": "2026-10-24T07:53:11+00:00",
+          "last_seen": "2026-10-24T09:07:34+00:00",
+          "incidents": 2
+        }
+      },
+      "tags": [
+        "AIRFLOW",
+        "RUNBOOK",
+        "LEARNED",
+        "SNAPLOGIC",
+        "DATA_QUALITY"
+      ]
+    },
+    {
+      "key": "ops.runbook.gdp.dbt-job-duplicate-row-gold",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "DBT job failed: duplicate row detected during DML (100090) in a gold model",
+      "content": "Signals: 'DBT job failed: N model(s) failed out of N total', 'Duplicate row detected during DML action' (100090), first error in a gold model such as property_es_doc. Meaning: the model's MERGE matched one target row with several source rows. Usual causes: a join in the model fans out (several MDM matches or history rows per key), or an upstream silver table received the same record twice. Repair: find the duplicate keys in the model's source query (GROUP BY key HAVING COUNT(*) > 1). A fan-out is fixed in the model (QUALIFY ROW_NUMBER() OVER (PARTITION BY key ...) = 1 or a tighter join), a code change; duplicates in an upstream table follow the duplicate-keys runbook. Rerun the engine DAG after.",
+      "content_json": {
+        "signals": [
+          "Duplicate row detected during DML action",
+          "100090",
+          "DBT job failed",
+          "during DML action"
+        ],
+        "meaning": "A gold dbt model's MERGE found several source rows for one key.",
+        "usual_cause": "A fan-out join in the model or duplicates in an upstream silver table.",
+        "action": null,
+        "human_steps": [
+          "Find the duplicate keys in the model's source query.",
+          "Deduplicate in the model (QUALIFY ROW_NUMBER() = 1) or fix the join.",
+          "Rerun the engine DAG."
+        ],
+        "related": [
+          "ops.runbook.duplicate-keys"
+        ],
+        "evidence": {
+          "runs": 1,
+          "dag_count": 1,
+          "dags": [
+            "gdp_engine_property_incremental_dev"
+          ],
+          "tasks": [
+            "gdp_engine_property_incremental_dev.dbt_property_es_doc"
+          ],
+          "sources": [
+            "INCIDENT",
+            "TASK_RUN"
+          ],
+          "first_seen": "2026-10-21T14:22:41+00:00",
+          "last_seen": "2026-10-21T14:22:41+00:00",
+          "incidents": 1
+        }
+      },
+      "tags": [
+        "AIRFLOW",
+        "RUNBOOK",
+        "LEARNED",
+        "DBT",
+        "DATA_QUALITY"
+      ]
+    },
+    {
+      "key": "ops.runbook.gdp.event-outbox-not-authorized",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "dbt property_event_outbox: STAGE.EVENT_OUTBOX_PROPERTY does not exist or not authorized (002003)",
+      "content": "Signals: '002003 (42S02): SQL compilation error', \"Object '<ENV>_GDP_SILVER_DB.STAGE.EVENT_OUTBOX_PROPERTY' does not exist or not authorized\", 'Database Error in model property_event_outbox'. Meaning: the post-MDM dbt model that writes the Kafka event outbox cannot see its STAGE table. Usual causes: the table was not deployed in this environment yet, or the environment's data engineer role has no privilege on the STAGE schema (new table without future grants). Repair: a human step. Check the table exists (SHOW TABLES LIKE 'EVENT_OUTBOX_PROPERTY' IN SCHEMA <ENV>_GDP_SILVER_DB.STAGE); deploy it when missing, or grant the role SELECT/INSERT on it and future grants on the schema. Rerun the post-MDM DAG after.",
+      "content_json": {
+        "signals": [
+          "EVENT_OUTBOX_PROPERTY",
+          "does not exist or not authorized",
+          "002003",
+          "property_event_outbox"
+        ],
+        "meaning": "The event outbox model cannot see its STAGE table.",
+        "usual_cause": "Table not deployed in this environment or missing grants for the environment role.",
+        "action": null,
+        "human_steps": [
+          "Check the table exists in <ENV>_GDP_SILVER_DB.STAGE.",
+          "Deploy it or grant the environment role privileges and future grants.",
+          "Rerun the post-MDM DAG."
+        ],
+        "related": [
+          "ops.runbook.object-does-not-exist",
+          "ops.runbook.insufficient-privileges"
+        ],
+        "evidence": {
+          "runs": 1,
+          "dag_count": 1,
+          "dags": [
+            "gdp_post_mdm_to_gold_property_qa"
+          ],
+          "tasks": [
+            "gdp_post_mdm_to_gold_property_qa.dbt_gold_property"
+          ],
+          "sources": [
+            "INCIDENT",
+            "TASK_RUN"
+          ],
+          "first_seen": "2026-10-22T07:16:51+00:00",
+          "last_seen": "2026-10-22T07:16:51+00:00",
+          "incidents": 1
+        }
+      },
+      "tags": [
+        "AIRFLOW",
+        "RUNBOOK",
+        "LEARNED",
+        "SNOWFLAKE",
+        "ACCESS",
+        "DBT"
+      ]
+    },
+    {
+      "key": "ops.runbook.gdp.k8s-pod-unschedulable",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "Kubernetes pod could not start (nodes available: Insufficient memory, image pull)",
+      "content": "Signals: '0/N nodes are available', 'Insufficient memory', 'Insufficient cpu', 'ErrImagePull', 'ImagePullBackOff'. Meaning: the task's pod never started: no node had the CPU or memory it requests, or the image could not be pulled. Usual causes: the cluster was full or the autoscaler at its maximum, pod requests larger than any node, a wrong image tag after a release, or registry credentials that expired. Repair: a human step for the image (fix the tag or the pull secret). For capacity, rerun when the cluster has room (RERUN_ONLY), and if it recurs lower the pod's requests or raise the node group's capacity.",
+      "content_json": {
+        "signals": [
+          "nodes are available",
+          "Insufficient memory",
+          "ErrImagePull",
+          "ImagePullBackOff"
+        ],
+        "meaning": "The task's pod could not be scheduled or its image pulled.",
+        "usual_cause": "Cluster capacity, oversized requests, wrong image tag or expired pull secret.",
+        "action": "RERUN_ONLY",
+        "human_steps": [
+          "Check whether the error is capacity (Insufficient) or image (ErrImagePull).",
+          "Fix the image tag or pull secret for an image error.",
+          "For capacity, rerun later and review requests and node group limits."
+        ],
+        "related": [
+          "ops.runbook.zombie-or-killed"
+        ],
+        "evidence": {
+          "runs": 1,
+          "dag_count": 1,
+          "dags": [
+            "gdp_engine_property_incremental_qa"
+          ],
+          "tasks": [
+            "gdp_engine_property_incremental_qa.gdp_engine_incremental"
+          ],
+          "sources": [
+            "INCIDENT",
+            "TASK_RUN"
+          ],
+          "first_seen": "2026-10-24T19:13:38+00:00",
+          "last_seen": "2026-10-24T19:13:38+00:00",
+          "incidents": 1
+        }
+      },
+      "tags": [
+        "AIRFLOW",
+        "RUNBOOK",
+        "LEARNED",
+        "KUBERNETES",
+        "INFRASTRUCTURE"
+      ]
+    },
+    {
+      "key": "ops.runbook.gdp.snowflake-table-lock-queue",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "Snowflake lock queue on a shared silver table (has locked table ... not yet released)",
+      "content": "Signals: \"Statement '<id>' has locked table '<TABLE>' in transaction <n> and this lock has not yet been released\", the dbt model aborted (for example company_core). Meaning: too many statements were already waiting for the lock on the same table, so Snowflake aborted this one. Usual causes: several source DAGs (gdp_<source>_qa with tag company_merged_pipeline) write to the same shared silver table (COMPANY_CORE) at the same time. Repair: one rerun (RERUN_ONLY) once the other runs finish usually passes. When it recurs, run the writers one at a time: an Airflow pool with one slot for the company_merged_pipeline dbt tasks, staggered schedules, or one merge step that the sources feed instead of each writing the table.",
+      "content_json": {
+        "signals": [
+          "has locked table",
+          "lock has not yet been released"
+        ],
+        "meaning": "The statement was aborted while waiting for a lock other runs held on a shared table.",
+        "usual_cause": "Concurrent source DAGs writing the same silver table.",
+        "action": "RERUN_ONLY",
+        "human_steps": [
+          "Check which DAGs were writing the table at the time.",
+          "Rerun after they finish.",
+          "Serialize the writers with a one-slot Airflow pool or staggered schedules."
+        ],
+        "related": [
+          "ops.runbook.statement-timeout"
+        ],
+        "evidence": {
+          "runs": 1,
+          "dag_count": 1,
+          "dags": [
+            "gdp_news_to_leads_qa"
+          ],
+          "tasks": [
+            "gdp_news_to_leads_qa.dbt_silver_company"
+          ],
+          "sources": [
+            "INCIDENT",
+            "TASK_RUN"
+          ],
+          "first_seen": "2026-10-24T11:04:34+00:00",
+          "last_seen": "2026-10-24T11:04:34+00:00",
+          "incidents": 1
+        }
+      },
+      "tags": [
+        "AIRFLOW",
+        "RUNBOOK",
+        "LEARNED",
+        "SNOWFLAKE",
+        "DBT",
+        "PERFORMANCE"
+      ]
+    }
+  ]
+}
