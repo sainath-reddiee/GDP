@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState, useTransition, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { Ban, Check, Layers, Link2, Loader2, MessageSquare, Play, Plus, RotateCcw, Send, Table2, Trash2, Unlink, X } from "lucide-react";
 import {
   addRequestSource, cancelRequest, commentRequest, createRequest, deleteRequestAction, deleteRunsAction, linkRequestDomain, linkRequestRun, linkRequestSource, rejectRequest,
@@ -10,6 +11,7 @@ import {
 } from "@/app/os/requests/actions";
 import { analyzeTables, loadCatalogInventory, loadOverview } from "@/app/sources/actions";
 import { FilePicker, formOf } from "@/components/os/request-files";
+import { useScrollLock } from "@/components/use-scroll-lock";
 import type { Duplicate, RequestDetail, RequestItem } from "@/lib/os/requests";
 import { DEFAULT_BANDS, type AnalyzeResult, type CatalogInventory } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -88,7 +90,15 @@ function RequestRunDrawer({
   enhance: boolean;
   onClose: () => void;
 }) {
+  useScrollLock();
   const router = useRouter();
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !e.defaultPrevented) onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
   const [dbSchema, setDbSchema] = useState<{ database: string; schema: string } | null>(
     databaseName && schemaName ? { database: databaseName, schema: schemaName } : null,
   );
@@ -277,13 +287,15 @@ function RequestRunDrawer({
 
   const strongBand = (analysis?.bands ?? DEFAULT_BANDS).model_match_strong;
 
-  return (
-    <div className="fixed inset-0 z-50 flex justify-end" data-testid="request-run-drawer">
-      <button type="button" aria-label="Close" className="absolute inset-0 bg-black/35" onClick={onClose} />
+  if (typeof document === "undefined") return null;
+
+  return createPortal(
+    <div className="fixed inset-0 z-[70] flex justify-end" data-testid="request-run-drawer">
+      <button type="button" aria-label="Close" className="absolute inset-0 bg-black/40 backdrop-blur-[1px]" onClick={onClose} />
       <aside
         role="dialog"
         aria-label="Configure and start pipeline run"
-        className="relative flex h-full w-[920px] max-w-full flex-col overflow-hidden border-l border-[var(--os-line)] bg-[var(--os-surface)] shadow-2xl"
+        className="relative flex h-screen w-[960px] max-w-full flex-col overflow-hidden border-l border-[var(--os-line)] bg-[var(--os-surface)] text-[var(--os-ink)] shadow-2xl"
       >
         <header className="flex items-start gap-3 border-b border-[var(--os-line)] px-6 py-4">
           <Layers className="mt-0.5 h-5 w-5 text-[var(--os-forest)]" />
@@ -621,7 +633,8 @@ function RequestRunDrawer({
           </div>
         </footer>
       </aside>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
