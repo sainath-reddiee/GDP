@@ -23,7 +23,7 @@ import { DiffList } from "../../[modelId]/review-panel";
 import { loadPublishing, type Publishing } from "../../model-actions";
 import { GitState } from "../../table-models-list";
 import {
-  loadRelated, loadTableDiff, proposeTableModel, publishTableModel, renderTableModel, saveTableLayout, saveTableModel, setTableDomain,
+  evolveTableWithAi, loadRelated, loadTableDiff, proposeTableModel, publishTableModel, renderTableModel, saveTableLayout, saveTableModel, setTableDomain,
   suggestColumns, syncTablePrs,
 } from "../../table-model-actions";
 
@@ -205,6 +205,8 @@ function ColumnsTab({ id, spec, onChange, editable, issues, canAI, layer, setLay
   const toast = useToast();
   const e = spec.design.entities[0];
   const [suggestions, setSuggestions] = useState<TmSuggestion[] | null>(null);
+  const [evolveOpen, setEvolveOpen] = useState(false);
+  const [instructions, setInstructions] = useState("");
   const [asking, startAsk] = useTransition();
   const byColumn = useMemo(() => new Map((suggestions ?? []).map((s) => [s.column, s])), [suggestions]);
   const set = (a: DmAttribute, patch: Partial<DmAttribute>) => onChange(updateAttribute(spec, e.id, a.id, patch));
@@ -218,6 +220,16 @@ function ColumnsTab({ id, spec, onChange, editable, issues, canAI, layer, setLay
     if (r.data.error) toast("error", r.data.error);
     setSuggestions(r.data.items);
     if (!r.data.items.length && !r.data.error) toast("ok", "No suggestions: the columns look right");
+  });
+  const evolve = () => startAsk(async () => {
+    const text = instructions.trim();
+    if (!text) return;
+    const r = await evolveTableWithAi(id, { spec, instructions: text, table_type: tableType });
+    if (!r.ok) { toast("error", explain(r.error).message); return; }
+    onChange(r.data.spec);
+    setInstructions("");
+    setEvolveOpen(false);
+    toast("ok", `AI evolved table: ${r.data.rationale}`);
   });
   const accept = (a: DmAttribute, s: TmSuggestion) => {
     set(a, { ...(s.classification ? { semantic_type: s.classification } : {}), ...(s.description && !a.description ? { description: s.description } : {}) });
@@ -260,10 +272,32 @@ function ColumnsTab({ id, spec, onChange, editable, issues, canAI, layer, setLay
 
       <div className="flex flex-wrap items-center gap-2">
         <h3 className="text-sm font-semibold">Columns</h3>
+        {editable && (
+          <Button size="sm" variant={evolveOpen ? "default" : "outline"} onClick={() => setEvolveOpen((v) => !v)} disabled={asking} data-testid="tm-evolve-ai">
+            <Sparkles className="h-3.5 w-3.5" /> Evolve with AI
+          </Button>
+        )}
         {canAI && <Button size="sm" variant="outline" onClick={ask} disabled={asking} data-testid="tm-suggest">{asking ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />} Suggest classifications and descriptions</Button>}
         {suggestions && suggestions.length > 0 && <Button size="sm" variant="ghost" onClick={acceptAll}>Accept all {suggestions.length}</Button>}
         {editable && <Button size="sm" variant="outline" className="ml-auto" onClick={() => onChange(addAttribute(spec, e.id))}><Plus className="h-3.5 w-3.5" /> Add column</Button>}
       </div>
+      {editable && evolveOpen && (
+        <div className="surface flex flex-wrap items-end gap-2 p-3" data-testid="tm-evolve-panel">
+          <div className="min-w-[260px] flex-1">
+            <Label htmlFor="tm-evolve-input">Instructions for AI to evolve this table model</Label>
+            <Input
+              id="tm-evolve-input"
+              value={instructions}
+              onChange={(ev) => setInstructions(ev.target.value)}
+              placeholder="e.g. Add columns LEASE_START_DATE, LEASE_END_DATE, MONTHLY_RENT_AMOUNT, and SCD2 audit columns"
+              className="mt-1"
+            />
+          </div>
+          <Button size="sm" onClick={evolve} disabled={asking || instructions.trim().length < 3} data-testid="tm-evolve-run">
+            {asking ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />} Apply AI evolution
+          </Button>
+        </div>
+      )}
       <datalist id="tm-types">{TYPES.map((t) => <option key={t} value={t} />)}</datalist>
       <section className="surface overflow-x-auto">
         <table className="w-full text-sm">

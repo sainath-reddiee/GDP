@@ -26,7 +26,7 @@ from services.code.indexer import LOCK_MINUTES, SAFE_BRANCH, branch_segment, saf
 
 router = APIRouter()
 NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]{1,62}$")
-URL = re.compile(r"^https://[A-Za-z0-9.\-]+(:\d+)?/[A-Za-z0-9_.\-/~%]+$")
+URL = re.compile(r"^https://(?:[A-Za-z0-9_.\-]+@)?[A-Za-z0-9.\-]+(:\d+)?/[A-Za-z0-9_.\-/~%]+$")
 # five cron fields, then a time zone such as UTC, Europe/London, America/Argentina/Buenos_Aires or Etc/GMT+5
 CRON = re.compile(r"^([\w*/,\-]+ ){5}[A-Za-z_]+(/[A-Za-z0-9_+\-]+)*$")
 PROVIDERS = {"github.com": "GITHUB", "gitlab.com": "GITLAB", "bitbucket.org": "BITBUCKET", "dev.azure.com": "AZURE_DEVOPS",
@@ -48,12 +48,12 @@ def _search(db: Db):
 
 
 def provider_of(url: str) -> str:
-    host = url.split("/")[2].lower()
+    host = url.split("/")[2].split("@")[-1].split(":")[0].lower()
     return next((v for k, v in PROVIDERS.items() if host == k or host.endswith("." + k)), "OTHER")
 
 
 def same_origin(a: str, b: str) -> bool:
-    norm = lambda u: (u or "").strip().lower().removesuffix("/").removesuffix(".git")  # noqa: E731
+    norm = lambda u: re.sub(r"^https?://[^@/]+@", "https://", (u or "").strip()).lower().removesuffix("/").removesuffix(".git")  # noqa: E731
     return norm(a) == norm(b)
 
 
@@ -217,7 +217,7 @@ def create_repo(body: RepoIn, db: Db = Depends(current_db)):
     name = body.name.strip().upper()
     if not NAME.match(name):
         raise HTTPException(400, "Name: letters, digits and underscores, starting with a letter")
-    url = body.git_url.strip().removesuffix("/")
+    url = re.sub(r"^https://[^@/]+@", "https://", body.git_url.strip()).removesuffix("/")
     if not URL.match(url):
         raise HTTPException(400, "Give the repository's https URL")
     branch = body.branch.strip().strip("/")

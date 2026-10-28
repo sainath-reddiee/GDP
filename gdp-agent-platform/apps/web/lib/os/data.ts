@@ -120,7 +120,8 @@ export type RequestList = { requests: OnboardingRequest[]; counts: Record<string
 export const loadRequests = (scope: "all" | "mine" | "waiting" = "all", status: "OPEN" | "CLOSED" | "ALL" = "OPEN", domainId?: string, asSelf = false) =>
   load((asSelf ? apiAsSelf : api)<RequestList>(`/api/onboarding-requests?${new URLSearchParams({ scope, status, ...(domainId ? { domain_id: domainId } : {}) })}`),
        { requests: [], counts: {}, user: "" } as RequestList);
-export const loadRequest = (id: string) => load(api<RequestDetail>(`/api/onboarding-requests/${encodeURIComponent(id)}`), null as RequestDetail | null);
+export const loadRequest = (id: string, asSelf = false) =>
+  load((asSelf ? apiAsSelf : api)<RequestDetail>(`/api/onboarding-requests/${encodeURIComponent(id)}`), null as RequestDetail | null);
 
 /* design: a domain's data model, its open questions and a run's mapping proposals */
 

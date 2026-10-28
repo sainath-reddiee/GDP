@@ -4,8 +4,9 @@ import { AlertTriangle, ArrowRight, Check, Hand, Loader2, X } from "lucide-react
 import type { RunSummary } from "@/lib/types";
 import { GATES, stateLabel } from "@/lib/run-labels";
 import { lifecycleOf, type StepStatus } from "@/lib/os/lifecycle";
-import type { BoardView } from "@/lib/os/work";
+import { RUNNING_STATES, type BoardView } from "@/lib/os/work";
 import { Empty, Tag, ago } from "./ui";
+import { DeleteRunButton } from "./request-ui";
 import { cn } from "@/lib/utils";
 
 // The stage boards (Intake, Design, Build): one tab strip (Selected, Action required, Active, Completed), workflow cards
@@ -36,7 +37,7 @@ export function Segmented({ label, options, testId }: {
   );
 }
 
-export type TrackStep = { key: string; label: string; owner?: string; state: "done" | "current" | "attention" | "pending" | "closed" };
+export type TrackStep = { key: string; label: string; owner?: string; state: "done" | "current" | "attention" | "pending" | "closed"; href?: string };
 
 /** A workflow's steps as one connected track: done, the step it is at (and on whom it waits), what comes next. */
 export function Track({ steps, waiting, note, since, className }: {
@@ -48,20 +49,29 @@ export function Track({ steps, waiting, note, since, className }: {
     <ol className={cn("grid gap-1.5", className)} style={{ gridTemplateColumns: `repeat(${steps.length}, minmax(0, 1fr))` }} aria-label="Workflow steps">
       {steps.map((s) => {
         const now = s.state === "current" || s.state === "attention";
-        return (
-          <li key={s.key} className="min-w-0" aria-current={now ? "step" : undefined} title={`${s.label}${s.owner ? ` · ${s.owner}` : ""}`}>
-            <span className={cn("block h-1.5 rounded-full",
+        const body = (
+          <>
+            <span className={cn("block h-1.5 rounded-full transition-transform group-hover/step:scale-y-125",
               s.state === "done" ? "bg-[var(--os-step-done)]" : s.state === "current" ? "os-step-now bg-[var(--os-accent)]"
                 : s.state === "attention" ? "bg-[#d85b52]" : "bg-[var(--os-line)]")} />
-            <span className={cn("mt-1.5 flex items-center gap-1 truncate text-[11px]", now ? "font-extrabold" : s.state === "done" ? "os-muted font-semibold" : "os-faint font-semibold")}>
+            <span className={cn("mt-1.5 flex items-center gap-1 truncate text-[11px] group-hover/step:text-[var(--os-accent-ink)]", now ? "font-extrabold" : s.state === "done" ? "os-muted font-semibold" : "os-faint font-semibold")}>
               {s.state === "done" && <Check className="h-3 w-3 shrink-0 text-[var(--os-step-done-ink)]" />}
               {s.state === "attention" && <AlertTriangle className="h-3 w-3 shrink-0 text-[var(--os-red-ink)]" />}
               {s.state === "current" && <Hand className="h-3 w-3 shrink-0 text-[var(--os-accent-ink)]" />}
-              <span className="truncate">{s.label}</span>
+              <span className="truncate group-hover/step:underline">{s.label}</span>
             </span>
             {now && (note || waiting || s.owner) && (
               <span className="os-faint mt-0.5 block truncate text-[10.5px]" title={note ?? undefined}>{note ?? `Waiting on ${waiting || s.owner}`}{since ? ` · ${since}` : ""}</span>
             )}
+          </>
+        );
+        return (
+          <li key={s.key} className="min-w-0" aria-current={now ? "step" : undefined} title={`${s.label}${s.owner ? ` · ${s.owner}` : ""}`}>
+            {s.href ? (
+              <Link href={s.href} className="group/step -mx-1 -my-0.5 block rounded-md px-1 py-0.5 transition hover:bg-[var(--os-subtle)]">
+                {body}
+              </Link>
+            ) : body}
           </li>
         );
       })}
@@ -75,20 +85,38 @@ const TRACK_STATE: Record<StepStatus, TrackStep["state"]> = {
 
 const FIXER = "Forward Engineering Lead";
 
+const runStepUrl = (runId: string, key: string): string => {
+  const run = encodeURIComponent(runId);
+  if (key === "intake") return "/os/intake";
+  if (key === "enable" || key === "ingest") return "/os/enable";
+  if (key === "design") return `/os/design?view=selected&run=${run}`;
+  if (key === "generate") return `/os/build?view=selected&run=${run}`;
+  if (key === "validate") return `/os/review?view=selected&run=${run}`;
+  if (key === "pr" || key === "release") return `/os/release?view=selected&run=${run}`;
+  return `/os/build?view=selected&run=${run}`;
+};
+
 /** A run's eight steps as a track, what its current step is doing (a gate's approver, the agent at work, or who fixes a
  *  failure) and how many steps are still to go. */
-export function runTrack(run: Pick<RunSummary, "current_state" | "updated_at" | "created_at" | "lifecycle">) {
+export function runTrack(run: Pick<RunSummary, "current_state" | "updated_at" | "created_at" | "lifecycle"> & { run_id?: string }) {
   const steps = lifecycleOf(run);
   const at = steps.find((s) => s.status !== "done");
   const gate = GATES[run.current_state];
   const failed = run.current_state === "FAILED" || run.current_state === "VALIDATION_FAILED";
+  const agentWorking = RUNNING_STATES.has(run.current_state);
   // the data quality checks are approved by Build end to end (AUTOPILOT_APPROVES_DQ), not by a person
   const note = run.current_state === "SODA_REVIEW" ? `Waiting on ${FIXER}: Build end to end approves the checks`
     : gate ? `Waiting on ${gate.role}` : failed ? `Needs ${FIXER}: fix and retry`
-    : at && run.lifecycle === "RUNNING" ? `${at.actor === "Agent" ? "Agent working" : "In progress"} · ${at.owner}`
+    : at && agentWorking ? `Agent working · ${at.owner}`
     : at ? `Waiting on ${at.owner}` : null;
   return {
-    steps: steps.map((s) => ({ key: s.key, label: s.label, owner: s.owner, state: TRACK_STATE[s.status] })),
+    steps: steps.map((s) => ({
+      key: s.key,
+      label: s.label,
+      owner: s.owner,
+      state: TRACK_STATE[s.status],
+      href: run.run_id ? runStepUrl(run.run_id, s.key) : undefined,
+    })),
     note,
     pending: steps.filter((s) => s.status !== "done").length,
     since: ago(run.updated_at ?? run.created_at).replace(/ ago$/, ""),
@@ -143,6 +171,7 @@ export function RunCard({ run, href, mine, current }: { run: RunSummary; href: s
             {failed && <X className="h-3 w-3" />}{stateLabel(run.current_state)}
           </Tag>
           <Link href={href} scroll={false} className="os-btn" aria-label={`Open ${run.run_name}`}>Open <ArrowRight className="h-3.5 w-3.5" /></Link>
+          <DeleteRunButton runIds={[run.run_id]} iconOnly />
         </div>
       </div>
       <Track steps={t.steps} note={t.note} since={t.since} className="mt-3.5" />
@@ -172,7 +201,7 @@ const cleanWorkflowName = (run: RunSummary, parentName?: string | null) => {
   return raw || run.run_name;
 };
 
-const fiveStageTrack = (runs: RunSummary[]): TrackStep[] => {
+export const fiveStageTrack = (runs: RunSummary[], primaryRunId?: string): TrackStep[] => {
   const states = runs.map((r) => r.current_state);
   const anyFailed = states.some((s) => s === "VALIDATION_FAILED" || s === "FAILED");
   const allPublished = states.every((s) => ["COMPLETED", "DBT_APPROVED", "DEPLOYED", "PIPELINE_ENABLED"].includes(s));
@@ -188,12 +217,13 @@ const fiveStageTrack = (runs: RunSummary[]): TrackStep[] => {
     : "initiate";
 
   const order = ["initiate", "design", "build", "validate", "publish"] as const;
-  const labels: Record<(typeof order)[number], { label: string; owner: string }> = {
-    initiate: { label: "Initiate", owner: "Data OS Administrator" },
-    design: { label: "Design", owner: "Data Designer" },
-    build: { label: "Build", owner: "Forward Engineering Lead" },
-    validate: { label: "Validate", owner: "Independent Review Agent" },
-    publish: { label: "Publish", owner: "Data Developer" },
+  const runParam = primaryRunId ? encodeURIComponent(primaryRunId) : null;
+  const labels: Record<(typeof order)[number], { label: string; owner: string; href?: string }> = {
+    initiate: { label: "Initiate", owner: "Data OS Administrator", href: "/os/intake" },
+    design: { label: "Design", owner: "Data Designer", href: runParam ? `/os/design?view=selected&run=${runParam}` : "/os/design" },
+    build: { label: "Build", owner: "Forward Engineering Lead", href: runParam ? `/os/build?view=selected&run=${runParam}` : "/os/build" },
+    validate: { label: "Validate", owner: "Independent Review Agent", href: runParam ? `/os/review?view=selected&run=${runParam}` : "/os/review" },
+    publish: { label: "Publish", owner: "Data Developer", href: runParam ? `/os/release?view=selected&run=${runParam}` : "/os/release" },
   };
   const idx = order.indexOf(activeStage);
   return order.map((k, i) => ({
@@ -201,6 +231,7 @@ const fiveStageTrack = (runs: RunSummary[]): TrackStep[] => {
     label: labels[k].label,
     owner: labels[k].owner,
     state: allPublished ? "done" : i < idx ? "done" : i === idx ? (anyFailed ? "attention" : "current") : "pending",
+    href: labels[k].href,
   }));
 };
 
@@ -227,11 +258,7 @@ export function groupRunsByWorkflow(
   }
   const groups = new Map<string, RunSummary[]>();
   for (const r of runs) {
-    const key = r.parent_run_id
-      ? `parent:${r.parent_run_id}`
-      : r.domain_name && r.source_system_name
-        ? `ds:${r.domain_name}:${r.source_system_name}`
-        : `run:${r.run_id}`;
+    const key = r.parent_run_id ? `parent:${r.parent_run_id}` : `run:${r.run_id}`;
     groups.set(key, [...(groups.get(key) ?? []), r]);
   }
   const out: WorkflowGroup[] = [];
@@ -270,7 +297,7 @@ export function WorkflowGroupCard({
   currentRunId?: string | null;
 }) {
   const { primaryRun, runs, title, subtitle, domain, source, mine } = group;
-  const steps = fiveStageTrack(runs);
+  const steps = fiveStageTrack(runs, primaryRun.run_id);
   const failedCount = runs.filter((r) => r.current_state === "VALIDATION_FAILED" || r.current_state === "FAILED").length;
   const reviewCount = runs.filter((r) => r.current_state === "DBT_REVIEW" || r.current_state === "VALIDATION_PASSED").length;
   const doneCount = runs.filter((r) => ["COMPLETED", "DBT_APPROVED", "DEPLOYED", "PIPELINE_ENABLED"].includes(r.current_state)).length;
@@ -306,6 +333,7 @@ export function WorkflowGroupCard({
           <Link href={href} scroll={false} className="os-btn" aria-label={`Open ${primaryRun.run_name}`}>
             Open <ArrowRight className="h-3.5 w-3.5" />
           </Link>
+          <DeleteRunButton runIds={runs.map((r) => r.run_id)} iconOnly />
         </div>
       </div>
 
@@ -427,7 +455,7 @@ export function WorkflowJourneyBar({
       key: "initiate",
       num: "01",
       label: "Initiate",
-      sub: "Source & scope",
+      sub: "Connect & land",
       href: "/os/intake",
       state: "done",
     },
@@ -443,7 +471,7 @@ export function WorkflowJourneyBar({
       key: "build",
       num: "03",
       label: "Build",
-      sub: generated ? "dbt, DAG & tests ready" : "Generate dbt & DQ",
+      sub: generated ? "dbt, DQ & QA ready" : "dbt, DQ & QA",
       href: `/os/build?view=selected&run=${runParam}`,
       state: currentStage === "build" ? "current" : generated ? "done" : "pending",
     },
@@ -453,7 +481,7 @@ export function WorkflowJourneyBar({
       label: "Validate",
       sub: score !== undefined && score !== null
         ? `${score}% · ${validationPassed ? "Passed" : "Flagged"}`
-        : "Reviewer & standards gate",
+        : "Validation & review",
       href: `/os/review?view=selected&run=${runParam}`,
       state: validated && !validationPassed ? "failed" : currentStage === "validate" ? "current" : validationPassed ? "done" : "pending",
     },
@@ -461,7 +489,7 @@ export function WorkflowJourneyBar({
       key: "publish",
       num: "05",
       label: "Publish",
-      sub: released ? "Published" : prPublished ? "PR open · QA & review" : "PR, QA & handoff",
+      sub: released ? "Published" : prPublished ? "PR open · QA sign-off" : "PR & QA sign-off",
       href: `/os/release?view=selected&run=${runParam}`,
       state: released ? "done" : currentStage === "publish" ? "current" : prPublished ? "done" : "pending",
     },

@@ -61,3 +61,76 @@ export async function uploadRequestFiles(id: string, form: FormData): Promise<{ 
   }
 }
 export const removeRequestFile = async (id: string, fileId: string) => call(`/api/onboarding-requests/${id}/files/${fileId}/remove`, {});
+
+export async function deleteRunsAction(runIds: string[]): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    await api("/api/runs/batch-cleanup", {
+      method: "POST",
+      body: JSON.stringify({ run_ids: runIds, drop_landing_tables: false, delete_workspaces: false, delete_runs: true }),
+    });
+    revalidatePath("/os", "layout");
+    revalidatePath("/runs", "layout");
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+export async function deleteRequestAction(id: string, deleteRuns = true): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    await api(`/api/onboarding-requests/${encodeURIComponent(id)}/delete`, {
+      method: "POST",
+      body: JSON.stringify({ delete_runs: deleteRuns }),
+    });
+    revalidatePath("/os", "layout");
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+export async function startSourceRunForRequest(input: {
+  requestId: string;
+  itemId: string;
+  sourceName: string;
+  sourceType?: string | null;
+  databaseName?: string | null;
+  schemaName?: string | null;
+  domainId?: string | null;
+  domainName?: string | null;
+  note?: string | null;
+}): Promise<{ ok: true; runId: string } | { ok: false; error: string }> {
+  try {
+    const runName = `${input.sourceName}${input.domainName ? ` · ${input.domainName}` : ""}`.slice(0, 256);
+    const created = await api<{ run_id?: string; RUN_ID?: string }>("/api/runs", {
+      method: "POST",
+      body: JSON.stringify({
+        run_name: runName,
+        domain_id: input.domainId ?? null,
+        intent: {
+          source: {
+            origin: "snowflake",
+            source_system_name: input.sourceName,
+            source_type: input.sourceType ?? "SNOWFLAKE",
+            database: input.databaseName ?? null,
+            schema: input.schemaName ?? null,
+          },
+          domain_id: input.domainId ?? null,
+          request_id: input.requestId,
+          scope: input.note ?? null,
+        },
+      }),
+    });
+    const runId = created.run_id ?? created.RUN_ID;
+    if (!runId) return { ok: false, error: "Run could not be created." };
+    await api(`/api/onboarding-requests/${encodeURIComponent(input.requestId)}/sources/${encodeURIComponent(input.itemId)}/run`, {
+      method: "POST",
+      body: JSON.stringify({ run_id: runId }),
+    });
+    revalidatePath("/os", "layout");
+    return { ok: true, runId };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+

@@ -22,13 +22,47 @@ type Params = { tab?: string; q?: string; actor_type?: string; since?: string; u
 
 const n = (v: unknown) => Number(v ?? 0);
 
+const AGENT_NAMES: Record<string, string> = {
+  OPS: "Reliability & Ops Agent",
+  MAPPING: "Semantic Mapping Agent",
+  STTM: "Transformation (STTM) Agent",
+  VALIDATION: "Independent Review Agent",
+  MODELING: "Domain Modeling Agent",
+  SKILLS: "Skill Evolution Agent",
+  DBT: "dbt Code Generation Agent",
+  SODA: "Data Quality (Soda) Agent",
+  DQ: "Data Quality Agent",
+  QA: "QA & UAT Testing Agent",
+  KNOWLEDGE: "Enterprise Memory Agent",
+  PROFILING: "Data Profiling Agent",
+  CASES: "Root Cause Analysis Agent",
+  RCA: "Root Cause Analysis Agent",
+  DOMAIN: "Domain Onboarding Agent",
+  COPILOT: "Data OS Copilot Agent",
+  INTAKE: "Intake Routing Agent",
+  SEARCH: "Semantic Search Agent",
+};
+
+function formatAgentName(raw: string | null | undefined): string {
+  if (!raw) return "Unassigned Agent";
+  const upper = raw.trim().toUpperCase();
+  if (AGENT_NAMES[upper]) return AGENT_NAMES[upper];
+  if (/agent$/i.test(raw.trim())) return raw.trim();
+  const pretty = raw
+    .trim()
+    .replace(/[_-]+/g, " ")
+    .toLowerCase()
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+  return `${pretty} Agent`;
+}
+
 export default async function Audit({ searchParams }: { searchParams?: Params }) {
   const sp = searchParams ?? {};
   const tab = sp.tab === "cost" ? "cost" : "events";
   return (
     <div className="space-y-5">
       <PageHeader eyebrow="Governance" title="Audit"
-                  description="Every workflow event across runs, and what the AI steps used and cost." />
+                  description="Every workflow event across runs, and what the agents used and cost." />
       <AuditTabs tab={tab} />
       {tab === "events" ? <Events sp={sp} /> : <Cost sp={sp} />}
     </div>
@@ -66,9 +100,13 @@ async function Cost({ sp }: { sp: Params }) {
   const t = data.totals;
   const credits = n(t.credits ?? t.estimated_cost);
   const price = data.credit_price_usd ?? null;
+  const csvRows = data.rows.map((r) => ({
+    ...r,
+    ...(groupBy === "stage" ? { agent: formatAgentName(r.key) } : {}),
+  }));
   return (
     <div className="space-y-3">
-      <CostFilters rows={data.rows as unknown as Record<string, unknown>[]} />
+      <CostFilters rows={csvRows as unknown as Record<string, unknown>[]} />
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         {[["AI calls", n(t.calls).toLocaleString()], ["Tokens", n(t.total_tokens).toLocaleString()],
           ["Input / output", `${n(t.input_tokens).toLocaleString()} / ${n(t.output_tokens).toLocaleString()}`],
@@ -90,16 +128,18 @@ async function Cost({ sp }: { sp: Params }) {
       <Card>
         <Table>
           <THead>
-            <TR><TH>{groupBy === "run" ? "Run" : groupBy === "day" ? "Day" : groupBy === "model" ? "Model" : "Stage"}</TH>
+            <TR><TH>{groupBy === "run" ? "Run" : groupBy === "day" ? "Day" : groupBy === "model" ? "Model" : "Agent"}</TH>
               <TH>Calls</TH><TH>Tokens</TH><TH>Avg time</TH><TH>Credits</TH><TH>Basis</TH></TR>
           </THead>
           <TBody>
             {data.rows.map((r) => (
               <TR key={r.key ?? "none"}>
-                <TD>
+                <TD className="font-medium">
                   {groupBy === "run" && r.key
                     ? <Link href={`/os/build/runs/${r.key}`} className="text-primary hover:underline">{r.run_name ?? r.key.slice(0, 8)}</Link>
-                    : (r.key ?? "not linked to a run")}
+                    : groupBy === "stage"
+                      ? formatAgentName(r.key)
+                      : (r.key ?? "not linked to a run")}
                 </TD>
                 <TD className="tabular-nums">{n(r.calls).toLocaleString()}</TD>
                 <TD className="tabular-nums">{n(r.total_tokens).toLocaleString()}</TD>

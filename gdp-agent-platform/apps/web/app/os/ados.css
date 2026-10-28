@@ -163,3 +163,31 @@
   .ados .os-rise, .ados .os-pulse, .ados .os-spin, .ados .os-step-now { animation: none; }
   .ados .os-bar > div { transition: none; }
 }
+
+/* admin-only controls (such as Delete): strictly hidden for non-admin personas */
+.ados:not([data-persona="admin"]):not([data-persona="super"]) [data-admin-only="true"] {
+  display: none !important;
+}
+
+/* vertical scrollable containers with a visible slider bar */
+.ados .os-scroll-y {
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--os-muted) var(--os-subtle);
+}
+.ados .os-scroll-y::-webkit-scrollbar {
+  width: 8px;
+}
+.ados .os-scroll-y::-webkit-scrollbar-track {
+  background: var(--os-subtle);
+  border-radius: 999px;
+}
+.ados .os-scroll-y::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--os-muted) 65%, transparent);
+  border-radius: 999px;
+  border: 2px solid var(--os-subtle);
+}
+.ados .os-scroll-y::-webkit-scrollbar-thumb:hover {
+  background: var(--os-forest);
+}
+

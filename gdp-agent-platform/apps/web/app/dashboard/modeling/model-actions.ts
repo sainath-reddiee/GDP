@@ -124,6 +124,86 @@ export async function importModelFile(modelId: string, form: FormData) {
   return storeAction(() => apiForm<ImportFileResult>(`${BASE}/${enc(modelId)}/import-file`, form));
 }
 
+export type KnowledgeProposal = {
+  key: string;
+  knowledge_type: string;
+  title: string;
+  content: string;
+  target_column?: string | null;
+  content_json?: Record<string, unknown> | null;
+};
+
+export type EvolveModelResult = {
+  spec: DmSpec;
+  issues: DmIssue[];
+  counts: Record<string, number>;
+  changes: { kind: string; class: string; message: string; entity?: string; column?: string }[];
+  breaking: boolean;
+  rationale: string;
+  knowledge_proposals: KnowledgeProposal[];
+  knowledge_saved: number;
+  ddl_preview?: string;
+  dbt_preview?: string;
+};
+
+export type EvolveWorkflowStage = {
+  key: "design" | "build" | "validate" | "publish";
+  step: number;
+  label: string;
+  detail: string;
+  status: "ACTIVE" | "NEXT" | "COMPLETE";
+  href: string;
+};
+
+export type EvolveWorkflowResult = {
+  model_id: string;
+  domain_id: string;
+  domain_name: string;
+  version: number;
+  etag: string;
+  spec: DmSpec;
+  issues: DmIssue[];
+  counts: Record<string, number>;
+  breaking: boolean;
+  registry_applied: boolean;
+  knowledge_saved: number;
+  run_id: string | null;
+  run_name: string | null;
+  target_model: string | null;
+  workflow_stages: EvolveWorkflowStage[];
+};
+
+export async function evolveModelWithAi(
+  modelId: string,
+  body: { spec?: DmSpec | null; instructions: string; save_knowledge?: boolean },
+) {
+  return storeAction(() =>
+    api<EvolveModelResult>(`${BASE}/${enc(modelId)}/evolve`, send("POST", body)),
+  );
+}
+
+export async function applyEvolveWorkflow(
+  modelId: string,
+  body: {
+    spec: DmSpec;
+    instructions?: string;
+    rationale?: string;
+    knowledge_proposals?: KnowledgeProposal[];
+    save_knowledge?: boolean;
+    create_run?: boolean;
+  },
+) {
+  const r = await storeAction(() =>
+    api<EvolveWorkflowResult>(`${BASE}/${enc(modelId)}/evolve/workflow`, send("POST", body)),
+  );
+  if (r.ok) {
+    touch(modelId);
+    revalidatePath("/os/design");
+    revalidatePath("/os/knowledge");
+  }
+  return r;
+}
+
 // ---------------------------------------------------------------- Git and run proposals
 
 export type Publishing = { repos: { repo_id: string; name: string; git_url: string; branch: string }[]; publisher_ready: boolean };

@@ -23,6 +23,7 @@ import {
 import { DomainTools } from "../domain-tools";
 import { LAYER_META, layersFor, mdmBadge, type Layer, type MdmRole } from "@/lib/layers";
 import { BuiltFromCard, LineageTab } from "./lineage-tab";
+import { DataModel } from "./data-model";
 import { MdmPanel } from "./mdm-panel";
 import { PlaybookTab } from "./playbook-tab";
 import { ReferencesTab } from "./references-tab";
@@ -226,8 +227,13 @@ export function DomainView({ detail, versions, unrecorded, members, rules, targe
       {active === "references" && <ReferencesTab key={layer} domainId={d.domain_id} layer={layer} />}
       {active === "models" && (layer === "MDM"
         ? <MdmPanel domainId={d.domain_id} />
-        : <Models layer={pipeline} mastered={String(meta.mdm_role ?? "").toUpperCase() === "MASTERED"} name={name}
-                  targets={targets.filter((t) => (t.layer === "GOLD") === (pipeline === "GOLD"))} roles={detail.targets} />)}
+        : (
+          <div className="space-y-4">
+            <DataModel domainId={d.domain_id} domainName={name} />
+            <Models layer={pipeline} mastered={String(meta.mdm_role ?? "").toUpperCase() === "MASTERED"} name={name}
+                    targets={targets.filter((t) => (t.layer === "GOLD") === (pipeline === "GOLD"))} roles={detail.targets} />
+          </div>
+        ))}
       {active === "knowledge" && (layer === "MDM"
         ? <MdmRules domainId={d.domain_id} />
         : <KnowledgeTab domainId={d.domain_id} mix={detail.knowledge} feed={feed} card={card} layer={pipeline} />)}

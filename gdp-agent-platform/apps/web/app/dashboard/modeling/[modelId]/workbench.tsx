@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import {
   AlertTriangle, CheckCircle2, Download, FileInput, GitBranch, History, Layers3, ListChecks, Loader2, MessageSquare, Network,
-  GitPullRequest, PencilLine, RotateCcw, Ruler, Save, Send, ShieldCheck, Undo2, Workflow,
+  GitPullRequest, PencilLine, RotateCcw, Ruler, Save, Send, ShieldCheck, Sparkles, Undo2, Workflow,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { DmComment, DmDetail, DmIssue, DmSpec } from "@/lib/model-types";
@@ -16,6 +16,7 @@ import { Modal } from "@/components/hub/overlay";
 import { StatusPill, explain } from "@/components/hub/states";
 import { ErCanvas } from "@/components/hub/er-canvas";
 import { useToast } from "@/components/ui/toast";
+import { AiEvolutionStudio } from "@/components/modeling/ai-evolution-studio";
 import { importInto, importModelFile, openDraft, saveDraft, saveLayout, submitDraft, validateDraft, withdrawVersion } from "../model-actions";
 import { EntitiesPanel, RelationshipsPanel } from "./entities-panel";
 import { ReviewPanel } from "./review-panel";
@@ -124,9 +125,10 @@ function ImportModal({ modelId, spec, onClose, onLoaded }: { modelId: string; sp
   );
 }
 
-export function ModelWorkbench({ detail, comments, me, initialTab, canEdit, canApprove, approvedSpec, autoImport = false }: {
+export function ModelWorkbench({ detail, comments, me, initialTab, canEdit, canApprove, approvedSpec, autoImport = false, autoEvolve = false }: {
   detail: DmDetail; comments: DmComment[]; me: string; initialTab: string | null; canEdit: boolean; canApprove: boolean;
   approvedSpec?: DmSpec | null; /** open the import dialog on load (?import=file, from the domain page) */ autoImport?: boolean;
+  /** open the AI evolution studio expanded on load (?evolve=1) */ autoEvolve?: boolean;
 }) {
   const router = useRouter();
   const toast = useToast();
@@ -143,6 +145,7 @@ export function ModelWorkbench({ detail, comments, me, initialTab, canEdit, canA
   const [note, setNote] = useState("");
   const [conflict, setConflict] = useState("");
   const [importing, setImporting] = useState(autoImport && editable);
+  const [studioKey, setStudioKey] = useState(0);
   const [notice, setNotice] = useState(autoImport && !editable
     ? (canEdit ? "To import a model file, open a draft first (Open a draft), then choose Import." : "Importing a model file needs MODEL.EDIT.")
     : "");
@@ -164,7 +167,7 @@ export function ModelWorkbench({ detail, comments, me, initialTab, canEdit, canA
 
   const open = (fromVersion?: number) => start(async () => {
     const r = await openDraft(modelId, fromVersion);
-    if (r.ok) { toast("ok", `Draft v${r.data.version} opened`); router.push(`/os/design/modeling/${modelId}?tab=entities`); router.refresh(); }
+    if (r.ok) { toast("ok", `Draft v${r.data.version} opened`); router.push(`/os/design/modeling/${modelId}?version=${r.data.version}&tab=entities`); router.refresh(); }
     else toast("error", explain(r.error).message);
   });
   const save = () => start(async () => {
@@ -221,9 +224,21 @@ export function ModelWorkbench({ detail, comments, me, initialTab, canEdit, canA
           <Button onClick={() => open()} disabled={pending} data-testid="open-draft"><PencilLine className="h-4 w-4" /> Open a draft</Button>
         )}
         {detail.open && detail.open.version !== current.version && (
-          <Link href={`/os/design/modeling/${modelId}`} className="text-sm font-medium text-primary hover:underline">Go to v{detail.open.version} ({detail.open.status === "IN_REVIEW" ? "in review" : "draft"})</Link>
+          <Link href={`/os/design/modeling/${modelId}?version=${detail.open.version}`} className="text-sm font-medium text-primary hover:underline">Go to v{detail.open.version} ({detail.open.status === "IN_REVIEW" ? "in review" : "draft"})</Link>
         )}
         {current.status === "IN_REVIEW" && own && <Button variant="outline" onClick={withdraw} disabled={pending}><Undo2 className="h-4 w-4" /> Withdraw to edit</Button>}
+        {canEdit && (
+          <Button
+            variant="default"
+            onClick={() => {
+              setStudioKey((k) => k + 1);
+              setTimeout(() => document.getElementById("ai-custom-input")?.focus(), 50);
+            }}
+            data-testid="evolve-model-ai"
+          >
+            <Sparkles className="h-4 w-4" /> Evolve with AI
+          </Button>
+        )}
         {editable && <Button variant="outline" onClick={() => setImporting(true)} data-testid="import-model"><FileInput className="h-4 w-4" /> Import</Button>}
         <span className="ml-auto flex flex-wrap items-center gap-1 text-xs">
           <Download className="h-3.5 w-3.5 text-muted-foreground" />
@@ -233,6 +248,23 @@ export function ModelWorkbench({ detail, comments, me, initialTab, canEdit, canA
           ))}
         </span>
       </div>
+
+      {canEdit && (
+        <AiEvolutionStudio
+          key={studioKey}
+          modelId={modelId}
+          domainName={detail.model.domain_name}
+          spec={spec}
+          defaultExpanded={true}
+          onWorkflowApplied={(res) => {
+            setSpec(res.spec);
+            setIssues(res.issues);
+            setEtag(res.etag);
+            setNotice("");
+            router.refresh();
+          }}
+        />
+      )}
 
       {current.status === "IN_REVIEW" && !editable && (
         <p className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100">

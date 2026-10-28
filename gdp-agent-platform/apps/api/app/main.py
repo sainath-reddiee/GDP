@@ -548,19 +548,55 @@ def batch_cleanup(body: BatchCleanup, db: Db = Depends(current_db)):
     """Soft-delete runs (audit stays) and purge their sandbox. Staged table profiles are never removed."""
     from services.workflow.cleanup import cleanup_pipeline_runs
 
+    all_ids = list(dict.fromkeys(body.run_ids))
+    try:
+        placeholders = ", ".join(["%s"] * len(all_ids))
+        children = db.query(
+            f"SELECT RUN_ID FROM CORE.WORKFLOW_RUN WHERE PARENT_RUN_ID IN ({placeholders}) AND DELETED_AT IS NULL",
+            tuple(all_ids),
+        )
+        for c in children:
+            cid = c.get("run_id") or c.get("RUN_ID")
+            if cid and cid not in all_ids:
+                all_ids.append(cid)
+    except Exception:
+        pass
+
     try:
         result = _source_call(
             db,
             "CALL CORE.SP_CLEANUP_PIPELINE_RUNS(PARSE_JSON(%s)::ARRAY, %s, %s, %s)",
             cleanup_pipeline_runs,
-            json.dumps(body.run_ids),
+            json.dumps(all_ids),
             body.drop_landing_tables,
             body.delete_workspaces,
             body.delete_runs,
         )
     except Exception as exc:
         raise _snowflake_error(exc) from exc
-    for run_id in body.run_ids:
+
+    if body.delete_runs and all_ids:
+        placeholders = ", ".join(["%s"] * len(all_ids))
+        try:
+            db.execute(
+                f"UPDATE CORE.WORKFLOW_RUN SET DELETED_AT = COALESCE(DELETED_AT, CURRENT_TIMESTAMP()), "
+                f"DELETED_BY = COALESCE(DELETED_BY, CURRENT_USER()), IS_ARCHIVED = TRUE, "
+                f"ARCHIVED_AT = COALESCE(ARCHIVED_AT, CURRENT_TIMESTAMP()), UPDATED_AT = CURRENT_TIMESTAMP() "
+                f"WHERE RUN_ID IN ({placeholders}) AND DELETED_AT IS NULL",
+                tuple(all_ids),
+            )
+            db.execute(
+                f"UPDATE CORE.ONBOARDING_REQUEST_ITEM SET RUN_ID = NULL, STATUS = CASE WHEN SOURCE_SYSTEM_ID IS NULL THEN 'MISSING' ELSE 'NO_RUN' END "
+                f"WHERE RUN_ID IN ({placeholders})",
+                tuple(all_ids),
+            )
+            if isinstance(result, dict):
+                result["deleted"] = all_ids
+                result["skipped"] = []
+        except Exception:
+            pass
+
+    for run_id in all_ids:
         _drop_run(run_id)
     return result
 
@@ -3689,8 +3725,8 @@ def _resolve_dbt_payload(db: Db, run_id: str, payload: dict) -> dict:
         payload["base_branch"] = base
         if payload.get("cut_branch") and payload["cut_branch"] == base:
             raise HTTPException(400, "The new branch must differ from the cut-from branch")
-        if (repo.get("provider") or "") != "GITHUB":
-            payload["push"] = False  # pull requests from the platform are GitHub only for now
+        if (repo.get("provider") or "") not in ("GITHUB", "AZURE_DEVOPS"):
+            payload["push"] = False  # pull requests from the platform are GitHub and Azure Repos only
     elif legacy:
         # A hand-made setup keeps the location stored with the run's plan; the browser still cannot change it.
         for key in REPO_LOCATION_KEYS:
@@ -3775,8 +3811,8 @@ def publish_dbt(run_id: str, body: DbtPublish, db: Db = Depends(current_db)):
         if not found or not found[0]["enabled"] or not found[0]["use_for_dbt"]:
             raise HTTPException(409, "The repository this run was generated for is no longer connected or used for dbt. "
                                      "Generate again with a configured repository.")
-        if found[0].get("provider") != "GITHUB":
-            raise HTTPException(409, f"{found[0]['name']} is not on GitHub; pull requests from the platform are GitHub only, "
+        if found[0].get("provider") not in ("GITHUB", "AZURE_DEVOPS"):
+            raise HTTPException(409, f"{found[0]['name']} is not on GitHub or Azure Repos; pull requests from the platform are GitHub and Azure Repos only, "
                                      "so this run stays stage only.")
     elif not plan.get("origin"):
         raise HTTPException(409, "This run has no repository to publish to. Generate with a repository configured in Admin, Integrations.")
@@ -3832,8 +3868,8 @@ def github_publish_setup(body: GithubSetup, db: Db = Depends(current_db)):
     secret = secret if secret.count(".") == 2 else f"{database}.{secret}"
     eai = body.external_access_integration.strip().upper()
     token = (body.token or "").strip()
-    if token and not re.fullmatch(r"[A-Za-z0-9_\-]{20,255}", token):
-        raise HTTPException(400, "That does not look like a GitHub token (ghp_… or github_pat_…).")
+    if token and not re.fullmatch(r"[A-Za-z0-9_\-\.+=/]{20,255}", token):
+        raise HTTPException(400, "That does not look like a GitHub or Azure DevOps Personal Access Token.")
     try:
         statements = setup_sql(database, eai, secret, create_secret=bool(token))
         ddl = procedure_sql(database, _services_import(db), eai, secret)
@@ -3853,7 +3889,7 @@ def github_publish_setup(body: GithubSetup, db: Db = Depends(current_db)):
                     "detail": "A step needs more privileges (CREATE INTEGRATION / CREATE SECRET / CREATE NETWORK RULE). "
                               "Ask an admin to run the SQL shown, or retry with a role that has them."}
     _set_config(db, "GITHUB_PUBLISH", {"secret": secret, "external_access_integration": eai},
-                "GitHub publishing for generated dbt branches and pull requests")
+                "GitHub and Azure Repos publishing for generated dbt branches and pull requests")
     return {"ready": True, "log": log}
 
 
@@ -3865,7 +3901,7 @@ class GithubCheck(BaseModel):
 def github_check(body: GithubCheck, db: Db = Depends(current_db)):
     """Read-only: can the stored token see the repository, and does the account have push access?"""
     if not _github_publisher_ready(db):
-        return {"status": "NOT_CONFIGURED", "detail": "Set up GitHub publishing first."}
+        return {"status": "NOT_CONFIGURED", "detail": "Set up Git publishing first."}
     try:
         return db.call("CALL CORE.PUBLISH_DBT_PR(%s, %s)", ("", json.dumps({"check_only": True, "origin": body.origin})))
     except Exception as exc:
@@ -3882,12 +3918,12 @@ def github_rotate_token(body: GithubToken, db: Db = Depends(current_db)):
     from services.dbt.publish import NAME
 
     token = body.token.strip()
-    if not re.fullmatch(r"[A-Za-z0-9_\-]{20,255}", token):
-        raise HTTPException(400, "That does not look like a GitHub token (ghp_… or github_pat_…).")
+    if not re.fullmatch(r"[A-Za-z0-9_\-\.+=/]{20,255}", token):
+        raise HTTPException(400, "That does not look like a GitHub or Azure DevOps Personal Access Token.")
     config = github_publish_status(db).get("config") or {}
     secret = str(config.get("secret") or "")
     if not NAME.match(secret):
-        raise HTTPException(409, "GitHub publishing is not set up yet.")
+        raise HTTPException(409, "Git publishing is not set up yet.")
     try:
         db.execute(f"ALTER SECRET {secret} SET SECRET_STRING = '{token}'")
     except Exception as exc:
@@ -3908,8 +3944,8 @@ def create_git_repository(body: GitRepositoryCreate, db: Db = Depends(current_db
     from services.dbt.workspace import quote_exact, safe_fqn
 
     name = re.sub(r"[^A-Za-z0-9_]", "_", body.name.strip()).upper().strip("_") or "DBT_REPO"
-    origin = body.origin.strip()
-    if not re.fullmatch(r"https://[A-Za-z0-9.\-]+/[A-Za-z0-9_.\-/]+", origin):
+    origin = re.sub(r"^https://[^@/]+@", "https://", body.origin.strip())
+    if not re.fullmatch(r"https://[A-Za-z0-9.\-]+/[A-Za-z0-9_.\-/~%]+", origin):
         raise HTTPException(400, "Origin must be an https git URL")
     fqn = f"{DATABASE.upper()}.{PLATFORM_SCHEMA}.{name}"
     creds = f" GIT_CREDENTIALS = {safe_fqn(body.git_credentials)}" if body.git_credentials else ""
@@ -4989,12 +5025,35 @@ def _ensure_store_request(
 ) -> Optional[str]:
     """Ensure a Store-launched build run has an ONBOARDING_REQUEST + ONBOARDING_REQUEST_ITEM so it appears on Home (/os)."""
     try:
-        existing = db.query(
-            "SELECT REQUEST_ID FROM CORE.ONBOARDING_REQUEST_ITEM WHERE RUN_ID = %s AND REMOVED_AT IS NULL LIMIT 1",
+        src_sys = db.query(
+            "SELECT SOURCE_SYSTEM_ID FROM CORE.WORKFLOW_RUN WHERE RUN_ID = %s",
             (run_id,),
         )
+        sys_id = (src_sys[0].get("source_system_id") if src_sys else None) or src.get("source_system_id")
+        existing = db.query(
+            """SELECT R.REQUEST_ID, I.ITEM_ID, I.RUN_ID
+                 FROM CORE.ONBOARDING_REQUEST R
+                 JOIN CORE.ONBOARDING_REQUEST_ITEM I ON I.REQUEST_ID = R.REQUEST_ID
+                WHERE I.REMOVED_AT IS NULL
+                  AND R.STATUS IN ('OPEN', 'DONE')
+                  AND (I.RUN_ID = %s OR (COALESCE(R.DOMAIN_ID, '') = COALESCE(%s, '') AND I.SOURCE_SYSTEM_ID = %s))
+                ORDER BY IFF(COALESCE(R.INTENT, 'NEW') = 'NEW', 0, 1), R.CREATED_AT ASC
+                LIMIT 1""",
+            (run_id, domain_id or "", sys_id or ""),
+        )
         if existing:
-            return existing[0]["request_id"]
+            req_id = existing[0]["request_id"]
+            if not existing[0].get("run_id"):
+                db.execute(
+                    "UPDATE CORE.ONBOARDING_REQUEST_ITEM SET RUN_ID = %s, UPDATED_AT = CURRENT_TIMESTAMP() WHERE ITEM_ID = %s",
+                    (run_id, existing[0]["item_id"]),
+                )
+            db.execute(
+                "UPDATE CORE.ONBOARDING_REQUEST SET STATUS = 'OPEN', CLOSED_BY = NULL, CLOSED_AT = NULL, UPDATED_AT = CURRENT_TIMESTAMP() "
+                "WHERE REQUEST_ID = %s AND STATUS = 'DONE' AND CLOSED_BY = 'PLATFORM'",
+                (req_id,),
+            )
+            return req_id
         request_id = str(uuid.uuid4())
         item_id = str(uuid.uuid4())
         target_names = ", ".join(str(t.get("fqn") or "").split(".")[-1] for t in targets if t.get("fqn"))
@@ -5004,11 +5063,6 @@ def _ensure_store_request(
                VALUES (%s, 'SOURCE', 'ENHANCE', %s, NULL, %s, 'SILVER', 'HIGH', 'OPEN', 'BUILD', CURRENT_USER())""",
             (request_id, run_name[:256], domain_id),
         )
-        src_sys = db.query(
-            "SELECT SOURCE_SYSTEM_ID FROM CORE.WORKFLOW_RUN WHERE RUN_ID = %s",
-            (run_id,),
-        )
-        sys_id = (src_sys[0].get("source_system_id") if src_sys else None) or src.get("source_system_id")
         note = f"Tables: {', '.join(tables)}" + (f" → {target_names}" if target_names else "")
         db.execute(
             """INSERT INTO CORE.ONBOARDING_REQUEST_ITEM

@@ -135,10 +135,10 @@ def list_models(session, layer: str = "SILVER") -> List[Dict[str, Any]]:
 
 def get_model(session, model_id: str, version: Optional[int] = None) -> Dict[str, Any]:
     """The model header, every version (newest first, without specs) and one version with its specification: the
-    asked one, else the open draft, else the approved one."""
+    asked one, else the approved one, else the open draft."""
     header = _header(session, model_id)
     versions = _versions(session, model_id)
-    pick = version or ((_open(versions) or {}).get("version")) or header.get("approved_version")
+    pick = version or header.get("approved_version") or ((_open(versions) or {}).get("version"))
     current = None
     if pick:
         meta = next((v for v in versions if v["version"] == int(pick)), None)

@@ -585,8 +585,8 @@ def qa_pack_publish(pack_id: str, body: PackPublishIn, db: Db = Depends(current_
         if detail["pack"]["status"] != "APPROVED":
             raise HTTPException(409, "Only an approved version is published.")
     repo = next((r for r in _dbt_repos(db, None) if r["repo_id"] == body.repo_id), None)
-    if not repo or (repo.get("provider") or "") != "GITHUB":
-        raise HTTPException(409, "Choose a GitHub repository connected in Admin, Integrations.")
+    if not repo or (repo.get("provider") or "") not in ("GITHUB", "AZURE_DEVOPS"):
+        raise HTTPException(409, "Choose a GitHub or Azure Repos repository connected in Admin, Integrations.")
     if not _github_publisher_ready(db):
         return {"status": "NOT_CONFIGURED", "detail": "GitHub publishing is not set up. An admin can set it up in the GitHub publishing card."}
     slug = re.sub(r"[^a-z0-9]+", "-", str(detail["pack"]["name"]).lower()).strip("-") or "pack"

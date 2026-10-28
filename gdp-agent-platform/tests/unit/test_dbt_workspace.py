@@ -12,8 +12,8 @@ from services.dbt.workspace import (
 
 
 def test_origin_allowed_matches_prefix():
-    prefixes = ["https://github.com/anblicks/", "https://gitlab.com/gdp/"]
-    assert origin_allowed("https://github.com/anblicks/gdp-dbt.git", prefixes)
+    prefixes = ["https://github.com/gdp-org/", "https://gitlab.com/gdp/"]
+    assert origin_allowed("https://github.com/gdp-org/gdp-dbt.git", prefixes)
     assert not origin_allowed("https://github.com/other/repo.git", prefixes)
     assert origin_allowed("https://example.com/x", []) is True
     assert origin_allowed("", prefixes) is False

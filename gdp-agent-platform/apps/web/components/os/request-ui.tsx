@@ -5,8 +5,8 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState, useTransition, type ReactNode } from "react";
 import { Ban, Check, Link2, Loader2, MessageSquare, Play, Plus, RotateCcw, Send, Trash2, Unlink, X } from "lucide-react";
 import {
-  addRequestSource, cancelRequest, commentRequest, createRequest, linkRequestDomain, linkRequestRun, linkRequestSource, rejectRequest,
-  removeRequestSource, reopenRequest, startEnhancementRun, uploadRequestFiles, type NewRequestInput, type RequestResult,
+  addRequestSource, cancelRequest, commentRequest, createRequest, deleteRequestAction, deleteRunsAction, linkRequestDomain, linkRequestRun, linkRequestSource, rejectRequest,
+  removeRequestSource, reopenRequest, startEnhancementRun, startSourceRunForRequest, uploadRequestFiles, type NewRequestInput, type RequestResult,
 } from "@/app/os/requests/actions";
 import { FilePicker, formOf } from "@/components/os/request-files";
 import type { Duplicate, RequestDetail, RequestItem } from "@/lib/os/requests";
@@ -76,11 +76,76 @@ export function StartEnhancementRun({ requestId, itemId, source, previewing }: {
   );
 }
 
+/** One-click button to start and link a pipeline run for a request item whose source is already registered and landed. */
+export function StartSourceRunButton({
+  requestId,
+  itemId,
+  sourceName,
+  sourceType,
+  databaseName,
+  schemaName,
+  domainId,
+  domainName,
+  note,
+  previewing = false,
+}: {
+  requestId: string;
+  itemId: string;
+  sourceName: string;
+  sourceType?: string | null;
+  databaseName?: string | null;
+  schemaName?: string | null;
+  domainId?: string | null;
+  domainName?: string | null;
+  note?: string | null;
+  previewing?: boolean;
+}) {
+  const router = useRouter();
+  const [pending, start] = useTransition();
+  const [err, setErr] = useState<string | null>(null);
+  return (
+    <span className="inline-flex flex-col items-end">
+      <button
+        type="button"
+        disabled={pending || previewing}
+        data-testid={`start-source-run-${itemId.slice(0, 8)}`}
+        onClick={() =>
+          start(async () => {
+            setErr(null);
+            const res = await startSourceRunForRequest({
+              requestId,
+              itemId,
+              sourceName,
+              sourceType,
+              databaseName,
+              schemaName,
+              domainId,
+              domainName,
+              note,
+            });
+            if (!res.ok) {
+              setErr(res.error);
+              return;
+            }
+            router.refresh();
+          })
+        }
+        className="os-btn os-btn-primary"
+      >
+        {pending ? <Loader2 className="os-spin h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />} Start run
+      </button>
+      {err && <span className="mt-1 text-[11px] text-[var(--os-red-ink)]">{err}</span>}
+    </span>
+  );
+}
+
 /* ---------------------------------------------------------------- filing a request (Intake) */
 
-export function SubmitRequest({ type, intent = "NEW", domainId, domainName, picked, previewing }: {
+export function SubmitRequest({ type, intent = "NEW", domainId, domainName, picked, availableSources = [], previewing }: {
   type: "SOURCE" | "DOMAIN" | "PRODUCT"; intent?: "NEW" | "ENHANCE"; domainId: string | null; domainName: string | null;
-  picked: { source_system_id: string; source_name: string }[]; previewing: boolean;
+  picked: { source_system_id: string; source_name: string }[];
+  availableSources?: { source_system_id: string; source_name: string }[];
+  previewing: boolean;
 }) {
   const enhance = intent === "ENHANCE";
   const router = useRouter();
@@ -89,13 +154,26 @@ export function SubmitRequest({ type, intent = "NEW", domainId, domainName, pick
   const [priority, setPriority] = useState<"LOW" | "MEDIUM" | "HIGH">("MEDIUM");
   const [neededBy, setNeededBy] = useState("");
   const [proposed, setProposed] = useState("");
+  const [taggedIds, setTaggedIds] = useState<string[]>(() => picked.map((p) => p.source_system_id));
   const [named, setNamed] = useState<{ name: string; note: string }[]>([]);
   const [draft, setDraft] = useState({ name: "", note: "" });
   const [dupes, setDupes] = useState<Duplicate[] | null>(null);
   const [files, setFiles] = useState<File[]>([]);
   const { pending, outcome: result, run } = useRequestCall();
 
-  const sources = [...picked.map((p) => ({ source_system_id: p.source_system_id })), ...named.map((n) => ({ source_name: n.name, note: n.note || undefined }))];
+  const toggleTagged = (id: string) =>
+    setTaggedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+
+  const effectiveNamed = [
+    ...named,
+    ...(draft.name.trim() && !named.some((n) => n.name.toUpperCase() === draft.name.trim().toUpperCase())
+      ? [{ name: draft.name.trim(), note: draft.note.trim() }]
+      : []),
+  ];
+  const sources = [
+    ...taggedIds.map((id) => ({ source_system_id: id })),
+    ...effectiveNamed.map((n) => ({ source_name: n.name, note: n.note || undefined })),
+  ];
   // enhancing a domain extends one that exists (picked above) and says what it needs; enhancing a source widens a
   // registered one (picked above), so no new source is named
   const ready = !!title.trim() && (type === "DOMAIN" && !enhance ? !!(domainId || proposed.trim()) : !!domainId)
@@ -155,9 +233,46 @@ export function SubmitRequest({ type, intent = "NEW", domainId, domainName, pick
                  placeholder="e.g. TENANT" className="os-input" /></div>
       )}
       {type === "DOMAIN" && <FilePicker files={files} onChange={setFiles} disabled={previewing || pending} />}
+      {type === "DOMAIN" && availableSources.length > 0 && (
+        <div data-testid="domain-tag-sources">
+          <label className="os-label" htmlFor="rq-tag-source">Tag required sources on the platform (optional)</label>
+          <select
+            id="rq-tag-source"
+            value=""
+            disabled={previewing}
+            onChange={(e) => {
+              const id = e.target.value;
+              if (id && !taggedIds.includes(id)) setTaggedIds([...taggedIds, id]);
+            }}
+            className="os-input"
+          >
+            <option value="">Choose a registered source to tag...</option>
+            {availableSources
+              .filter((s) => !taggedIds.includes(s.source_system_id))
+              .map((s) => (
+                <option key={s.source_system_id} value={s.source_system_id}>{s.source_name}</option>
+              ))}
+          </select>
+          {taggedIds.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {taggedIds.map((id) => {
+                const name = availableSources.find((s) => s.source_system_id === id)?.source_name ?? id;
+                return (
+                  <span key={id} className="os-tag os-tag-green inline-flex items-center gap-1">
+                    {name}
+                    <button type="button" aria-label={`Remove ${name}`} onClick={() => toggleTagged(id)}>
+                      <X className="h-3 w-3" />
+                    </button>
+                  </span>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
       {type !== "PRODUCT" && !(type === "SOURCE" && enhance) && (
         <div>
-          <span className="os-label">Request a new source</span>
+          <span className="os-label">{type === "DOMAIN" ? "Or request a new source not on the platform yet (optional)" : "Request a new source"}</span>
           <div className="flex flex-wrap gap-2">
             <input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder="Source name, e.g. Yardi" maxLength={256}
                    aria-label="Unregistered source name" disabled={previewing} className="os-input min-w-[160px] flex-1" />
@@ -214,49 +329,243 @@ export function ItemControls({ request, item, sources, runs, previewing }: {
   const off = pending || previewing;
   if (item.removed_at) return null;
   return (
-    <div className="flex flex-col items-end gap-1.5" data-testid={`item-controls-${item.item_id.slice(0, 8)}`}>
-      {may.link_source && (
-        <span className="flex items-center gap-1.5">
-          <select value={sourceId} onChange={(e) => setSourceId(e.target.value)} aria-label={`Registered source for ${item.source_name}`} disabled={off}
-                  className="os-input w-[180px] py-1 text-[11.5px]">
-            <option value="">Not registered</option>
-            {sources.map((s) => <option key={s.source_system_id} value={s.source_system_id}>{s.source_system_name}</option>)}
-          </select>
-          <B disabled={off || (sourceId || null) === item.source_system_id} title="Link the named source to its registration"
-             onClick={() => run(() => linkRequestSource(request.request_id, item.item_id, sourceId || null), sourceId ? "Linked to the registration." : "Unlinked.")}>
-            <Link2 className="h-3 w-3" /> {sourceId ? "Link source" : "Unlink"}
-          </B>
-        </span>
-      )}
-      {may.link_run && (item.source_system_id || request.request_type === "PRODUCT") && (
-        <span className="flex items-center gap-1.5">
-          {runs.length > 0 ? (
+    <div className="flex flex-wrap items-center justify-between gap-2 text-[11.5px]" data-testid={`item-controls-${item.item_id.slice(0, 8)}`}>
+      <div className="flex flex-wrap items-center gap-2">
+        {may.link_source && (
+          <span className="inline-flex items-center gap-1.5">
+            <span className="os-faint font-semibold">Source:</span>
+            <select value={sourceId} onChange={(e) => setSourceId(e.target.value)} aria-label={`Registered source for ${item.source_name}`} disabled={off}
+                    className="os-input w-auto min-w-[150px] py-1 text-[11.5px]">
+              <option value="">Not registered</option>
+              {sources.map((s) => <option key={s.source_system_id} value={s.source_system_id}>{s.source_system_name}</option>)}
+            </select>
+            {(sourceId || null) !== item.source_system_id && (
+              <B disabled={off} title="Link the named source to its registration"
+                 onClick={() => run(() => linkRequestSource(request.request_id, item.item_id, sourceId || null), sourceId ? "Linked to the registration." : "Unlinked.")}>
+                <Link2 className="h-3 w-3" /> {sourceId ? "Save link" : "Unlink"}
+              </B>
+            )}
+          </span>
+        )}
+        {may.link_run && (item.source_system_id || request.request_type === "PRODUCT") && runs.length > 0 && (
+          <span className="inline-flex items-center gap-1.5">
+            <span className="os-faint font-semibold">Run:</span>
             <select value={runId} onChange={(e) => setRunId(e.target.value)} aria-label={`Run for ${item.source_name}`} disabled={off}
-                    className="os-input w-[220px] py-1 text-[11.5px]">
+                    className="os-input w-auto min-w-[180px] py-1 text-[11.5px]">
               {runs.map((r) => <option key={r.run_id} value={r.run_id}>{r.run_name} ({r.current_state.toLowerCase().replace(/_/g, " ")})</option>)}
             </select>
-          ) : <span className="os-faint text-[11px]">No run of this source in this domain yet</span>}
-          {runs.length > 0 && runId !== item.run_id && (
-            <B disabled={off || !runId} onClick={() => run(() => linkRequestRun(request.request_id, item.item_id, runId), "Run linked.")}>
-              <Link2 className="h-3 w-3" /> Link run
-            </B>
-          )}
-          {item.run_id && (
-            <B disabled={off} title="Unlink this run" onClick={() => run(() => linkRequestRun(request.request_id, item.item_id, null), "Run unlinked.")}>
-              <Unlink className="h-3 w-3" />
-            </B>
-          )}
-        </span>
-      )}
+            {runId !== item.run_id && (
+              <B disabled={off || !runId} onClick={() => run(() => linkRequestRun(request.request_id, item.item_id, runId), "Run linked.")}>
+                <Link2 className="h-3 w-3" /> Link run
+              </B>
+            )}
+            {item.run_id && (
+              <>
+                <B disabled={off} title="Unlink this run" onClick={() => run(() => linkRequestRun(request.request_id, item.item_id, null), "Run unlinked.")}>
+                  <Unlink className="h-3 w-3" /> Unlink
+                </B>
+                <DeleteRunButton runIds={[item.run_id]} label="Delete run" compact previewing={previewing} />
+              </>
+            )}
+          </span>
+        )}
+      </div>
       {may.remove_source && (
         <B disabled={off} title="Take this source off the request (kept in the history)"
            onClick={() => run(() => removeRequestSource(request.request_id, item.item_id), "Removed.")}>
-          <Trash2 className="h-3 w-3" /> Remove
+          <Trash2 className="h-3 w-3" /> Remove source
         </B>
       )}
       {previewing && <Off />}
       <Line outcome={outcome} />
     </div>
+  );
+}
+
+/** Delete one or more pipeline runs from any card, board, or workspace. */
+const ADMIN_PERSONAS = new Set(["admin", "super"]);
+
+function readActivePersona(): string | null {
+  if (typeof document === "undefined") return null;
+  const shellPersona = document.querySelector(".ados")?.getAttribute("data-persona");
+  if (shellPersona) return shellPersona;
+  const preview = document.cookie.match(/(?:^|;\s*)ados_preview_persona=([^;]+)/);
+  if (preview) return decodeURIComponent(preview[1]);
+  const persona = document.cookie.match(/(?:^|;\s*)ados_persona=([^;]+)/);
+  if (persona) return decodeURIComponent(persona[1]);
+  return null;
+}
+
+function useIsAdminPersona(): boolean {
+  const [isAdmin, setIsAdmin] = useState<boolean>(false);
+  useEffect(() => {
+    const check = () => {
+      const p = readActivePersona();
+      setIsAdmin(p ? ADMIN_PERSONAS.has(p) : false);
+    };
+    check();
+    const root = document.querySelector(".ados");
+    if (!root) return;
+    const obs = new MutationObserver(check);
+    obs.observe(root, { attributes: true, attributeFilter: ["data-persona"] });
+    return () => obs.disconnect();
+  }, []);
+  return isAdmin;
+}
+
+/** Delete one or more pipeline runs directly from any UI card or workspace. Admin only. */
+export function DeleteRunButton({
+  runIds,
+  label = "Delete",
+  compact = false,
+  iconOnly = false,
+  redirectTo,
+  previewing = false,
+}: {
+  runIds: string[];
+  label?: string;
+  compact?: boolean;
+  iconOnly?: boolean;
+  redirectTo?: string;
+  previewing?: boolean;
+}) {
+  const router = useRouter();
+  const isAdmin = useIsAdminPersona();
+  const [confirming, setConfirming] = useState(false);
+  const [pending, start] = useTransition();
+  const [err, setErr] = useState<string | null>(null);
+  if (!isAdmin || previewing || !runIds.length) return null;
+
+  if (confirming) {
+    return (
+      <span className="inline-flex items-center gap-1" data-testid="delete-run-confirm" data-admin-only="true">
+        <button
+          type="button"
+          disabled={pending || previewing}
+          onClick={() =>
+            start(async () => {
+              setErr(null);
+              const res = await deleteRunsAction(runIds);
+              if (!res.ok) {
+                setErr(res.error);
+                return;
+              }
+              setConfirming(false);
+              if (redirectTo) router.push(redirectTo);
+              else router.refresh();
+            })
+          }
+          className={cn("os-btn os-btn-red", compact ? "px-2 py-0.5 text-[11px]" : "px-2.5 py-1 text-[11.5px]")}
+        >
+          {pending ? <Loader2 className="os-spin h-3 w-3" /> : <Trash2 className="h-3 w-3" />} Confirm
+        </button>
+        <button
+          type="button"
+          disabled={pending}
+          onClick={() => { setConfirming(false); setErr(null); }}
+          className={cn("os-btn", compact ? "px-1.5 py-0.5 text-[11px]" : "px-2 py-1 text-[11.5px]")}
+        >
+          Cancel
+        </button>
+        {err && <span className="text-[11px] text-[var(--os-red-ink)]">{err}</span>}
+      </span>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      disabled={previewing}
+      onClick={() => setConfirming(true)}
+      title={runIds.length > 1 ? `Delete ${runIds.length} runs` : "Delete run"}
+      aria-label={runIds.length > 1 ? `Delete ${runIds.length} runs` : label}
+      data-testid="delete-run-button"
+      data-admin-only="true"
+      className={cn(
+        "os-btn text-[var(--os-muted)] hover:border-[var(--os-red-line)] hover:bg-[var(--os-red-bg)] hover:text-[var(--os-red-ink)]",
+        iconOnly ? "px-2 py-1.5" : compact ? "px-2 py-1 text-[11px]" : "",
+      )}
+    >
+      <Trash2 className="h-3.5 w-3.5" />
+      {!iconOnly && <span>{label}</span>}
+    </button>
+  );
+}
+
+/** Delete an onboarding request (and its linked runs) from any card or request screen. Admin only. */
+export function DeleteRequestButton({
+  requestId,
+  label = "Delete",
+  iconOnly = false,
+  redirectTo,
+  previewing = false,
+}: {
+  requestId: string;
+  label?: string;
+  iconOnly?: boolean;
+  redirectTo?: string;
+  previewing?: boolean;
+}) {
+  const router = useRouter();
+  const isAdmin = useIsAdminPersona();
+  const [confirming, setConfirming] = useState(false);
+  const [pending, start] = useTransition();
+  const [err, setErr] = useState<string | null>(null);
+  if (!isAdmin || previewing) return null;
+
+  if (confirming) {
+    return (
+      <span className="inline-flex items-center gap-1" data-testid="delete-request-confirm" data-admin-only="true">
+        <button
+          type="button"
+          disabled={pending || previewing}
+          onClick={() =>
+            start(async () => {
+              setErr(null);
+              const res = await deleteRequestAction(requestId, true);
+              if (!res.ok) {
+                setErr(res.error);
+                return;
+              }
+              setConfirming(false);
+              if (redirectTo) router.push(redirectTo);
+              else router.refresh();
+            })
+          }
+          className="os-btn os-btn-red px-2.5 py-1 text-[11.5px]"
+        >
+          {pending ? <Loader2 className="os-spin h-3 w-3" /> : <Trash2 className="h-3 w-3" />} Confirm
+        </button>
+        <button
+          type="button"
+          disabled={pending}
+          onClick={() => { setConfirming(false); setErr(null); }}
+          className="os-btn px-2 py-1 text-[11.5px]"
+        >
+          Cancel
+        </button>
+        {err && <span className="text-[11px] text-[var(--os-red-ink)]">{err}</span>}
+      </span>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      disabled={previewing}
+      onClick={() => setConfirming(true)}
+      title="Delete this workflow request and its linked runs"
+      aria-label={label}
+      data-testid="delete-request-button"
+      data-admin-only="true"
+      className={cn(
+        "os-btn text-[var(--os-muted)] hover:border-[var(--os-red-line)] hover:bg-[var(--os-red-bg)] hover:text-[var(--os-red-ink)]",
+        iconOnly && "px-2 py-1.5",
+      )}
+    >
+      <Trash2 className="h-3.5 w-3.5" />
+      {!iconOnly && <span>{label}</span>}
+    </button>
   );
 }
 

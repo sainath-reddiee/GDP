@@ -70,7 +70,7 @@ export function ModelsList({ rows, canEdit, layer = "SILVER" }: { rows: DmListRo
                   <p className="truncate font-mono text-sm font-semibold">{r.domain_name}</p>
                   <p className="line-clamp-2 text-xs text-muted-foreground">{r.description || "No description"}</p>
                 </div>
-                {r.open_status ? <StatusPill status={r.open_status} /> : r.approved_version ? <StatusPill status="APPROVED" /> : null}
+                {r.approved_version ? <StatusPill status="APPROVED" /> : r.open_status ? <StatusPill status={r.open_status} /> : null}
               </div>
               {r.model_id ? (
                 <>
@@ -79,8 +79,13 @@ export function ModelsList({ rows, canEdit, layer = "SILVER" }: { rows: DmListRo
                     {r.open_version ? <> · v{r.open_version} {r.open_status === "IN_REVIEW" ? `in review${r.submitted_by ? ` (${r.submitted_by})` : ""}` : "draft"}</> : null}
                   </p>
                   {r.counts && <p className="text-xs tabular-nums">{r.counts.entities} entities · {r.counts.columns} columns · {r.counts.relationships} relationships</p>}
-                  <div className="mt-auto flex items-center gap-2 pt-1">
-                    <Link href={`/os/design/modeling/${r.model_id}`} className="text-sm font-medium text-primary hover:underline">Open model</Link>
+                  <div className="mt-auto flex items-center gap-3 pt-1">
+                    <Link href={r.approved_version ? `/os/design/modeling/${r.model_id}?version=${r.approved_version}` : `/os/design/modeling/${r.model_id}`} className="text-sm font-medium text-primary hover:underline">Open model</Link>
+                    {r.open_version && r.open_version !== r.approved_version && (
+                      <Link href={`/os/design/modeling/${r.model_id}?version=${r.open_version}`} className="text-xs text-muted-foreground hover:text-foreground hover:underline">
+                        Draft v{r.open_version}
+                      </Link>
+                    )}
                     {canEdit && r.approved_version && (
                       <button type="button" onClick={() => { setFork(r); setName(""); }} className="ml-auto inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
                         <GitFork className="h-3.5 w-3.5" /> Fork</button>

@@ -35,7 +35,7 @@ def list_prs(kind: Optional[str] = None, state: Optional[str] = None, domain: Op
     except Exception:  # before V043
         return {"prs": [], "counts": roundtrip.counts([]), "deployed": False, "publisher_ready": False, "repos": []}
     repos = [{k: r.get(k) for k in ("repo_id", "name", "git_url", "branch")} for r in _dbt_repos(db, None)
-             if (r.get("provider") or "") == "GITHUB"]
+             if (r.get("provider") or "") in ("GITHUB", "AZURE_DEVOPS")]
     return {"prs": found, "counts": roundtrip.counts(everything), "deployed": True,
             "publisher_ready": _github_publisher_ready(db), "repos": repos,
             "kinds": {k: v["label"] for k, v in roundtrip.KINDS.items()}}

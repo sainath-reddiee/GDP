@@ -1,8 +1,8 @@
-"""Publish generated dbt code to GitHub: cut a branch, commit the files on top of the base tree, open a PR.
+"""Push a generated dbt branch and open a pull request on GitHub or Azure Repos (Azure DevOps).
 
 Snowflake git repository clones are read-only from SQL (COPY FILES can't target them), so writes go through
-the GitHub REST API. The commit uses the base branch tree, so every skeleton file stays exactly as it is
-on the cut-from branch and only the generated paths are added or replaced.
+the GitHub REST API or Azure DevOps Git REST API v7.1. The commit uses the base branch tree, so every skeleton
+file stays exactly as it is on the cut-from branch and only the generated paths are added or replaced.
 
 `Request` is injected: Snowflake's CORE.PUBLISH_DBT_PR passes an urllib caller that runs through an
 external access integration with a token from a Snowflake SECRET; tests pass a fake.
@@ -10,14 +10,23 @@ external access integration with a token from a Snowflake SECRET; tests pass a f
 
 from __future__ import annotations
 
+import base64
 import json
 import re
 from typing import Any, Callable, Dict, List, Optional, Tuple
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 Request = Callable[[str, str, Optional[Dict[str, Any]]], Tuple[int, Any]]
 
 ORIGIN = re.compile(r"^(?:https?://(?:[^@/]+@)?github\.com/|git@github\.com:)([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?/?$")
+AZURE_DEV_ORIGIN = re.compile(
+    r"^(?:https?://(?:[^@/]+@)?dev\.azure\.com/|git@ssh\.dev\.azure\.com:v3/)([A-Za-z0-9_.\-%]+)/([A-Za-z0-9_.\-%]+?)/(?:_git/)?([A-Za-z0-9_.\-%]+?)(?:\.git)?/?$",
+    re.IGNORECASE,
+)
+AZURE_VSTS_ORIGIN = re.compile(
+    r"^https?://(?:[^@/]+@)?([A-Za-z0-9_.\-]+)\.visualstudio\.com/(?:DefaultCollection/)?([A-Za-z0-9_.\-%]+?)/_git/([A-Za-z0-9_.\-%]+?)(?:\.git)?/?$",
+    re.IGNORECASE,
+)
 BRANCH = re.compile(r"^(?!/)(?!.*\.\.)(?!.*//)[A-Za-z0-9._/-]{1,200}(?<!/)(?<!\.lock)$")
 # Pipeline bookkeeping that should not land in the customer's repository.
 SKIP_PATHS = ("release/workspace.json", "release/branch.json", "release/skills.json", "release/skeleton-base.json")
@@ -30,11 +39,29 @@ class PublishError(RuntimeError):
         self.step, self.status = step, status
 
 
+def is_azure_origin(origin: str) -> bool:
+    raw = (origin or "").strip()
+    return bool(AZURE_DEV_ORIGIN.match(raw) or AZURE_VSTS_ORIGIN.match(raw))
+
+
+def parse_azure_origin(origin: str) -> Tuple[str, str, str]:
+    """Return (org, project, repo) for an Azure DevOps / Visual Studio Git URL."""
+    raw = (origin or "").strip()
+    m = AZURE_DEV_ORIGIN.match(raw) or AZURE_VSTS_ORIGIN.match(raw)
+    if not m:
+        raise ValueError(f"not an Azure Repos URL: {origin}")
+    return unquote(m.group(1)), unquote(m.group(2)), unquote(m.group(3))
+
+
 def parse_origin(origin: str) -> Tuple[str, str]:
-    match = ORIGIN.match((origin or "").strip())
-    if not match:
-        raise ValueError(f"not a GitHub repository URL: {origin}")
-    return match.group(1), match.group(2)
+    raw = (origin or "").strip()
+    match = ORIGIN.match(raw)
+    if match:
+        return match.group(1), match.group(2)
+    if is_azure_origin(raw):
+        org, project, repo = parse_azure_origin(raw)
+        return f"{org}/{project}", repo
+    raise ValueError(f"not a GitHub or Azure Repos repository URL: {origin}")
 
 
 def check_branch(name: str) -> str:
@@ -92,25 +119,48 @@ TOKEN_HELP = ("Edit the token at github.com > Settings > Developer settings > Fi
               "{repo} with Repository permissions Contents: Read and write and Pull requests: Read and write "
               "(classic tokens need the 'repo' scope).")
 
+AZURE_TOKEN_HELP = ("Create or update a Personal Access Token (PAT) in Azure DevOps (User settings > Personal access tokens) "
+                    "with 'Code (Read & write)' scope for {repo}.")
+
 
 def explain(exc: Exception, origin: str = "") -> Dict[str, Any]:
-    """Map GitHub failures to an actionable status for the UI."""
+    """Map GitHub or Azure DevOps failures to an actionable status for the UI."""
+    azure = is_azure_origin(origin)
     try:
         repo = "/".join(parse_origin(origin))
     except ValueError:
         repo = "the repository"
+    help_text = (AZURE_TOKEN_HELP if azure else TOKEN_HELP).format(repo=repo)
+    provider_label = "Azure DevOps" if azure else "GitHub"
     status = getattr(exc, "status", 0)
     text = str(exc)
-    if status == 401:
-        return {"status": "AUTH", "detail": f"GitHub rejected the token (expired or revoked). {TOKEN_HELP.format(repo=repo)}"}
+    if status in (401, 203):
+        return {"status": "AUTH", "detail": f"{provider_label} rejected the token (expired or invalid). {help_text}"}
     if status in (403, 404) and ("personal access token" in text.lower() or "not accessible" in text.lower()
-                                 or status == 404):
-        return {"status": "TOKEN_SCOPE", "detail": f"{text}. {TOKEN_HELP.format(repo=repo)}"}
+                                 or status in (403, 404)):
+        return {"status": "TOKEN_SCOPE", "detail": f"{text}. {help_text}"}
     return {"status": "FAILED", "detail": text}
 
 
 def preflight(request: Request, origin: str) -> Dict[str, Any]:
     """Read-only check that the token can see the repository; reports the caller's permissions."""
+    if is_azure_origin(origin):
+        org, project, repo = parse_azure_origin(origin)
+        path = f"/{quote(org, safe='')}/{quote(project, safe='')}/_apis/git/repositories/{quote(repo, safe='')}?api-version=7.1"
+        status, body = request("GET", path, None)
+        if status in (404, 203):
+            raise PublishError("find repository", 404, {"message": f"{org}/{project}/{repo} not found or not granted to this token"})
+        body = _ok("read repository", (status, body))
+        default_branch = str(body.get("defaultBranch") or "refs/heads/main").removeprefix("refs/heads/")
+        return {
+            "repository": f"{org}/{project}/{body.get('name') or repo}",
+            "default_branch": default_branch,
+            "private": True,
+            "push": True,
+            "admin": False,
+            "html_url": body.get("webUrl") or body.get("remoteUrl") or f"https://dev.azure.com/{org}/{project}/_git/{repo}",
+        }
+
     owner, repo = parse_origin(origin)
     status, body = request("GET", f"/repos/{owner}/{repo}", None)
     if status == 404:
@@ -127,15 +177,132 @@ def preflight(request: Request, origin: str) -> Dict[str, Any]:
     }
 
 
+def _publish_azure(
+    request: Request,
+    origin: str,
+    base: str,
+    head: str,
+    entries: List[Dict[str, str]],
+    title: str,
+    body: str,
+    message: str,
+    draft: bool,
+) -> Dict[str, Any]:
+    org, project, repo = parse_azure_origin(origin)
+    repo_api = f"/{quote(org, safe='')}/{quote(project, safe='')}/_apis/git/repositories/{quote(repo, safe='')}"
+    access = preflight(request, origin)
+
+    base_res = _ok("read base branch", request("GET", f"{repo_api}/refs?filter=heads/{quote(base, safe='/')}&api-version=7.1", None))
+    base_refs = base_res.get("value") if isinstance(base_res, dict) else []
+    base_ref = next((r for r in (base_refs or []) if r.get("name") == f"refs/heads/{base}"), (base_refs or [None])[0])
+    if not base_ref or not base_ref.get("objectId"):
+        raise PublishError("read base branch", 404, {"message": f"base branch '{base}' not found in {org}/{project}/{repo}"})
+    base_sha = base_ref["objectId"]
+
+    head_res = _ok("read head branch", request("GET", f"{repo_api}/refs?filter=heads/{quote(head, safe='/')}&api-version=7.1", None))
+    head_refs = head_res.get("value") if isinstance(head_res, dict) else []
+    head_ref = next((r for r in (head_refs or []) if r.get("name") == f"refs/heads/{head}"), None)
+    branch_existed = head_ref is not None and bool(head_ref.get("objectId"))
+    parent_sha = head_ref["objectId"] if branch_existed else base_sha
+    parent_branch = head if branch_existed else base
+
+    status_items, items_body = request(
+        "GET",
+        f"{repo_api}/items?scopePath=/&recursionLevel=Full&versionDescriptor.version={quote(parent_branch, safe='')}&versionDescriptor.versionType=branch&api-version=7.1",
+        None,
+    )
+    existing_paths = set()
+    if status_items == 200 and isinstance(items_body, dict):
+        for it in items_body.get("value") or []:
+            if not it.get("isFolder") and it.get("path"):
+                existing_paths.add(str(it["path"]).lstrip("/"))
+
+    changes = [
+        {
+            "changeType": "edit" if e["path"].lstrip("/") in existing_paths else "add",
+            "item": {"path": "/" + e["path"].lstrip("/")},
+            "newContent": {"content": e["content"], "contentType": "rawtext"},
+        }
+        for e in entries
+    ]
+
+    push_res = _ok(
+        "push commit",
+        request(
+            "POST",
+            f"{repo_api}/pushes?api-version=7.1",
+            {
+                "refUpdates": [{"name": f"refs/heads/{head}", "oldObjectId": parent_sha}],
+                "commits": [{"comment": message, "changes": changes}],
+            },
+        ),
+    )
+    commits = (push_res.get("commits") if isinstance(push_res, dict) else None) or []
+    commit_sha = commits[0].get("commitId") if commits else parent_sha
+
+    prs_res = _ok(
+        "find pull request",
+        request(
+            "GET",
+            f"{repo_api}/pullrequests?searchCriteria.status=active&searchCriteria.sourceRefName={quote(f'refs/heads/{head}', safe='')}&searchCriteria.targetRefName={quote(f'refs/heads/{base}', safe='')}&api-version=7.1",
+            None,
+        ),
+    )
+    open_prs = (prs_res.get("value") if isinstance(prs_res, dict) else None) or []
+    if open_prs:
+        pr, pr_created = open_prs[0], False
+    else:
+        pr = _ok(
+            "open pull request",
+            request(
+                "POST",
+                f"{repo_api}/pullrequests?api-version=7.1",
+                {
+                    "sourceRefName": f"refs/heads/{head}",
+                    "targetRefName": f"refs/heads/{base}",
+                    "title": title,
+                    "description": body[:4000],
+                    "isDraft": bool(draft),
+                },
+            ),
+        )
+        pr_created = True
+
+    pr_id = pr.get("pullRequestId") or pr.get("number")
+    web_base = str(access.get("html_url") or f"https://dev.azure.com/{org}/{project}/_git/{repo}").rstrip("/")
+    pr_url = f"{web_base}/pullrequest/{pr_id}" if pr_id else pr.get("url")
+    return {
+        "status": "PUBLISHED" if pr else "NO_CHANGES",
+        "provider": "AZURE_DEVOPS",
+        "repository": f"{org}/{project}/{repo}",
+        "base_branch": base,
+        "head_branch": head,
+        "branch_created": not branch_existed,
+        "commit_sha": commit_sha,
+        "changed": True,
+        "files_pushed": len(entries),
+        "pull_request": {
+            "number": pr_id,
+            "url": pr_url,
+            "created": pr_created,
+            "state": "open" if str(pr.get("status") or "active").lower() == "active" else pr.get("status"),
+            "draft": bool(pr.get("isDraft", draft)),
+        },
+    }
+
+
 def publish(request: Request, origin: str, base: str, head: str, files: Dict[str, str],
             title: str, body: str, message: str, draft: bool = False, *, root: str = "") -> Dict[str, Any]:
-    owner, repo = parse_origin(origin)
     base, head = check_branch(base), check_branch(head)
     if base == head:
         raise ValueError("the new branch must differ from the cut-from branch")
     entries = tree_entries(files, root)
     if not entries:
         raise ValueError("no files to publish")
+    if is_azure_origin(origin):
+        return _publish_azure(request, origin, base, head, entries, title, body, message, draft)
+
+    owner, repo = parse_origin(origin)
     root = f"/repos/{owner}/{repo}"
     access = preflight(request, origin)
     if access.get("push") is False:
@@ -191,6 +358,28 @@ def publish(request: Request, origin: str, base: str, head: str, files: Dict[str
 
 def pull_status(request: Request, origin: str, number: int) -> Dict[str, Any]:
     """A pull request's state: OPEN, DRAFT, MERGED or CLOSED (closed without merging), with the merge commit."""
+    if is_azure_origin(origin):
+        org, project, repo = parse_azure_origin(origin)
+        path = f"/{quote(org, safe='')}/{quote(project, safe='')}/_apis/git/repositories/{quote(repo, safe='')}/pullrequests/{int(number)}?api-version=7.1"
+        body = _ok("read pull request", request("GET", path, None))
+        raw_status = str(body.get("status") or "").lower()
+        if raw_status == "completed":
+            state = "MERGED"
+        elif raw_status == "abandoned":
+            state = "CLOSED"
+        else:
+            state = "DRAFT" if body.get("isDraft") else "OPEN"
+        last_merge = (body.get("lastMergeCommit") or {}).get("commitId")
+        web_url = f"https://dev.azure.com/{org}/{project}/_git/{repo}/pullrequest/{int(number)}"
+        return {
+            "number": body.get("pullRequestId") or int(number),
+            "state": state,
+            "url": web_url,
+            "merge_commit_sha": last_merge if state == "MERGED" else None,
+            "merged_at": body.get("closedDate") if state == "MERGED" else None,
+            "closed_at": body.get("closedDate") if state in ("MERGED", "CLOSED") else None,
+        }
+
     owner, repo = parse_origin(origin)
     body = _ok("read pull request", request("GET", f"/repos/{owner}/{repo}/pulls/{int(number)}", None))
     if body.get("merged") or body.get("merged_at"):
@@ -204,18 +393,33 @@ def pull_status(request: Request, origin: str, number: int) -> Dict[str, Any]:
             "merged_at": body.get("merged_at"), "closed_at": body.get("closed_at")}
 
 
-def urllib_request(token: str, api: str = "https://api.github.com", timeout: int = 30) -> Request:
-    """GitHub REST caller using only the standard library (works inside Snowflake Python procedures)."""
+def urllib_request(token: str, api: str = "https://api.github.com", timeout: int = 30, *, origin: str = "") -> Request:
+    """GitHub or Azure DevOps REST caller using only the standard library (works inside Snowflake Python procedures)."""
     import urllib.error
     import urllib.request
 
-    def call(method: str, path: str, payload: Optional[Dict[str, Any]]) -> Tuple[int, Any]:
-        data = json.dumps(payload).encode("utf-8") if payload is not None else None
-        req = urllib.request.Request(f"{api}{path}", data=data, method=method, headers={
+    azure = is_azure_origin(origin) or "dev.azure.com" in api or "visualstudio.com" in api
+    base_api = "https://dev.azure.com" if azure and api == "https://api.github.com" else api
+    if azure:
+        basic = base64.b64encode(f":{token}".encode("utf-8")).decode("ascii")
+        auth_header = f"Basic {basic}"
+        headers_base = {
+            "Authorization": auth_header,
+            "Accept": "application/json",
+            "User-Agent": "gdp-agent-platform",
+        }
+    else:
+        headers_base = {
             "Authorization": f"Bearer {token}",
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
             "User-Agent": "gdp-agent-platform",
+        }
+
+    def call(method: str, path: str, payload: Optional[Dict[str, Any]]) -> Tuple[int, Any]:
+        data = json.dumps(payload).encode("utf-8") if payload is not None else None
+        req = urllib.request.Request(f"{base_api}{path}", data=data, method=method, headers={
+            **headers_base,
             **({"Content-Type": "application/json"} if data is not None else {}),
         })
         try:

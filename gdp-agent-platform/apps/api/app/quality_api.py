@@ -519,7 +519,7 @@ def suite_publishing(db: Db = Depends(current_db)):
     from app.main import _dbt_repos, _github_publisher_ready
 
     repos = [{k: r.get(k) for k in ("repo_id", "name", "git_url", "provider", "branch")} for r in _dbt_repos(db, None)
-             if (r.get("provider") or "") == "GITHUB"]
+             if (r.get("provider") or "") in ("GITHUB", "AZURE_DEVOPS")]
     return {"repos": repos, "publisher_ready": _github_publisher_ready(db)}
 
 
@@ -536,8 +536,8 @@ def suite_publish(body: PublishIn, db: Db = Depends(current_db)):
     if current.get("status") != "APPROVED":
         raise HTTPException(409, "Only an approved version is published; approve it first.")
     repo = next((r for r in _dbt_repos(db, None) if r["repo_id"] == body.repo_id), None)
-    if not repo or (repo.get("provider") or "") != "GITHUB":
-        raise HTTPException(409, "Choose a GitHub repository connected in Admin, Integrations.")
+    if not repo or (repo.get("provider") or "") not in ("GITHUB", "AZURE_DEVOPS"):
+        raise HTTPException(409, "Choose a GitHub or Azure Repos repository connected in Admin, Integrations.")
     if not _github_publisher_ready(db):
         return {"status": "NOT_CONFIGURED", "detail": "GitHub publishing is not set up. An admin can set it up in the GitHub publishing card."}
     slug = re.sub(r"[^a-z0-9]+", "-", found["suite"]["table_name"].split(".")[-1].lower()).strip("-") or "table"

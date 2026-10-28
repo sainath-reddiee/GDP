@@ -72,7 +72,7 @@ function Studio({
   const legacy = setup.legacy && !repo; // a clone set up by hand before repositories lived in Admin
   const sameRepoAsStored = repo ? storedRepoId === repo.repo_id : legacy;
   const publishingReady = setup.publishing.ready;
-  const githubTarget = repo ? repo.provider === "GITHUB" : legacy && /github\.com\//i.test(String(setup.legacy_setup?.origin ?? ""));
+  const githubTarget = repo ? (repo.provider === "GITHUB" || repo.provider === "AZURE_DEVOPS") : legacy && /(github\.com|dev\.azure\.com|visualstudio\.com)\//i.test(String(setup.legacy_setup?.origin ?? ""));
 
   // ---------------------------------------------------------------- per-run choices
   const [baseBranch, setBaseBranch] = useState(String((sameRepoAsStored && stored.base_branch) || repo?.branch || setup.legacy_setup?.base_branch || "main"));
@@ -351,7 +351,7 @@ function Studio({
             {branchExists && <p className="text-xs text-muted-foreground">{cutBranch} already exists: publishing adds a commit to it and reuses its open PR.</p>}
             {sameBranch && <p className="text-xs text-red-600">The new branch must differ from the cut-from branch.</p>}
             <div className="flex flex-wrap gap-4 pt-3 text-sm">
-              <label className={cn("flex items-center gap-2", !canPush && "opacity-60")} title={!canPush ? (githubTarget ? "GitHub publishing is not set up" : "Not a GitHub repository") : undefined}>
+              <label className={cn("flex items-center gap-2", !canPush && "opacity-60")} title={!canPush ? (githubTarget ? "Git publishing is not set up" : "Not a GitHub or Azure Repos repository") : undefined}>
                 <input type="checkbox" checked={push} disabled={!canPush} onChange={(e) => setOpenPr(e.target.checked)} /> Open the PR after generating
               </label>
               {canPush && <label className="flex items-center gap-2"><input type="checkbox" checked={draftPr} onChange={(e) => setDraftPr(e.target.checked)} /> Draft PR</label>}
@@ -437,20 +437,20 @@ function Studio({
         )}
         {tokenProblem && (
           <div className="mt-3">
-            <Callout tone="fail" title="GitHub refused the publishing token for this repository">
+            <Callout tone="fail" title="The Git provider refused the publishing token for this repository">
               <p className="mb-1 break-words">{pubDetail.split(". Edit the token")[0]}</p>
-              The token needs Contents and Pull requests write access to {repo?.git_url.replace("https://github.com/", "") || "the repository"}.
+              The token needs repository write and pull request access to {repo?.git_url.replace(/^https:\/\/(github\.com|dev\.azure\.com)\//, "") || "the repository"}.
               {" "}{mayManage ? <Link href={ADMIN_LINK} className="underline">Replace it in Admin, Integrations</Link> : "Ask an admin to replace it in Admin, Integrations"}, then push again.
             </Callout>
           </div>
         )}
         {generation && !canPush && (
           <div className="mt-3">
-            <Callout tone="warn" title={!githubTarget ? "Stage only" : "GitHub publishing is not set up"}>
+            <Callout tone="warn" title={!githubTarget ? "Stage only" : "Git publishing is not set up"}>
               {!githubTarget
-                ? (repo ? `${repo.name} is not on GitHub; pull requests from the platform are GitHub only for now. The generated project is in the Snowflake stage.`
+                ? (repo ? `${repo.name} is not on GitHub or Azure Repos; pull requests from the platform are GitHub and Azure Repos only. The generated project is in the Snowflake stage.`
                   : "This run has no repository, so the generated project stays in the Snowflake stage.")
-                : <>An admin sets up GitHub publishing once in {mayManage ? <Link href={ADMIN_LINK} className="underline">Admin, Integrations</Link> : "Admin, Integrations"}; every run then pushes and opens PRs.</>}
+                : <>An admin sets up Git publishing once in {mayManage ? <Link href={ADMIN_LINK} className="underline">Admin, Integrations</Link> : "Admin, Integrations"}; every run then pushes and opens PRs.</>}
             </Callout>
           </div>
         )}

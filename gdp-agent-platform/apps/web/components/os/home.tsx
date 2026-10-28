@@ -1,18 +1,18 @@
 import Link from "next/link";
 import type { ComponentType } from "react";
-import { AlertTriangle, ArrowRight, ArrowUpRight, BookOpen, Boxes, Crown, Database, Lock, Plus, ShieldCheck, Siren, Stamp, Wand2 } from "lucide-react";
+import { AlertTriangle, ArrowRight, ArrowUpRight, BookOpen, Boxes, ChevronDown, Clock, Crown, Database, Lock, Plus, ShieldCheck, Siren, Stamp, Wand2 } from "lucide-react";
 import { stateLabel } from "@/lib/run-labels";
 import { canSee, has, screenOfPath } from "@/lib/os/access";
 import type { Domain } from "@/lib/os/data";
 import type { OsAccess } from "@/lib/os/session";
 import {
-  PRIORITY_TONE, actHref, enhancesSource, intentOf, intentLabel, overdue, phaseOf, requestSteps, waitCta, waitRole, type OnboardingRequest, type RequestDetail, type RequestType,
+  PRIORITY_TONE, STAGE_NAME, actHref, childRunHref, childRunLabel, enhancesSource, intentOf, intentLabel, overdue, phaseOf, requestSteps, waitActionText, waitCta, waitRole, type OnboardingRequest, type RequestDetail, type RequestType,
 } from "@/lib/os/requests";
 import { Btn, Tag, ago, pretty } from "./ui";
 import { Track, type TrackStep } from "./stage-board";
-import { stageHref, waitIsMine } from "@/lib/os/work";
+import { RUNNING_STATES, requestStepHref, stageHref, waitIsMine } from "@/lib/os/work";
 import { RequestFiles } from "@/components/os/request-files";
-import { LiveWorkflowRefresh, StartEnhancementRun } from "./request-ui";
+import { DeleteRequestButton, DeleteRunButton, LiveWorkflowRefresh, StartEnhancementRun } from "./request-ui";
 import type { ActionItem } from "@/lib/os/actions";
 import { personaForPrivilege } from "@/lib/os/personas";
 import { cn } from "@/lib/utils";
@@ -33,13 +33,22 @@ const TYPE_TINT: Record<RequestType, string> = {
 const waitingOn = (r: OnboardingRequest, owner: string) => (r.waiting_label?.includes(":") ? r.waiting_label.split(":")[0] : owner);
 const cleanTitle = (title: string) => title.replace(/\s*\(E2E test\)\s*$/i, "").trim();
 
-/** The request's path as a track, waiting on the role its wait names. */
-export function RequestTrack({ r, className }: { r: OnboardingRequest; className?: string }) {
+/** The request's path as a track, waiting on the role its wait names. Each step links directly to that stage. */
+export function RequestTrack({ r, access, onIntake, className }: { r: OnboardingRequest; access?: OsAccess; onIntake?: boolean; className?: string }) {
   const steps = requestSteps(r);
   const now = steps.find((s) => s.state === "current" || s.state === "attention");
   return (
-    <Track className={className} steps={steps.map((s) => ({ key: s.stage, label: s.label, owner: s.owner, state: s.state as TrackStep["state"] }))}
-           waiting={r.status === "OPEN" && now ? waitingOn(r, now.owner) || "a person" : null} />
+    <Track
+      className={className}
+      steps={steps.map((s) => ({
+        key: s.stage,
+        label: s.label,
+        owner: s.owner,
+        state: s.state as TrackStep["state"],
+        href: requestStepHref(r, s.stage, access, onIntake),
+      }))}
+      waiting={r.status === "OPEN" && now ? waitingOn(r, now.owner) || "a person" : null}
+    />
   );
 }
 
@@ -51,34 +60,39 @@ export function WorkflowRow({ r, access, href }: { r: OnboardingRequest; access:
   const mine = open ? r.waits.find((w) => waitIsMine(w, r.items, access)) : undefined;
   const item = mine ? r.items.find((i) => i.item_id === mine.item_id) : undefined;
   const next = mine ? actHref(mine, item, r.domain_id, r.request_type === "PRODUCT", r.request_id, enhancesSource(r)) : null;
-  const doneItem = !open ? r.items.find((i) => !i.removed_at && (i.active_run_id ?? i.run_id)) : undefined;
-  const stageUrl = stageHref(r) ?? (doneItem ? `/os/build/runs/${doneItem.active_run_id ?? doneItem.run_id}` : null);
-  const stageScreen = stageUrl ? screenOfPath(stageUrl.split("?")[0]) : null;
-  const openHref = (stageUrl && (!stageScreen || canSee(access, stageScreen.key)) ? stageUrl : null) ?? href;
+  const detailsHref = href ?? `/os/requests/${r.request_id}`;
   const sources = r.items.filter((i) => !i.removed_at);
   const domain = r.domain_name ?? (r.proposed_domain ? `${r.proposed_domain} (new)` : null);
   const title = cleanTitle(r.title);
   const sourceSummary = sources.length === 1 ? sources[0].source_name : sources.length > 1 ? `${sources.length} sources` : null;
+  const childRuns = sources.flatMap((i) => i.table_runs ?? []);
+  const doneChildren = childRuns.filter((c) => c.stage === "DONE").length;
+  const agentRunning = open && r.items.some((i) => !i.removed_at && !!i.run_state && RUNNING_STATES.has(i.run_state));
   return (
     <article data-testid="workflow-row" className={cn("os-card os-rise p-3.5 transition hover:shadow-[var(--os-shadow-pop)]",
                                                        mine && "border-l-[3px] border-l-[var(--os-forest)]")}>
-      <LiveWorkflowRefresh active={open} />
+      <LiveWorkflowRefresh active={agentRunning} />
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex min-w-[min(100%,260px)] flex-1 items-start gap-3">
           <span className={cn("grid h-9 w-9 shrink-0 place-items-center rounded-lg", TYPE_TINT[r.request_type])}><I className="h-4 w-4" /></span>
           <div className="min-w-0">
-            <Link href={href ?? `/os/requests/${r.request_id}`} className="block truncate text-[14px] font-extrabold tracking-[-0.01em] hover:underline" title={title}>{title}</Link>
+            <Link href={detailsHref} className="block truncate text-[14px] font-extrabold tracking-[-0.01em] hover:underline" title={title}>{title}</Link>
             <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px]">
               <Tag tone={intentOf(r) === "ENHANCE" ? "purple" : "blue"}>{intentLabel(r)}</Tag>
               {domain && <span className="os-muted font-semibold">{domain}</span>}
               {sourceSummary && r.request_type !== "PRODUCT" && <span className="os-faint">· {sourceSummary}</span>}
+              {childRuns.length > 0 && (
+                <span className="os-faint font-semibold" data-testid="master-child-summary">
+                  · {doneChildren} of {childRuns.length} {childRuns.length === 1 ? "pipeline" : "pipelines"} done
+                </span>
+              )}
               {overdue(r) && <Tag tone="red">Overdue</Tag>}
             </div>
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-2">
           {mine ? (
-            <Btn href={next ?? `/os/requests/${r.request_id}`} variant="primary" title={mine.label}>{next ? waitCta(mine) : "Open workflow"} <ArrowRight className="h-3.5 w-3.5" /></Btn>
+            <Btn href={next ?? detailsHref} variant="primary" title={mine.label}>{next ? waitCta(mine) : "Open workflow"} <ArrowRight className="h-3.5 w-3.5" /></Btn>
           ) : open ? (
             // whose step it is, by persona (the step's own wait names it)
             <Tag tone={r.attention ? "red" : "neutral"} title={phaseOf(r).label}>
@@ -87,11 +101,13 @@ export function WorkflowRow({ r, access, href }: { r: OnboardingRequest; access:
           ) : (
             <Tag tone={r.status === "DONE" ? "green" : "neutral"}>{r.status === "DONE" ? "Published" : pretty(r.status)}</Tag>
           )}
-          {openHref && <Link href={openHref} className={cn("os-btn", mine && "max-sm:!hidden")} aria-label={`Open ${title}`}>Open <ArrowRight className="h-3.5 w-3.5" /></Link>}
+          <Link href={detailsHref} className={cn("os-btn", mine && "max-sm:!hidden")} aria-label={`Open ${title}`} title="View request summary, sources, and history">
+            Details
+          </Link>
+          <DeleteRequestButton requestId={r.request_id} iconOnly previewing={!!access.preview} />
         </div>
       </div>
-      {href ? <Link href={href} className="block rounded-lg" aria-label={`${title}: steps`}><RequestTrack r={r} className="mt-3" /></Link>
-        : <RequestTrack r={r} className="mt-3" />}
+      <RequestTrack r={r} access={access} className="mt-3" />
     </article>
   );
 }
@@ -177,9 +193,13 @@ export function RequestFocus({ r, access }: { r: RequestDetail; access: OsAccess
   const sources = r.items.filter((i) => !i.removed_at);
   const enhance = enhancesSource(r);
   const at = stageHref(r);
+  const hasMyAction = r.status === "OPEN" && r.waits.some((w) => waitIsMine(w, r.items, access));
+  const currentStep = requestSteps(r).find((s) => s.state === "current" || s.state === "attention");
+  const agentRunning = r.status === "OPEN" && sources.some((i) => !!i.run_state && RUNNING_STATES.has(i.run_state));
+  const domainWaits = r.status === "OPEN" ? r.waits.filter((w) => !w.item_id) : [];
   return (
     <section className="os-card os-rise p-5" data-testid="request-focus">
-      <LiveWorkflowRefresh active={r.status === "OPEN"} />
+      <LiveWorkflowRefresh active={agentRunning} />
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex min-w-0 items-start gap-3">
           <span className={cn("grid h-10 w-10 shrink-0 place-items-center rounded-xl", TYPE_TINT[r.request_type])}><I className="h-5 w-5" /></span>
@@ -194,62 +214,157 @@ export function RequestFocus({ r, access }: { r: RequestDetail; access: OsAccess
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
-          {at && <Btn href={at} variant="primary">Open where it is <ArrowRight className="h-3.5 w-3.5" /></Btn>}
-          <Btn href={`/os/requests/${r.request_id}`}>Full request</Btn>
+          {at && !hasMyAction && r.stage !== "ENABLE" && (
+            <Btn href={at} variant="primary">
+              Open in {currentStep?.label ?? "stage"} <ArrowRight className="h-3.5 w-3.5" />
+            </Btn>
+          )}
+          <Btn href={`/os/requests/${r.request_id}`} title="Add or remove sources, link runs, comment, or close">Manage request</Btn>
+          <DeleteRequestButton requestId={r.request_id} label="Delete" redirectTo="/os/intake?view=active" previewing={!!access.preview} />
         </div>
       </div>
       {r.business_outcome && !r.business_outcome.startsWith("Store build of ") && (
         <p className="os-muted mt-3 max-w-3xl text-[12.5px] leading-relaxed">{r.business_outcome}</p>
       )}
-      <RequestTrack r={r} className="mt-5" />
+      <RequestTrack r={r} access={access} onIntake className="mt-5" />
       {r.status === "OPEN" && r.attention && (
         <p className="mt-3 flex items-start gap-1.5 text-[12px] text-[var(--os-red-ink)]"><AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />{r.attention}</p>
       )}
 
-      <div className="mt-5 grid gap-5 lg:grid-cols-2">
-        <div>
-          <h3 className="os-eyebrow mb-2">Who acts now</h3>
-          {r.status === "OPEN" && r.waits.length ? (
-            <div className="os-divide rounded-xl border border-[var(--os-line)] px-3">
-              {r.waits.map((w) => {
-                const item = r.items.find((i) => i.item_id === w.item_id);
-                const href = actHref(w, item, r.domain_id, product, r.request_id, enhancesSource(r));
-                const you = waitIsMine(w, r.items, access);
-                return (
-                  <div key={`${w.privilege}-${w.label}-${w.item_id ?? ""}`} className="flex items-center justify-between gap-3 py-2.5">
-                    <span className="min-w-0 text-[12px]"><b className="block leading-snug">{w.label}</b>
-                      <span className="os-faint text-[10.5px]">{item ? `${item.source_name} · ` : ""}{personaForPrivilege(w.privilege)}</span></span>
-                    {you && enhance && w.privilege === "RUN.CREATE" && item && !item.run_id && item.source_system_id
-                      ? <StartEnhancementRun requestId={r.request_id} itemId={item.item_id} source={item.source_name} previewing={!!access.preview} />
-                      : you && href ? <Btn href={href} variant="primary" title={w.label}>{waitCta(w)} <ArrowRight className="h-3.5 w-3.5" /></Btn> : you ? <Tag tone="green">Yours</Tag> : <Tag>Waiting on {waitRole(w) ?? "another role"}</Tag>}
+      {domainWaits.length > 0 && (
+        <div className="mt-5 rounded-xl border border-[var(--os-line)] bg-[var(--os-subtle)]/40 px-4 py-3">
+          <div className="os-eyebrow mb-1.5">Next step</div>
+          <div className="os-divide">
+            {domainWaits.map((w) => {
+              const href = actHref(w, undefined, r.domain_id, product, r.request_id, enhance);
+              const you = waitIsMine(w, r.items, access);
+              const role = waitRole(w) ?? personaForPrivilege(w.privilege);
+              return (
+                <div key={`${w.privilege}-${w.label}`} className="flex flex-wrap items-center justify-between gap-3 py-2 first:pt-0 last:pb-0">
+                  <div className="min-w-0 text-[12.5px]">
+                    <b className="block leading-snug">{waitActionText(w)}</b>
+                    <span className="os-faint text-[11px]">Owner: {role}</span>
                   </div>
-                );
-              })}
-            </div>
-          ) : <p className="os-faint text-[12px]">{r.status === "OPEN" ? "Nobody right now." : `Nobody: the request is ${pretty(r.status).toLowerCase()}.`}</p>}
-        </div>
-        <div>
-          <h3 className="os-eyebrow mb-2">{product ? "Gold run" : `Sources (${sources.length})`}</h3>
-          {sources.length ? (
-            <div className="os-divide rounded-xl border border-[var(--os-line)] px-3">
-              {sources.map((i) => (
-                <div key={i.item_id} className="py-2.5 text-[12px]">
-                  <div className="flex flex-wrap items-start justify-between gap-2">
-                  <span className="min-w-0 flex-1"><b className="block break-words">{i.source_name}</b>
-                    <span className="os-faint block text-[10.5px]">{i.run_name ? `${i.run_name}: ${stateLabel(i.run_state).toLowerCase()}` : i.status_detail ?? "no run yet"}</span></span>
-                  <span className="flex shrink-0 items-center gap-2">
-                    <Tag tone={i.status === "ATTENTION" ? "red" : phaseOf(i).tone}>{phaseOf(i).label}</Tag>
-                    {(i.active_run_id ?? i.run_id) && ["DESIGN", "BUILD"].includes(i.stage) && (
-                      <Link href={`/os/${i.stage === "DESIGN" ? "design" : "build"}?view=selected&run=${i.active_run_id ?? i.run_id}`} className="os-btn px-2 py-1 text-[11px]">Open</Link>
-                    )}
-                  </span>
-                  </div>
-                  {i.source_note && <p className="os-muted mt-1 text-[11.5px]" data-testid="item-scope"><b>{enhance ? "To add" : "Needed"}:</b> {i.source_note}</p>}
+                  {you && href ? (
+                    <Btn href={href} variant="primary" title={w.label}>{waitCta(w)} <ArrowRight className="h-3.5 w-3.5" /></Btn>
+                  ) : you ? (
+                    <Tag tone="green">Your turn</Tag>
+                  ) : (
+                    <Tag>Waiting on {role}</Tag>
+                  )}
                 </div>
-              ))}
-            </div>
-          ) : <p className="os-faint text-[12px]">No source asked for yet.</p>}
+              );
+            })}
+          </div>
         </div>
+      )}
+
+      <div className="mt-5">
+        <h3 className="os-eyebrow mb-2">{product ? "Gold run" : `Sources (${sources.length})`}</h3>
+        {sources.length ? (
+          <div className="os-divide rounded-xl border border-[var(--os-line)] px-4">
+            {sources.map((i) => {
+              const w = r.status === "OPEN" ? (r.waits.find((x) => x.item_id === i.item_id) ?? i.waits[0]) : undefined;
+              const act = w ? actHref(w, i, r.domain_id, product, r.request_id, enhance) : null;
+              const you = w ? waitIsMine(w, r.items, access) : false;
+              const role = w ? (waitRole(w) ?? personaForPrivilege(w.privilege)) : null;
+              const runHref = (i.active_run_id ?? i.run_id)
+                ? `/os/${i.stage === "DESIGN" ? "design" : i.stage === "REVIEW" ? "review" : i.stage === "DONE" ? "release" : "build"}?view=selected&run=${i.active_run_id ?? i.run_id}`
+                : null;
+              const kids = i.table_runs ?? [];
+              const doneKids = kids.filter((c) => c.stage === "DONE").length;
+              const allRunIds = Array.from(new Set([i.run_id, i.active_run_id, ...kids.map((c) => c.run_id)].filter(Boolean) as string[]));
+              return (
+                <div key={i.item_id} className="py-3 text-[12.5px]">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <b className="text-[13.5px] font-extrabold">{i.source_name}</b>
+                        <Tag tone={i.status === "ATTENTION" ? "red" : phaseOf(i).tone}>{phaseOf(i).label}</Tag>
+                        {kids.length > 0 && (
+                          <Tag tone={doneKids === kids.length ? "green" : "blue"}>
+                            {doneKids} of {kids.length} {kids.length === 1 ? "pipeline" : "pipelines"} done
+                          </Tag>
+                        )}
+                        {role && <span className="os-faint text-[11px]">· {role}</span>}
+                      </div>
+                      <p className="os-muted mt-1 text-[12px]">
+                        {kids.length > 0
+                          ? i.status_detail ?? `${doneKids} of ${kids.length} child pipelines done`
+                          : i.run_name
+                            ? `${i.run_name}: ${stateLabel(i.run_state).toLowerCase()}`
+                            : i.status_detail ?? (w ? waitActionText(w) : "Ready")}
+                      </p>
+                      {i.source_note && (
+                        <p className="os-faint mt-1 text-[11.5px]" data-testid="item-scope">
+                          <b className="text-[var(--os-ink)]">{enhance ? "To add" : "Needed"}:</b> {i.source_note}
+                        </p>
+                      )}
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2">
+                      {you && enhance && w?.privilege === "RUN.CREATE" && !i.run_id && i.source_system_id ? (
+                        <StartEnhancementRun requestId={r.request_id} itemId={i.item_id} source={i.source_name} previewing={!!access.preview} />
+                      ) : you && w && act ? (
+                        <Btn href={act} variant="primary" title={w.label}>{waitCta(w)} <ArrowRight className="h-3.5 w-3.5" /></Btn>
+                      ) : w && role ? (
+                        <Tag>Waiting on {role}</Tag>
+                      ) : runHref ? (
+                        <Btn href={runHref}>Open run <ArrowRight className="h-3.5 w-3.5" /></Btn>
+                      ) : null}
+                      {allRunIds.length > 0 && (
+                        <DeleteRunButton runIds={allRunIds} iconOnly previewing={!!access.preview} />
+                      )}
+                    </div>
+                  </div>
+                  {kids.length > 0 && (
+                    <div className="mt-3 rounded-lg border border-[var(--os-line-soft)] bg-[var(--os-subtle)]/35 p-2.5" data-testid="child-pipelines">
+                      <div className="mb-1.5 flex items-center justify-between px-1">
+                        <span className="os-eyebrow">Child pipelines ({kids.length})</span>
+                        <span className="os-faint text-[11px]">{doneKids} of {kids.length} completed</span>
+                      </div>
+                      <div className="os-divide">
+                        {kids.map((c) => {
+                          const label = childRunLabel(c);
+                          const cHref = childRunHref(c);
+                          const stageTitle = STAGE_NAME[c.stage] ?? c.stage;
+                          const isDone = c.stage === "DONE";
+                          const isAttn = c.status === "ATTENTION";
+                          return (
+                            <div key={c.run_id} className="flex flex-wrap items-center justify-between gap-2 px-1 py-2 text-[12px]" data-testid="child-pipeline-row">
+                              <div className="flex min-w-0 items-center gap-2">
+                                <span
+                                  className={cn(
+                                    "h-2 w-2 shrink-0 rounded-full",
+                                    isDone ? "bg-[var(--os-green)]" : isAttn ? "bg-[var(--os-red-ink)]" : "bg-[var(--os-accent)]",
+                                  )}
+                                />
+                                <Link href={cHref} className="truncate font-extrabold hover:underline" title={c.run_name ?? label}>
+                                  {label}
+                                </Link>
+                                {c.run_name && c.run_name !== label && (
+                                  <span className="os-faint truncate text-[11px]">· {c.run_name}</span>
+                                )}
+                              </div>
+                              <div className="flex shrink-0 items-center gap-1.5">
+                                <Tag tone={isDone ? "green" : isAttn ? "red" : "blue"}>
+                                  {stageTitle} · {stateLabel(c.current_state)}
+                                </Tag>
+                                <Link href={cHref} className="os-btn px-2 py-1 text-[11px]">
+                                  Open in {stageTitle} <ArrowRight className="h-3 w-3" />
+                                </Link>
+                                <DeleteRunButton runIds={[c.run_id]} iconOnly previewing={!!access.preview} />
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        ) : <p className="os-faint text-[12px]">No source asked for yet.</p>}
       </div>
 
       {(r.request_type === "DOMAIN" || (r.files ?? []).length > 0) && (
@@ -259,22 +374,50 @@ export function RequestFocus({ r, access }: { r: RequestDetail; access: OsAccess
                         previewing={!!access.preview} domainId={r.domain_id} />
         </div>
       )}
-
-      {r.events.length > 0 && (
-        <div className="mt-5">
-          <h3 className="os-eyebrow mb-2">Latest</h3>
-          <ol className="flex flex-col gap-1.5 text-[11.5px]">
-            {[...r.events].reverse().slice(0, 5).map((e) => (
-              <li key={e.event_id} className="flex items-baseline gap-2">
-                <span className="os-faint w-16 shrink-0 tabular-nums">{ago(e.created_at)}</span>
-                <span><b>{pretty(e.kind)}</b>{e.note ? <span className="os-muted">: {e.note}</span> : null}
-                  <span className="os-faint"> · {e.automatic ? "platform" : e.actor}</span></span>
-              </li>
-            ))}
-          </ol>
-        </div>
-      )}
     </section>
+  );
+}
+
+/** Compact collapsible request history card placed below Start a workflow on Initiate Selected. */
+export function RequestHistoryCard({ r }: { r: RequestDetail }) {
+  if (!r.events?.length) return null;
+  const eventsDesc = [...r.events].reverse();
+  const latest = eventsDesc[0];
+  const cleanNote = (note?: string | null) => note ? waitActionText({ label: note }) : null;
+  return (
+    <details className="os-card group overflow-hidden" data-testid="request-history-card">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-4 py-3 text-[12px] transition hover:bg-[var(--os-subtle)]">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <Clock className="os-muted h-3.5 w-3.5 shrink-0" />
+            <b className="font-extrabold">History</b>
+            <Tag tone="neutral">{eventsDesc.length}</Tag>
+          </div>
+          {latest && (
+            <div className="os-muted mt-1 truncate text-[11px]">
+              Latest: <b className="text-[var(--os-ink)]">{cleanNote(latest.note) ?? pretty(latest.kind)}</b> ({ago(latest.created_at)})
+            </div>
+          )}
+        </div>
+        <span className="os-faint inline-flex shrink-0 items-center gap-1 text-[11px] font-bold">
+          <span className="group-open:hidden">Show</span>
+          <span className="hidden group-open:inline">Hide</span>
+          <ChevronDown className="h-3.5 w-3.5 transition-transform group-open:rotate-180" />
+        </span>
+      </summary>
+      <ol className="os-scroll-y flex max-h-[260px] flex-col gap-2 border-t border-[var(--os-line)] px-4 py-3 text-[11.5px]">
+        {eventsDesc.map((e) => (
+          <li key={e.event_id} className="flex items-baseline gap-2">
+            <span className="os-faint w-14 shrink-0 tabular-nums text-[10.5px]">{ago(e.created_at)}</span>
+            <span className="min-w-0 flex-1">
+              <b>{pretty(e.kind)}</b>
+              {e.note ? <span className="os-muted">: {cleanNote(e.note)}</span> : null}
+              <span className="os-faint"> · {e.automatic ? "platform" : e.actor}</span>
+            </span>
+          </li>
+        ))}
+      </ol>
+    </details>
   );
 }
 

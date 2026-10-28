@@ -259,7 +259,7 @@ def assess(request: Dict[str, Any], items: List[Dict[str, Any]], domain: Optiona
     per_item = {i["item_id"]: item_status(i, request, sources, runs, children) for i in items}
     for st in per_item.values():
         st["phase"] = "DONE" if st["status"] == "REMOVED" else phase(st, product, enhance)
-    if status != OPEN:
+    if status != OPEN and not (status == DONE and _up(request.get("closed_by")) == "PLATFORM"):
         return {"stage": "DONE" if status == DONE else "CLOSED", "status": status, "waiting_on": None, "waiting_label": None,
                 "waits": [], "attention": None, "items": per_item, "phase": "DONE" if status == DONE else "CLOSED"}
 

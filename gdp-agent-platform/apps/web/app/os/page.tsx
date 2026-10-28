@@ -148,7 +148,7 @@ export default async function Home({ searchParams }: { searchParams: Params }) {
           </div>
 
           {queue.length ? (
-            <div className="flex flex-col gap-3" data-testid="platform-queue">
+            <div className="os-scroll-y flex max-h-[500px] flex-col gap-3 pr-2" data-testid="platform-queue">
               {queue.map((e) => <WorkflowRow key={e.r.request_id} r={e.r} access={access} href={workflowHref(e.r)} />)}
             </div>
           ) : filtered ? (

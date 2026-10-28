@@ -1,10 +1,12 @@
+import Link from "next/link";
+import { ArrowLeft } from "lucide-react";
 import { loadRequest, loadRequests, loadWorkflowSearch } from "@/lib/os/data";
 import { guard } from "@/lib/os/session";
 import { boardView, inflight, requestNeedsMe } from "@/lib/os/work";
 import { intentOf, type OnboardingRequest } from "@/lib/os/requests";
-import { SourceError } from "@/components/os/ui";
+import { Btn, SourceError } from "@/components/os/ui";
 import { BoardList, BoardTabs } from "@/components/os/stage-board";
-import { RequestFocus, StartPanel, WorkflowRow } from "@/components/os/home";
+import { RequestFocus, RequestHistoryCard, StartPanel, WorkflowRow } from "@/components/os/home";
 import { HomeSearch } from "@/components/os/home-search";
 
 export const dynamic = "force-dynamic";
@@ -16,7 +18,8 @@ export const metadata = { title: "Initiate" };
 export default async function IntakeBoard({ searchParams }: { searchParams: { view?: string; request?: string; q?: string; intent?: string } }) {
   const access = await guard("intake");
   const query = (searchParams.q ?? "").trim();
-  const [list, picked, searched] = await Promise.all([loadRequests("all", "ALL"), searchParams.request ? loadRequest(searchParams.request) : null,
+  const asSelf = !access.preview;
+  const [list, picked, searched] = await Promise.all([loadRequests("all", "ALL", undefined, asSelf), searchParams.request ? loadRequest(searchParams.request, asSelf) : null,
     query ? loadWorkflowSearch(query) : null]);
   const q = query.toLowerCase();
   // by meaning when the search answers ("waiting on me", synonyms), else by title
@@ -49,22 +52,34 @@ export default async function IntakeBoard({ searchParams }: { searchParams: { vi
           </div>
           <HomeSearch />
         </div>
-        <div className="mb-4">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
           <BoardTabs base="/os/intake" view={view} selection={selected ? ["request", selected.request_id] : null} extra={intent ? { intent } : undefined}
                      counts={{ action: lists.action.length, active: lists.active.length, completed: lists.completed.length }} />
+          {view === "selected" && (
+            <Btn href={`/os/intake?${new URLSearchParams({ view: "active", ...(intent ? { intent } : {}) })}`}>
+              <ArrowLeft className="h-3.5 w-3.5" /> All requests
+            </Btn>
+          )}
         </div>
         <SourceError what="Requests" error={list.error} />
         {picked && !selected && <SourceError what="That request" error={picked.error ?? "It does not exist, or belongs to a domain you are not a member of."} />}
-        {view === "selected" && selected ? <RequestFocus r={selected} access={access} /> : (
+        {view === "selected" && selected ? (
+          <RequestFocus r={selected} access={access} />
+        ) : (
           <BoardList count={rows.length} empty={view === "action"
             ? { title: "Nothing waits on you", body: "When a request reaches a step your role owns, it shows here." }
             : view === "active" ? { title: "No open requests", body: "Start one with New or Enhance." } : { title: "Nothing completed yet" }}>
-            {rows.map((r) => <WorkflowRow key={r.request_id} r={r} access={access} href={select(r.request_id)} />)}
+            <div className="os-scroll-y flex max-h-[540px] flex-col gap-3 pr-2" data-testid="intake-list-scroll">
+              {rows.map((r) => <WorkflowRow key={r.request_id} r={r} access={access} href={select(r.request_id)} />)}
+            </div>
           </BoardList>
         )}
       </section>
       <aside>
-        <div className="lg:sticky lg:top-[76px]"><StartPanel access={access} inflight={inflight(list.data.requests, intent)} /></div>
+        <div className="flex flex-col gap-4 lg:sticky lg:top-[76px]">
+          <StartPanel access={access} inflight={inflight(list.data.requests, intent)} />
+          {view === "selected" && selected && <RequestHistoryCard r={selected} />}
+        </div>
       </aside>
     </div>
   );

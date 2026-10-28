@@ -92,14 +92,14 @@ export function CostFilters({ rows }: { rows: Row[] }) {
     const blob = new Blob([csv(rows)], { type: "text/csv" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = `ai-cost-by-${params.get("group_by") ?? "stage"}.csv`;
+    a.download = `ai-cost-by-${params.get("group_by") ?? "agent"}.csv`;
     a.click();
     { const done = a.href; setTimeout(() => URL.revokeObjectURL(done), 1000); }
   };
   return (
     <div className="flex flex-wrap items-center gap-2">
       <select aria-label="Group by" className={field} value={params.get("group_by") ?? "stage"} onChange={(e) => go({ group_by: e.target.value === "stage" ? null : e.target.value })}>
-        <option value="stage">By stage</option>
+        <option value="stage">By agent</option>
         <option value="model">By model</option>
         <option value="run">By run</option>
         <option value="day">By day</option>

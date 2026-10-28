@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ArrowRight, CheckCircle2, CircleDashed, FileCode2, FlaskConical, GitPullRequest, Hand, Rocket, ShieldCheck, Sparkles, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, CheckCircle2, CircleDashed, FileCode2, FlaskConical, GitPullRequest, Hand, Rocket, ShieldCheck, Sparkles, X } from "lucide-react";
 import { stateLabel } from "@/lib/run-labels";
 import {
   defaultRun, gatePassed, loadKnowledgeFeed, loadPrs, loadRunBundle, loadRunQa, loadRuns, runOptions, scoreOf, tableOf,
@@ -12,6 +12,7 @@ import { BoardList, BoardTabs, StageFilterBar, WorkflowGroupCard, WorkflowJourne
 import { HomeSearch } from "@/components/os/home-search";
 import { RunPicker } from "@/components/os/run-picker";
 import { PublishPr, QaSignoffPanel } from "@/components/os/decide";
+import { DeleteRunButton } from "@/components/os/request-ui";
 import { ACTIONS, actMode } from "@/lib/os/access";
 import { cn } from "@/lib/utils";
 
@@ -72,8 +73,13 @@ export default async function CodeAndRelease({ searchParams }: { searchParams: P
   const view: BoardView = (searchParams.view === "action" || searchParams.view === "active" || searchParams.view === "completed")
     ? searchParams.view
     : b && qa ? "selected" : "active";
-  const boardRows = view === "selected" ? [] : lists[view];
-  const grouped = groupRunsByWorkflow(boardRows, live, (r) => runNeedsMe(r, access) || r.current_state === "DBT_REVIEW");
+  const mine = (r: (typeof leaves)[number]) => runNeedsMe(r, access) || r.current_state === "DBT_REVIEW";
+  const groupedLists = {
+    action: groupRunsByWorkflow(lists.action, live, mine),
+    active: groupRunsByWorkflow(lists.active, live, mine),
+    completed: groupRunsByWorkflow(lists.completed, live, mine),
+  };
+  const grouped = view === "selected" ? [] : groupedLists[view];
   const select = (id: string) => `/os/release?${new URLSearchParams({ view: "selected", run: id })}`;
 
   const domainCounts = new Map<string, number>();
@@ -111,7 +117,7 @@ export default async function CodeAndRelease({ searchParams }: { searchParams: P
         <div className="mb-4 flex flex-wrap items-center gap-2">
           <BoardTabs base="/os/release" view={view} selection={runId ? ["run", runId] : null}
                      fallback={lists.action[0] ? ["run", lists.action[0].run_id] : lists.active[0] ? ["run", lists.active[0].run_id] : null}
-                     counts={{ action: lists.action.length, active: lists.active.length, completed: lists.completed.length }} />
+                     counts={{ action: groupedLists.action.length, active: groupedLists.active.length, completed: groupedLists.completed.length }} />
           <span className="mx-1 hidden h-5 w-px bg-[var(--os-line)] sm:block" aria-hidden />
           <StageFilterBar
             domains={domainOptions}
@@ -169,7 +175,7 @@ export default async function CodeAndRelease({ searchParams }: { searchParams: P
       <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
         <BoardTabs base="/os/release" view={view} selection={["run", run.run_id]}
                    fallback={lists.action[0] ? ["run", lists.action[0].run_id] : ["run", run.run_id]}
-                   counts={{ action: lists.action.length, active: lists.active.length, completed: lists.completed.length }} />
+                   counts={{ action: groupedLists.action.length, active: groupedLists.active.length, completed: groupedLists.completed.length }} />
         <HomeSearch placeholder="Search workflows, tables or domains" />
       </div>
 
@@ -178,11 +184,13 @@ export default async function CodeAndRelease({ searchParams }: { searchParams: P
         title={<>Code, test and release · {run.run.domain_name ?? ""} {tableOf(run.run.target_model)}</>}
         subtitle="Agent-generated code enters the normal SDLC: a pull request, CI evidence, QA and UAT signoff, then a controlled release. Nothing is merged or deployed automatically."
         actions={<>
+          <Btn href="/os/release?view=active"><ArrowLeft className="h-3.5 w-3.5" /> All runs</Btn>
           <RunPicker base="/os/release" current={run.run_id} runs={runOptions(leaves)} />
           <Action access={access} id="openDbtStudio" label="dbt studio" href={`/os/build/runs/${run.run_id}/dbt`} icon={<FileCode2 className="h-3.5 w-3.5" />} />
           {run.current_state === "DBT_REVIEW"
             ? <Action access={access} id="reviewCode" label="Validate and decide" href={`/os/review?view=selected&run=${run.run_id}`} variant="primary" />
             : <Btn href="/os/release/source-control" variant="primary"><GitPullRequest className="h-3.5 w-3.5" /> Source control</Btn>}
+          <DeleteRunButton runIds={[run.run_id]} redirectTo="/os/release?view=active" previewing={!!access.preview} />
         </>}
       />
 

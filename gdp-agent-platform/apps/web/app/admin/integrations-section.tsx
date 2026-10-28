@@ -92,7 +92,7 @@ export function IntegrationsSection({ repos, domains, publishing, jira, airflow,
   const failing = repos.filter((r) => r.status === "FAILED").length;
   const airflowFailing = (airflow ?? []).filter((e) => e.enabled && e.last_error).length;
   const tabs: { id: IntegrationView; label: string; icon: typeof FolderGit2; badge: React.ReactNode; hint: string }[] = [
-    { id: "repos", label: "Code repositories", icon: FolderGit2, hint: "dbt and SQL repositories, and pull requests to GitHub",
+    { id: "repos", label: "Code repositories", icon: FolderGit2, hint: "dbt and SQL repositories, and pull requests to GitHub & Azure Repos",
       badge: failing ? <Badge tone="bad">{failing} failing</Badge> : <Badge tone={repos.length ? "good" : "idle"}>{repos.length}</Badge> },
     { id: "jira", label: "Jira", icon: Unplug, hint: "QA issues, reproduction and results posted back",
       badge: <Badge tone={jira?.ready ? "good" : "idle"}>{!jira?.installed ? "not installed" : jira.ready ? `${jira.users_connected ?? 0} connected` : "setup needed"}</Badge> },
@@ -132,7 +132,7 @@ export function IntegrationsSection({ repos, domains, publishing, jira, airflow,
         </p>
       )}
       {view === "repos" && <ReposTab repos={repos} domains={domains} may={canAct("INTEGRATION.MANAGE")} onMsg={setMsg}
-                                     publishing={<PublishingStrip status={publishing} githubRepos={repos.filter((r) => r.provider === "GITHUB")} may={canAct("ADMIN.DEPLOY")} onMsg={setMsg} />} />}
+                                     publishing={<PublishingStrip status={publishing} githubRepos={repos.filter((r) => r.provider === "GITHUB" || r.provider === "AZURE_DEVOPS")} may={canAct("ADMIN.DEPLOY")} onMsg={setMsg} />} />}
       {view === "jira" && <JiraTab status={jira} may={canAct("INTEGRATION.MANAGE")} onMsg={setMsg} returnTo={`${base}${base.includes("?") ? "&" : "?"}view=jira`} />}
       {view === "incidents" && <IncidentsTab envs={airflow ?? []} may={canAct("INTEGRATION.MANAGE")} onMsg={setMsg} />}
       {view === "cases" && <CasesTab may={canAct("INTEGRATION.MANAGE")} onMsg={setMsg} />}
@@ -421,7 +421,7 @@ function DbtPanel({ repo, pending, onSave }: {
         <div className="space-y-1.5 pt-4">
           <label className="flex items-center gap-1.5"><input type="checkbox" checked={openPr} onChange={() => setOpenPr(!openPr)} />Open the PR right after generating (runs can untick it)</label>
           <label className="flex items-center gap-1.5"><input type="checkbox" checked={draft} onChange={() => setDraft(!draft)} />Open PRs as drafts</label>
-          {repo.provider !== "GITHUB" && <p className="text-amber-700">Pull requests from the platform are GitHub only; runs on this repository stay stage only.</p>}
+          {repo.provider !== "GITHUB" && repo.provider !== "AZURE_DEVOPS" && <p className="text-amber-700">Pull requests from the platform are GitHub and Azure Repos only; runs on this repository stay stage only.</p>}
         </div>
       </div>
       <Button size="sm" disabled={pending} onClick={() => onSave({ use_for_dbt: use, dbt_project_dir: dir, open_pr: openPr, draft_pr: draft })}>
@@ -534,7 +534,7 @@ function DisconnectPanel({ repo, pending, onCancel, onConfirm }: { repo: CodeRep
   );
 }
 
-/** Pull requests from the dbt workspace: one GitHub token for every run, kept in a Snowflake secret. A single line of
+/** Pull requests from the dbt workspace: one GitHub or Azure DevOps token for every run, kept in a Snowflake secret. A single line of
  *  status and actions; the token field, access check and setup log open below it only when needed. */
 function PublishingStrip({ status, githubRepos, may, onMsg }: { status: PublishingStatus; githubRepos: CodeRepo[]; may: boolean; onMsg: (m: Msg) => void }) {
   const router = useRouter();
@@ -555,7 +555,7 @@ function PublishingStrip({ status, githubRepos, may, onMsg }: { status: Publishi
     setToken("");
     if ("log" in res.data) setLog(res.data.log);
     const ready = !("ready" in res.data) || res.data.ready;
-    onMsg({ tone: ready ? "ok" : "error", text: status.ready ? "GitHub token updated in the Snowflake secret." : ready ? "Pull requests to GitHub are ready." : ("detail" in res.data && res.data.detail) || "Setup did not finish." });
+    onMsg({ tone: ready ? "ok" : "error", text: status.ready ? "Publishing token updated in the Snowflake secret." : ready ? "Pull requests to GitHub & Azure Repos are ready." : ("detail" in res.data && res.data.detail) || "Setup did not finish." });
     setEditing(false);
     router.refresh();
   });
@@ -563,11 +563,11 @@ function PublishingStrip({ status, githubRepos, may, onMsg }: { status: Publishi
   return (
     <div className="border-b bg-muted/20 px-5 py-3 text-xs">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-        <span className="inline-flex items-center gap-2 text-sm font-medium"><GitPullRequest className="h-4 w-4 text-emerald-600" />Pull requests to GitHub</span>
+        <span className="inline-flex items-center gap-2 text-sm font-medium"><GitPullRequest className="h-4 w-4 text-emerald-600" />Pull requests (GitHub &amp; Azure Repos)</span>
         <Badge tone={status.ready ? "good" : "idle"}>{status.ready ? "ready" : "not set up"}</Badge>
         <span className="min-w-[12rem] flex-1 text-muted-foreground">
           {status.ready ? <>The dbt workspace pushes branches and opens PRs with one token{status.config?.secret ? <> in <span className="font-mono">{status.config.secret}</span></> : ""}.</>
-            : "Set a GitHub token once so runs can push branches and open pull requests. It is stored as a Snowflake secret."}
+            : "Set a GitHub or Azure DevOps token once so runs can push branches and open pull requests. It is stored as a Snowflake secret."}
         </span>
         {may && status.ready && !editing && (
           <span className="flex flex-wrap items-center gap-1.5">
@@ -576,7 +576,7 @@ function PublishingStrip({ status, githubRepos, may, onMsg }: { status: Publishi
                 {githubRepos.map((r) => <option key={r.repo_id} value={r.git_url}>{r.name}</option>)}
               </Select>
             )}
-            <Button size="sm" variant="outline" disabled={pending || !/github\.com\//.test(origin)} onClick={test}
+            <Button size="sm" variant="outline" disabled={pending || !/(github\.com|dev\.azure\.com|visualstudio\.com)\//i.test(origin)} onClick={test}
                     title={githubRepos.length === 1 ? `Check the token can push to ${githubRepos[0].name}` : undefined}>
               {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}Test access</Button>
             <Button size="sm" variant="ghost" onClick={() => setEditing(true)}><KeyRound className="h-3.5 w-3.5" />Rotate token</Button>
@@ -585,11 +585,11 @@ function PublishingStrip({ status, githubRepos, may, onMsg }: { status: Publishi
       </div>
       {showToken && (
         <div className="mt-2.5 flex max-w-2xl flex-wrap items-center gap-2">
-          <Input type="password" autoComplete="off" value={token} onChange={(e) => setToken(e.target.value)} placeholder="GitHub token with Contents and Pull requests write"
-                 className="h-9 min-w-[16rem] flex-1 text-xs" aria-label="GitHub token" />
+          <Input type="password" autoComplete="off" value={token} onChange={(e) => setToken(e.target.value)} placeholder="GitHub token or Azure DevOps PAT (Code Read & write)"
+                 className="h-9 min-w-[16rem] flex-1 text-xs" aria-label="GitHub or Azure DevOps token" />
           <Button size="sm" disabled={pending || !token.trim()} onClick={saveToken}>{pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <KeyRound className="h-3.5 w-3.5" />}{status.ready ? "Save token" : "Set up"}</Button>
           {editing && <Button size="sm" variant="ghost" onClick={() => { setEditing(false); setToken(""); }}>Cancel</Button>}
-          <span className="w-full text-[11px] text-muted-foreground">A fine-grained token limited to the client&apos;s repositories, with Contents and Pull requests: read and write.</span>
+          <span className="w-full text-[11px] text-muted-foreground">GitHub fine-grained token (Contents and Pull requests: Read &amp; write) or Azure DevOps PAT (Code: Read &amp; write).</span>
         </div>
       )}
       {!may && !status.ready && <p className="mt-1.5 text-muted-foreground">A platform admin (ADMIN.DEPLOY) sets this up.</p>}
@@ -618,16 +618,18 @@ function ConnectDrawer({ domains, onClose, onDone }: { domains: Domain[]; onClos
                                 auth: "token" as "token" | "secret" | "public", secret_name: "", username: "", token: "",
                                 domain_ids: [] as string[], include: "", exclude: "", kind: "DBT", index_now: true });
   useEffect(() => { loadSetup().then((r) => (r.ok ? setSetup(r.data) : setError(r.error))); }, []);
-  const host = (() => { try { return new URL(f.git_url).origin; } catch { return ""; } })();
+  const cleanUrl = f.git_url.replace(/^https:\/\/[^@/]+@/, "https://");
+  const host = (() => { try { return new URL(cleanUrl).origin; } catch { return ""; } })();
   const integrations = setup?.integrations.filter((i) => i.usable !== false) ?? [];
-  const fits = integrations.filter((i) => !host || !(i.allowed_prefixes ?? []).length || (i.allowed_prefixes ?? []).some((p) => f.git_url.startsWith(p.replace(/\/$/, "")) || host.startsWith(p.replace(/\/$/, ""))));
+  const fits = integrations.filter((i) => !host || !(i.allowed_prefixes ?? []).length || (i.allowed_prefixes ?? []).some((p) => cleanUrl.startsWith(p.replace(/\/$/, "")) || host.startsWith(p.replace(/\/$/, ""))));
   const set = (patch: Partial<typeof f>) => setF((prev) => ({ ...prev, ...patch }));
   const nameFromUrl = (url: string) => (url.split("/").pop() ?? "").replace(/\.git$/, "").replace(/[^A-Za-z0-9]+/g, "_").toUpperCase().replace(/^_+|_+$/g, "");
   const submit = (override?: Partial<typeof f>) => start(async () => {
     const v = { ...f, ...override };
+    const normalizedUrl = v.git_url.replace(/^https:\/\/[^@/]+@/, "https://");
     setError("");
     const r = await connectRepo({
-      name: v.name, git_url: v.git_url, branch: v.branch.trim(), api_integration: v.api_integration,
+      name: v.name, git_url: normalizedUrl, branch: v.branch.trim(), api_integration: v.api_integration,
       existing_git_repository: v.existing_git_repository || null,
       secret_name: v.auth === "secret" ? v.secret_name : null, username: v.auth === "token" ? v.username || null : null,
       token: v.auth === "token" ? v.token || null : null, domain_ids: v.domain_ids,
@@ -638,7 +640,7 @@ function ConnectDrawer({ domains, onClose, onDone }: { domains: Domain[]; onClos
     else setError(r.error);
   });
   const branchChoices = suggestedBranches(error);
-  const valid = f.name.trim().length >= 2 && /^https:\/\//.test(f.git_url) && f.api_integration && f.branch.trim()
+  const valid = f.name.trim().length >= 2 && /^https:\/\//.test(cleanUrl) && f.api_integration && f.branch.trim()
     && (f.auth !== "token" || f.token.trim()) && (f.auth !== "secret" || f.secret_name);
   return (
     <div className="fixed inset-0 z-50 flex justify-end" role="dialog" aria-modal="true" aria-label="Connect repository">
@@ -654,7 +656,7 @@ function ConnectDrawer({ domains, onClose, onDone }: { domains: Domain[]; onClos
           {!setup && !error && <p className="flex items-center gap-2 text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />Reading Git integrations…</p>}
           <label className="block space-y-1 text-xs font-medium">Repository URL (https)
             <Input value={f.git_url} onChange={(e) => set({ git_url: e.target.value.trim(), name: f.name || nameFromUrl(e.target.value.trim()) })}
-                   placeholder="https://github.com/acme/analytics-dbt" className="font-mono" /></label>
+                   placeholder="https://dev.azure.com/org/project/_git/repo or https://github.com/org/repo" className="font-mono" /></label>
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="space-y-1 text-xs font-medium">Name<Input value={f.name} onChange={(e) => set({ name: e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, "_") })} className="font-mono" /></label>
             <label className="space-y-1 text-xs font-medium">Branch<Input value={f.branch} onChange={(e) => set({ branch: e.target.value })} className="font-mono" /></label>

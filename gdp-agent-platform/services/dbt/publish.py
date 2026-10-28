@@ -21,7 +21,16 @@ from services.dbt.workspace import safe_fqn
 from services.git import roundtrip
 
 SECRET_ALIAS = "github_token"
+PUBLISH_PROVIDERS = ("GITHUB", "AZURE_DEVOPS")
 NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*(\.[A-Za-z_][A-Za-z0-9_$]*){0,2}$")
+
+
+def _request(origin: str = "") -> github.Request:
+    tok = _token()
+    try:
+        return github.urllib_request(tok, origin=origin)
+    except TypeError:
+        return github.urllib_request(tok)
 
 
 def procedure_sql(database: str, services_import: str, eai: str, secret: str) -> str:
@@ -47,8 +56,8 @@ def setup_sql(database: str, eai: str, secret: str, create_secret: bool) -> list
     for value in (database, eai, secret):
         assert NAME.match(value or ""), f"unsafe identifier: {value}"
     statements = [
-        f"CREATE NETWORK RULE IF NOT EXISTS {database}.CORE.GITHUB_API_EGRESS MODE = EGRESS TYPE = HOST_PORT "
-        "VALUE_LIST = ('api.github.com')",
+        f"CREATE OR REPLACE NETWORK RULE {database}.CORE.GITHUB_API_EGRESS MODE = EGRESS TYPE = HOST_PORT "
+        "VALUE_LIST = ('api.github.com', 'dev.azure.com', 'ssh.dev.azure.com')",
     ]
     if create_secret:
         statements.append(f"CREATE OR REPLACE SECRET {secret} TYPE = GENERIC_STRING SECRET_STRING = '<github token>'")
@@ -86,12 +95,14 @@ def _plan(session, run_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
 
 def _record(session, run_id: str, generation_id: Optional[str], plan: Dict[str, Any], result: Dict[str, Any]) -> None:
     pr = result.get("pull_request") or {}
+    origin = plan.get("origin") or ""
+    provider = str(result.get("provider") or ("AZURE_DEVOPS" if github.is_azure_origin(origin) else "GITHUB"))
     insert_rows(session, "CORE.GIT_PUBLICATION",
                 ["PUBLICATION_ID", "RUN_ID", "GENERATION_ID", "PROVIDER", "ORIGIN", "BASE_BRANCH", "HEAD_BRANCH",
                  "COMMIT_SHA", "FILES_PUSHED", "PR_NUMBER", "PR_URL", "DBT_PROJECT", "STATUS", "DETAIL", "CREATED_BY"],
-                ["?", "?", "NULLIF(?, '')", "'GITHUB'", "?", "?", "?", "NULLIF(?, '')", "NULLIF(?, '')::NUMBER",
+                ["?", "?", "NULLIF(?, '')", "?", "?", "?", "?", "NULLIF(?, '')", "NULLIF(?, '')::NUMBER",
                  "NULLIF(?, '')::NUMBER", "NULLIF(?, '')", "NULLIF(?, '')", "?", "NULLIF(?, '')", "CURRENT_USER()"],
-                [[str(uuid.uuid4()), run_id, generation_id, plan.get("origin") or "", plan.get("base_branch") or "",
+                [[str(uuid.uuid4()), run_id, generation_id, provider, origin, plan.get("base_branch") or "",
                   plan.get("cut_branch") or "", result.get("commit_sha"), result.get("files_pushed"), pr.get("number"),
                   pr.get("url"), (result.get("dbt_project") or {}).get("dbt_project"), result.get("status") or "FAILED",
                   clip(result.get("detail") or (result.get("dbt_project") or {}).get("detail"), 4000)]])
@@ -128,11 +139,11 @@ def publish_case_patch(session, request: Dict[str, Any]) -> Dict[str, Any]:
     assert found[0]["TYPE"] == "DBT_PATCH" and found[0]["STATUS"] == "ACCEPTED", "only an accepted dbt patch is published"
     assert content.get("publishable") and content.get("new_content") and content.get("path"), "this patch cannot be published"
     repo = rows(session, "SELECT GIT_URL, BRANCH, PROVIDER FROM CORE.REPO WHERE REPO_ID = ? AND ENABLED", [content.get("repo_id")])
-    assert repo and str(repo[0]["PROVIDER"] or "").upper() == "GITHUB", "the patch's repository is not a connected GitHub repository"
+    assert repo and str(repo[0]["PROVIDER"] or "").upper() in PUBLISH_PROVIDERS, "the patch's repository is not a connected GitHub or Azure Repos repository"
     origin, base = repo[0]["GIT_URL"], str(repo[0]["BRANCH"] or "main")
     with tool_call(session, None, "publish_case_patch", {"case_id": case_id, "artifact_id": artifact_id, "head": head}) as call:
         try:
-            result = github.publish(github.urllib_request(_token()), origin, base, head, {content["path"]: content["new_content"]},
+            result = github.publish(_request(origin), origin, base, head, {content["path"]: content["new_content"]},
                                     title=clip(request.get("title") or f"Case fix {case_id[:8]}", 200),
                                     body=clip(request.get("body") or "", 6000),
                                     message=clip(request.get("title") or "Case fix", 200), draft=True)
@@ -159,7 +170,7 @@ def publish_model_branch(session, request: Dict[str, Any]) -> Dict[str, Any]:
     assert isinstance(files, dict) and files, "the model design has no rendered files"
     repo = rows(session, "SELECT GIT_URL, BRANCH, PROVIDER FROM CORE.REPO WHERE REPO_ID = ? AND ENABLED",
                 [str(request.get("repo_id") or "")])
-    assert repo and str(repo[0]["PROVIDER"] or "").upper() == "GITHUB", "the repository is not a connected GitHub repository"
+    assert repo and str(repo[0]["PROVIDER"] or "").upper() in PUBLISH_PROVIDERS, "the repository is not a connected GitHub or Azure Repos repository"
     origin = repo[0]["GIT_URL"]
     base = str(request.get("base") or repo[0]["BRANCH"] or "main")
     domain = found[0]["DOMAIN_NAME"]
@@ -168,7 +179,7 @@ def publish_model_branch(session, request: Dict[str, Any]) -> Dict[str, Any]:
                                         f"Modeling hub.\n\nFiles:\n" + "\n".join(f"- {p}" for p in sorted(files))), 6000)
     with tool_call(session, None, "publish_model_branch", {"design_id": design_id, "version": version, "head": head}) as call:
         try:
-            result = github.publish(github.urllib_request(_token()), origin, base, head, files, title=title, body=body,
+            result = github.publish(_request(origin), origin, base, head, files, title=title, body=body,
                                     message=title, draft=True)
             call.summary = f"{result['status']} {head}: PR {(result.get('pull_request') or {}).get('url') or 'none'}"
         except Exception as exc:
@@ -215,7 +226,7 @@ def publish_permanent_fix(session, request: Dict[str, Any]) -> Dict[str, Any]:
     title = clip(request.get("title") or fix.get("TITLE") or f"Permanent fix {fix_id[:8]}", 200)
     with tool_call(session, None, "publish_permanent_fix", {"fix_id": fix_id, "head": head}) as call:
         try:
-            result = github.publish(github.urllib_request(_token()), origin, base, head, content, title=title,
+            result = github.publish(_request(origin), origin, base, head, content, title=title,
                                     body=clip(request.get("body") or "", 6000), message=title, draft=True)
             call.summary = f"{result['status']} {head}: PR {(result.get('pull_request') or {}).get('url') or 'none'}"
         except Exception as exc:
@@ -241,7 +252,7 @@ def publish_permanent_fix(session, request: Dict[str, Any]) -> Dict[str, Any]:
 
 def _repo(session, repo_id: str) -> Dict[str, Any]:
     repo = rows(session, "SELECT GIT_URL, BRANCH, PROVIDER FROM CORE.REPO WHERE REPO_ID = ? AND ENABLED", [repo_id])
-    assert repo and str(repo[0]["PROVIDER"] or "").upper() == "GITHUB", "the repository is not a connected GitHub repository"
+    assert repo and str(repo[0]["PROVIDER"] or "").upper() in PUBLISH_PROVIDERS, "the repository is not a connected GitHub or Azure Repos repository"
     return repo[0]
 
 
@@ -276,7 +287,7 @@ def publish_domain_model(session, request: Dict[str, Any]) -> Dict[str, Any]:
                                         f"(model {model_id}).\n\nFiles:\n" + "\n".join(f"- {p}" for p in sorted(files))), 6000)
     with tool_call(session, None, "publish_domain_model", {"model_id": model_id, "version": version, "head": head}) as call:
         try:
-            result = github.publish(github.urllib_request(_token()), origin, base_branch, head, files, title=title, body=body,
+            result = github.publish(_request(origin), origin, base_branch, head, files, title=title, body=body,
                                     message=title, draft=False)
             call.summary = f"{result['status']} {head}: PR {(result.get('pull_request') or {}).get('url') or 'none'}"
         except Exception as exc:
@@ -310,11 +321,10 @@ def sync_model_prs(session, request: Dict[str, Any]) -> Dict[str, Any]:
         where += " AND (D.PR_SYNCED_AT IS NULL OR D.PR_SYNCED_AT < DATEADD('second', -60, CURRENT_TIMESTAMP()))"
     found = rows(session, f"""SELECT D.MODEL_ID, D.VERSION, D.PR_NUMBER, R.GIT_URL FROM CORE.MODEL_DESIGNS D
                                JOIN CORE.REPO R ON R.REPO_ID = D.REPO_ID WHERE {where} LIMIT 200""", params)
-    request_fn = github.urllib_request(_token()) if found else None
     out: Dict[str, Any] = {"checked": 0, "merged": [], "closed": [], "errors": []}
     for r in found:
         try:
-            pr = github.pull_status(request_fn, r["GIT_URL"], int(r["PR_NUMBER"]))
+            pr = github.pull_status(_request(r["GIT_URL"]), r["GIT_URL"], int(r["PR_NUMBER"]))
         except Exception as exc:
             out["errors"].append({"model_id": r["MODEL_ID"], "version": int(r["VERSION"]), "error": clip(exc, 300)})
             continue
@@ -357,7 +367,7 @@ def publish_dq_suite(session, request: Dict[str, Any]) -> Dict[str, Any]:
                 + "\n".join(f"- {p}" for p in sorted(files)), 6000)
     with tool_call(session, None, "publish_dq_suite", {"suite_id": suite_id, "version": version, "head": head}) as call:
         try:
-            result = github.publish(github.urllib_request(_token()), origin, base_branch, head, files, title=title,
+            result = github.publish(_request(origin), origin, base_branch, head, files, title=title,
                                     body=body, message=title, draft=False)
             call.summary = f"{result['status']} {head}: PR {(result.get('pull_request') or {}).get('url') or 'none'}"
         except Exception as exc:
@@ -393,11 +403,10 @@ def sync_dq_prs(session, request: Dict[str, Any]) -> Dict[str, Any]:
                                    JOIN CORE.REPO R ON R.REPO_ID = V.REPO_ID WHERE {where} LIMIT 200""", params)
     except Exception as exc:  # before V040
         return {"checked": 0, "merged": [], "closed": [], "errors": [{"error": clip(exc, 300)}]}
-    request_fn = github.urllib_request(_token()) if found else None
     out: Dict[str, Any] = {"checked": 0, "merged": [], "closed": [], "errors": []}
     for r in found:
         try:
-            pr = github.pull_status(request_fn, r["GIT_URL"], int(r["PR_NUMBER"]))
+            pr = github.pull_status(_request(r["GIT_URL"]), r["GIT_URL"], int(r["PR_NUMBER"]))
         except Exception as exc:
             out["errors"].append({"suite_id": r["SUITE_ID"], "version": int(r["VERSION"]), "error": clip(exc, 300)})
             continue
@@ -437,7 +446,7 @@ def publish_qa_pack(session, request: Dict[str, Any]) -> Dict[str, Any]:
     body = clip(f"QA pack {pack['name']} v{version}, approved in the QA Store.\n\nFile: {path}", 6000)
     with tool_call(session, None, "publish_qa_pack", {"pack_id": pack_id, "version": version, "head": head}) as call:
         try:
-            result = github.publish(github.urllib_request(_token()), origin, base_branch, head, {path: text}, title=title,
+            result = github.publish(_request(origin), origin, base_branch, head, {path: text}, title=title,
                                     body=body, message=title, draft=False)
             call.summary = f"{result['status']} {head}: PR {(result.get('pull_request') or {}).get('url') or 'none'}"
         except Exception as exc:
@@ -472,11 +481,10 @@ def sync_qa_prs(session, request: Dict[str, Any]) -> Dict[str, Any]:
                                    JOIN CORE.REPO R ON R.REPO_ID = P.REPO_ID WHERE {where} LIMIT 200""", params)
     except Exception as exc:  # before V042
         return {"checked": 0, "merged": [], "closed": [], "errors": [{"error": clip(exc, 300)}]}
-    request_fn = github.urllib_request(_token()) if found else None
     out: Dict[str, Any] = {"checked": 0, "merged": [], "closed": [], "errors": []}
     for r in found:
         try:
-            pr = github.pull_status(request_fn, r["GIT_URL"], int(r["PR_NUMBER"]))
+            pr = github.pull_status(_request(r["GIT_URL"]), r["GIT_URL"], int(r["PR_NUMBER"]))
         except Exception as exc:
             out["errors"].append({"pack_id": r["PACK_ID"], "version": int(r["VERSION"]), "error": clip(exc, 300)})
             continue
@@ -533,7 +541,7 @@ def publish_sttm(session, request: Dict[str, Any]) -> Dict[str, Any]:
                 + "\n".join(f"- {p}" for p in sorted(files)), 6000)
     with tool_call(session, None, "publish_sttm", {"catalog_id": catalog_id, "version": version, "head": head}) as call:
         try:
-            result = github.publish(github.urllib_request(_token()), origin, base_branch, head, files, title=title,
+            result = github.publish(_request(origin), origin, base_branch, head, files, title=title,
                                     body=body, message=title, draft=False)
             call.summary = f"{result['status']} {head}: PR {(result.get('pull_request') or {}).get('url') or 'none'}"
         except Exception as exc:
@@ -569,7 +577,7 @@ def publish_table_model(session, request: Dict[str, Any]) -> Dict[str, Any]:
                 f"Model Store (table model {model_id}).\n\nFiles:\n" + "\n".join(f"- {p}" for p in sorted(files)), 6000)
     with tool_call(session, None, "publish_table_model", {"table_model_id": model_id, "version": version, "head": head}) as call:
         try:
-            result = github.publish(github.urllib_request(_token()), origin, base_branch, head, files, title=title,
+            result = github.publish(_request(origin), origin, base_branch, head, files, title=title,
                                     body=body, message=title, draft=False)
             call.summary = f"{result['status']} {head}: PR {(result.get('pull_request') or {}).get('url') or 'none'}"
         except Exception as exc:
@@ -594,12 +602,8 @@ def sync_git_prs(session, request: Dict[str, Any]) -> Dict[str, Any]:
     """Every governed pull request (the scheduled task and the Source control page): with V043 one pass over
     CORE.GIT_PR, which also updates each asset's own version table; before it, each asset's own sync."""
     if roundtrip.deployed(session):
-        request_fn: Dict[str, Any] = {}
-
         def status(git_url: str, number: int) -> Dict[str, Any]:
-            if "fn" not in request_fn:
-                request_fn["fn"] = github.urllib_request(_token())
-            return github.pull_status(request_fn["fn"], git_url, number)
+            return github.pull_status(_request(git_url), git_url, number)
 
         return {"source_control": True, **roundtrip.sync(session, request, status)}
     return {"models": sync_model_prs(session, request), "dq_suites": sync_dq_prs(session, request),
@@ -650,7 +654,8 @@ def publish_dbt_pr(session, run_id: str, payload_json: str = "{}") -> Dict[str, 
     plan = _plan(session, run_id, payload) if run_id else dict(payload)
     if payload.get("check_only"):
         try:
-            return {"status": "OK", **github.preflight(github.urllib_request(_token()), plan.get("origin") or "")}
+            origin = plan.get("origin") or ""
+            return {"status": "OK", **github.preflight(_request(origin), origin)}
         except Exception as exc:
             return {**github.explain(exc, plan.get("origin") or ""), "check": True}
     run = rows(session, "SELECT * FROM CORE.WORKFLOW_RUN WHERE RUN_ID = ?", [run_id])
@@ -669,9 +674,10 @@ def publish_dbt_pr(session, run_id: str, payload_json: str = "{}") -> Dict[str, 
                 [generation_id]) if r["CONTENT"] is not None}
             name = run[0]["RUN_NAME"] or run_id
             version = gen[0]["GENERATION_VERSION"]
+            origin = plan.get("origin") or ""
             result = github.publish(
-                github.urllib_request(_token()),
-                plan.get("origin") or "", plan.get("base_branch") or "main", plan.get("cut_branch") or "",
+                _request(origin),
+                origin, plan.get("base_branch") or "main", plan.get("cut_branch") or "",
                 files,
                 title=plan.get("title") or fill(conv["pr_title"], name=name, version=version),
                 body=github.pr_body(name, run_id, sorted(files), gen[0]["STTM_ID"]),
@@ -757,10 +763,11 @@ def _publish_children(session, run_id: str, payload: Dict[str, Any], merge_files
     tables = ", ".join(str(c["MODEL_ENTITY"]) for c in children)
     with tool_call(session, run_id, tool, {"cut_branch": plan.get("cut_branch"), "tables": tables}) as call:
         try:
-            assert plan.get("origin") or plan.get("git_repository"), "the table runs were generated without a repository"
+            origin = plan.get("origin") or ""
+            assert origin or plan.get("git_repository"), "the table runs were generated without a repository"
             result = github.publish(
-                github.urllib_request(_token()),
-                plan.get("origin") or "", plan.get("base_branch") or "main", plan["cut_branch"], merged["files"],
+                _request(origin),
+                origin, plan.get("base_branch") or "main", plan["cut_branch"], merged["files"],
                 title=plan.get("title") or f"{fill(conv['pr_title'], name=name, version=len(children))}: {title_suffix}",
                 body=github.pr_body(name, run_id, sorted(merged["files"]), None)
                      + f"\n\n{body_label}: {tables}."

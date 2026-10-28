@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Bot, CheckCircle2, CircleDashed, FileCode2, Hand, ShieldAlert, ShieldCheck, Wrench, X } from "lucide-react";
+import { ArrowLeft, Bot, CheckCircle2, CircleDashed, FileCode2, Hand, ShieldAlert, ShieldCheck, Wrench, X } from "lucide-react";
 import { stateLabel } from "@/lib/run-labels";
 import { labelFor, pipelineOf } from "@/lib/stages";
 import type { StageStatusValue } from "@/lib/types";
@@ -11,6 +11,7 @@ import { boardView, leafRuns, pastStage, resolveBoardRun, runNeedsMe, stageOfRun
 import { BoardList, BoardTabs, StageFilterBar, WorkflowGroupCard, WorkflowJourneyBar, groupRunsByWorkflow } from "@/components/os/stage-board";
 import { HomeSearch } from "@/components/os/home-search";
 import { BuildAllReady, BuildEndToEnd } from "@/components/os/build-run";
+import { DeleteRunButton } from "@/components/os/request-ui";
 import { actMode } from "@/lib/os/access";
 import { Action } from "@/components/os/action";
 import { currentStep, gateHref, lifecycleOfRun, osHref } from "@/lib/os/lifecycle";
@@ -56,9 +57,14 @@ export default async function BuildBoard({ searchParams }: { searchParams: Param
   const fallback = lists.action[0] ?? lists.active[0]
     ?? defaultRun(leaves, ["DBT_REVIEW", "VALIDATION_FAILED", "VALIDATION_PASSED", "DBT_GENERATING", "DBT_PENDING", "DBT_APPROVED"]) ?? null;
   const run = resolveBoardRun(live, searchParams.run, access, "build") ?? (searchParams.view === "selected" ? fallback : null) ?? null;
-  const view = boardView(searchParams.view ?? (searchParams.run && run ? "selected" : undefined), !!run, lists.action.length);
-  const rows = view === "selected" ? [] : lists[view];
-  const grouped = groupRunsByWorkflow(rows, live, (r) => runNeedsMe(r, access));
+  const mine = (r: (typeof live)[number]) => runNeedsMe(r, access);
+  const groupedLists = {
+    action: groupRunsByWorkflow(lists.action, live, mine),
+    active: groupRunsByWorkflow(lists.active, live, mine),
+    completed: groupRunsByWorkflow(lists.completed, live, mine),
+  };
+  const view = boardView(searchParams.view ?? (searchParams.run && run ? "selected" : undefined), !!run, groupedLists.action.length);
+  const grouped = view === "selected" ? [] : groupedLists[view];
   const select = (id: string) => `/os/build?${new URLSearchParams({ view: "selected", run: id })}`;
 
   const domainCounts = new Map<string, number>();
@@ -93,7 +99,7 @@ export default async function BuildBoard({ searchParams }: { searchParams: Param
       </div>
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <BoardTabs base="/os/build" view={view} selection={run ? ["run", run.run_id] : null} fallback={fallback ? ["run", fallback.run_id] : null}
-                   counts={{ action: lists.action.length, active: lists.active.length, completed: lists.completed.length }} />
+                   counts={{ action: groupedLists.action.length, active: groupedLists.active.length, completed: groupedLists.completed.length }} />
         {view !== "selected" && (
           <>
             <span className="mx-1 hidden h-5 w-px bg-[var(--os-line)] sm:block" aria-hidden />
@@ -207,10 +213,12 @@ async function Workbench({ runId, access }: { runId: string; access: OsAccess })
         title={<>{run.run.domain_name ?? "No domain"}{table && <span className="os-muted"> · </span>}{table}<span className="os-muted text-[18px] font-bold"> · {pipeline === "GOLD" ? "Gold" : "Silver"} build</span></>}
         subtitle="Deterministic tools, specialised agents, independent validation and the delivery handoff, in one workspace."
         actions={<>
+          <Btn href="/os/build?view=active"><ArrowLeft className="h-3.5 w-3.5" /> All runs</Btn>
           {readyTableRuns.length > 1 && pipeline !== "GOLD" && actMode(access, "RUN.OPERATE") === "do" && (
             <BuildAllReady runIds={readyTableRuns.map((t) => t.run_id)} previewing={!!access.preview} />
           )}
           {primary}
+          <DeleteRunButton runIds={[runId]} redirectTo="/os/build?view=active" previewing={!!access.preview} />
         </>}
         meta={<>
           <Tag tone="blue" title={runId}>Run {runId.slice(0, 8)}</Tag>

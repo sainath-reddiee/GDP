@@ -327,8 +327,8 @@ def _repo(db: Any, repo_id: Optional[str]) -> Dict[str, Any]:
                          WHERE REPO_ID = %s""", (repo_id,)) if repo_id else []
     if not found or not found[0].get("enabled"):
         raise FixError("The repository of this patch is no longer connected.", 409)
-    if str(found[0].get("provider") or "").upper() != "GITHUB":
-        raise FixError(f"{found[0].get('name')} is not on GitHub; pull requests from the platform are GitHub only.", 409)
+    if str(found[0].get("provider") or "").upper() not in ("GITHUB", "AZURE_DEVOPS"):
+        raise FixError(f"{found[0].get('name')} is not on GitHub or Azure Repos; pull requests from the platform are GitHub and Azure Repos only.", 409)
     return found[0]
 
 

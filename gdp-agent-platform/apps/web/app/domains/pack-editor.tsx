@@ -29,6 +29,7 @@ export function PackEditor({ domains, embedded = false }: { domains: { domain_id
   const [contract, setContract] = useState("");
   const [standard, setStandard] = useState<"GDP" | "GENERIC">("GENERIC");
   const [json, setJson] = useState("");
+  const [refineInput, setRefineInput] = useState("");
   const [problems, setProblems] = useState<string[]>([]);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -58,7 +59,19 @@ export function PackEditor({ domains, embedded = false }: { domains: { domain_id
     setJson(JSON.stringify(r.data.pack, null, 2));
     setProblems(r.data.problems);
     setMode("json");
-    setNotice("Draft ready. Review every table, column and rule below before importing; the AI may have missed or misread parts of the document.");
+    setNotice("Draft ready. Review every table, column and rule below before importing, or use 'Evolve with AI' to refine it.");
+  });
+
+  const evolve = () => start(async () => {
+    if (!refineInput.trim()) return;
+    setError(""); setNotice(""); setProblems([]);
+    const combined = `CURRENT DOMAIN PACK JSON:\n${json || EXAMPLE}\n\nHUMAN EVOLUTION INSTRUCTIONS (apply these changes while keeping all other tables, columns, and knowledge items intact):\n${refineInput.trim()}`;
+    const r = await draftPack(combined, standard);
+    if (!r.ok) { setError(r.error); return; }
+    setJson(JSON.stringify(r.data.pack, null, 2));
+    setProblems(r.data.problems);
+    setRefineInput("");
+    setNotice("Pack evolved with AI from your instructions. Review the updated tables, columns and knowledge below before importing.");
   });
 
   const load = (domainId: string) => start(async () => {
@@ -163,6 +176,21 @@ export function PackEditor({ domains, embedded = false }: { domains: { domain_id
               <Upload className="h-3.5 w-3.5" /> Load a .json file
               <input type="file" accept=".json" className="hidden" onChange={(e) => upload(e.target.files?.[0])} />
             </label>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-muted/20 p-2.5" data-testid="pack-evolve-bar">
+            <Sparkles className="h-4 w-4 shrink-0 text-primary" />
+            <input
+              type="text"
+              value={refineInput}
+              onChange={(e) => setRefineInput(e.target.value)}
+              placeholder="Give human instructions to evolve this domain model & knowledge (e.g. Add a LEASE_FACT table, mark EMAIL as PII, add a business rule…)"
+              aria-label="Evolve pack instructions"
+              className="h-8 min-w-[240px] flex-1 rounded-md border bg-background px-2.5 text-xs"
+            />
+            <Button size="sm" variant="outline" disabled={pending || refineInput.trim().length < 3} onClick={evolve} data-testid="pack-evolve-btn">
+              {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+              Evolve with AI
+            </Button>
           </div>
           <textarea value={json} onChange={(e) => setJson(e.target.value)} rows={18} spellCheck={false}
                     aria-label="Pack JSON" className="w-full rounded-md border bg-card p-3 font-mono text-xs" />

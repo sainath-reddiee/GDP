@@ -45,7 +45,7 @@ export const PERSONAS: Persona[] = [
   { id: "curator", label: "Knowledge & Skills Curator", short: "Curator", home: "/os/knowledge",
     responsibility: "Verify Enterprise Memory and release reviewed skill versions",
     states: [] },
-  { id: "super", label: "Super admin", short: "Super admin", home: "/os/people",
+  { id: "super", label: "Platform Admin", short: "Platform Admin", home: "/os/people",
     responsibility: "Everything, and the only one who sees Admin and governance: people, personas, settings, audit",
     states: ["MAPPING_REVIEW", "STTM_REVIEW", "SODA_REVIEW", "DBT_REVIEW", "VALIDATION_FAILED", "FAILED"] },
   { id: "viewer", label: "Viewer", short: "Viewer", home: "/os",

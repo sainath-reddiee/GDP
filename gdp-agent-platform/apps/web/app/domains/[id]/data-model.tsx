@@ -2,10 +2,11 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowRight, BookOpen, Check, FileInput, GitBranch, KeyRound, Loader2, Network, TableProperties, Upload, X } from "lucide-react";
+import { ArrowRight, BookOpen, Check, FileInput, GitBranch, KeyRound, Loader2, Network, Sparkles, TableProperties, Upload, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAccess } from "@/components/access";
 import { ErCanvas } from "@/components/hub/er-canvas";
+import { AiEvolutionStudio } from "@/components/modeling/ai-evolution-studio";
 import { domainDataModel, domainExamples, uploadExamples, type DomainDataModel, type DomainExamples, type TableExamples } from "../actions";
 
 const MARK = { added: "text-emerald-600", changed: "text-amber-600", removed: "text-red-600 line-through" } as const;
@@ -94,9 +95,13 @@ export function DataModel({ domainId, domainName }: { domainId: string; domainNa
   const [error, setError] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
   const [area, setArea] = useState("");
+  const [showAiStudio, setShowAiStudio] = useState(false);
   const [examples, setExamples] = useState<DomainExamples["tables"]>({});
   const loadExamples = () => void domainExamples(domainId).then((r) => { if (r.ok) setExamples(r.data.tables); });
   useEffect(loadExamples, [domainId]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const reloadModel = (targetView: "approved" | "draft" = view) => {
+    void domainDataModel(domainId, targetView).then((r) => { if (r.ok) setData(r.data); else setError(r.error); });
+  };
   useEffect(() => {
     let live = true;
     setData(null); setError("");
@@ -133,16 +138,38 @@ export function DataModel({ domainId, domainName }: { domainId: string; domainNa
           </div>
         )}
         <div className="flex flex-wrap gap-2">
+          {mayImport && m && (
+            <button
+              type="button"
+              onClick={() => setShowAiStudio((v) => !v)}
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-primary/40 bg-primary/10 px-2.5 text-xs font-medium text-primary hover:bg-primary/15"
+              data-testid="evolve-domain-model-ai"
+            >
+              <Sparkles className="h-3.5 w-3.5" />{showAiStudio ? "Hide AI Studio" : "Evolve with AI"}
+            </button>
+          )}
           {mayImport && (
             <Link href={`${workbench}?import=file`} className="inline-flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium hover:bg-muted" data-testid="import-model-file">
               <FileInput className="h-3.5 w-3.5" />Import a model file
             </Link>
           )}
-          <Link href={d ? `${workbench}?version=${d.version}` : workbench} className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary px-2.5 text-xs font-medium text-primary-foreground">
+          <Link href={m?.approved_version ? `${workbench}?version=${m.approved_version}` : workbench} className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary px-2.5 text-xs font-medium text-primary-foreground">
             Model Workbench<ArrowRight className="h-3.5 w-3.5" />
           </Link>
         </div>
       </div>
+
+      {mayImport && m && showAiStudio && (
+        <AiEvolutionStudio
+          modelId={m.model_id}
+          domainName={domainName}
+          defaultExpanded={true}
+          onWorkflowApplied={() => {
+            setView("draft");
+            reloadModel("draft");
+          }}
+        />
+      )}
 
       {!m || !d ? (
         <div className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground">

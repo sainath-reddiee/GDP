@@ -539,9 +539,9 @@ def dbt_patch(db: Any, sess: Any, fix: Dict[str, Any], case: Dict[str, Any], ctx
     if redact(new) != new:
         return unavailable("the proposed file contains text that looks like a secret or personal data")
     content.update({"new_content": new, "base_sha256": sha256(current), "summary": _clean((output or {}).get("summary"), 400),
-                    "publishable": str(repo.get("provider") or "").upper() == "GITHUB"})
+                    "publishable": str(repo.get("provider") or "").upper() in ("GITHUB", "AZURE_DEVOPS")})
     if not content["publishable"]:
-        content["unavailable_reason"] = "the repository is not on GitHub; apply the patch by hand"
+        content["unavailable_reason"] = "the repository is not on GitHub or Azure Repos; apply the patch by hand"
     return content, unified_diff(path, current, new), costs
 
 

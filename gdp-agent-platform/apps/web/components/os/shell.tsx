@@ -127,7 +127,7 @@ export function OsShell({ user, sections, screens, personas, persona, preview, s
   );
 
   return (
-    <div className="ados">
+    <div className="ados" data-persona={preview?.current ? "preview" : persona}>
       <header className="sticky top-0 z-40 flex h-[58px] items-center justify-between gap-3 border-b border-[var(--os-line)] bg-[var(--os-surface)] px-3 sm:px-5">
         <div className="flex min-w-0 items-center gap-2.5">
           <span className="lg:hidden">

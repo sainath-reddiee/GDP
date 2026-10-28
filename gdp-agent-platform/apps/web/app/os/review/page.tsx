@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ArrowRight, CheckCircle2, CircleDashed, ClipboardList, Flag, Hand, ShieldAlert, ShieldCheck, Sparkles, TriangleAlert } from "lucide-react";
+import { ArrowLeft, ArrowRight, CheckCircle2, CircleDashed, ClipboardList, Flag, Hand, ShieldAlert, ShieldCheck, Sparkles, TriangleAlert } from "lucide-react";
 import { GATES, stateLabel } from "@/lib/run-labels";
 import {
   checkPassed, checkSkipped, defaultRun, findingsOf, gatePassed, gateText, loadRunBundle, loadRuns, runOptions, scoreOf, tableOf,
@@ -16,6 +16,7 @@ import { BoardList, BoardTabs, StageFilterBar, WorkflowGroupCard, WorkflowJourne
 import { HomeSearch } from "@/components/os/home-search";
 import { RunPicker } from "@/components/os/run-picker";
 import { GateDecision, ReviewStandards, ValidateAgain } from "@/components/os/decide";
+import { DeleteRunButton } from "@/components/os/request-ui";
 import { cn } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -98,8 +99,13 @@ export default async function ReviewGate({ searchParams }: { searchParams: Param
   const view: BoardView = (searchParams.view === "action" || searchParams.view === "active" || searchParams.view === "completed")
     ? searchParams.view
     : b ? "selected" : "active";
-  const boardRows = view === "selected" ? [] : lists[view];
-  const grouped = groupRunsByWorkflow(boardRows, live, (r) => isGatedForMe(r) || runNeedsMe(r, access));
+  const mine = (r: (typeof leaves)[number]) => isGatedForMe(r) || runNeedsMe(r, access);
+  const groupedLists = {
+    action: groupRunsByWorkflow(lists.action, live, mine),
+    active: groupRunsByWorkflow(lists.active, live, mine),
+    completed: groupRunsByWorkflow(lists.completed, live, mine),
+  };
+  const grouped = view === "selected" ? [] : groupedLists[view];
   const select = (id: string) => `/os/review?${new URLSearchParams({ view: "selected", run: id })}`;
 
   const domainCounts = new Map<string, number>();
@@ -155,7 +161,7 @@ export default async function ReviewGate({ searchParams }: { searchParams: Param
         <div className="mb-4 flex flex-wrap items-center gap-2">
           <BoardTabs base="/os/review" view={view} selection={runId ? ["run", runId] : null}
                      fallback={lists.action[0] ? ["run", lists.action[0].run_id] : lists.active[0] ? ["run", lists.active[0].run_id] : null}
-                     counts={{ action: lists.action.length, active: lists.active.length, completed: lists.completed.length }} />
+                     counts={{ action: groupedLists.action.length, active: groupedLists.active.length, completed: groupedLists.completed.length }} />
           <span className="mx-1 hidden h-5 w-px bg-[var(--os-line)] sm:block" aria-hidden />
           <StageFilterBar
             domains={domainOptions}
@@ -216,7 +222,7 @@ export default async function ReviewGate({ searchParams }: { searchParams: Param
       <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
         <BoardTabs base="/os/review" view={view} selection={["run", run.run_id]}
                    fallback={lists.action[0] ? ["run", lists.action[0].run_id] : ["run", run.run_id]}
-                   counts={{ action: lists.action.length, active: lists.active.length, completed: lists.completed.length }} />
+                   counts={{ action: groupedLists.action.length, active: groupedLists.active.length, completed: groupedLists.completed.length }} />
         <HomeSearch placeholder="Search workflows, tables or domains" />
       </div>
 
@@ -225,6 +231,7 @@ export default async function ReviewGate({ searchParams }: { searchParams: Param
         title={<>Validation gate · <span className={failed ? "text-[var(--os-red-ink)]" : passed ? "text-[var(--os-emerald)]" : "os-muted"}>{failed ? "Needs attention" : passed ? "Passed" : "Not validated"}</span></>}
         subtitle={<>{title}. Independent reviewer and standards agents check generated dbt code, mapping consistency, data quality and naming before any pull request.</>}
         actions={<>
+          <Btn href="/os/review?view=active"><ArrowLeft className="h-3.5 w-3.5" /> All runs</Btn>
           <RunPicker base="/os/review" current={run.run_id} runs={runOptions(leaves)} />
           <Btn href={`/os/build?view=selected&run=${run.run_id}`}>Build workbench</Btn>
           {passed && <Btn href={`/os/release?view=selected&run=${run.run_id}`} variant="mint">Continue to Publish <ArrowRight className="h-3.5 w-3.5" /></Btn>}
@@ -232,6 +239,7 @@ export default async function ReviewGate({ searchParams }: { searchParams: Param
             ? <Action access={access} id="editSkill" label="Improve skill and regenerate" href={skillHref} variant="primary" icon={<Sparkles className="h-3.5 w-3.5" />} />
             : run.current_state === "DBT_REVIEW" ? <Action access={access} id="reviewCode" href={`/os/build/runs/${run.run_id}/review`} variant="primary" />
             : gate ? <Action access={access} id="decideGate" privilege={gate.privilege} label={`Open ${gate.name.toLowerCase()}`} href={gateHref(run.run_id, gate.slug)} variant="primary" /> : null}
+          <DeleteRunButton runIds={[run.run_id]} redirectTo="/os/review?view=active" previewing={!!access.preview} />
         </>}
       />
 

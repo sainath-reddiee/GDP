@@ -282,8 +282,8 @@ def publish(design_id: str, body: PublishIn, db: Db = Depends(current_db)):
     repo = next((r for r in _dbt_repos(db, None) if r["repo_id"] == body.repo_id), None)
     if not repo:
         raise HTTPException(409, "That repository is not connected for dbt. Connect one in Admin, Integrations.")
-    if (repo.get("provider") or "") != "GITHUB":
-        raise HTTPException(409, f"{repo['name']} is not on GitHub; publishing models opens GitHub pull requests only.")
+    if (repo.get("provider") or "") not in ("GITHUB", "AZURE_DEVOPS"):
+        raise HTTPException(409, f"{repo['name']} is not on GitHub or Azure Repos; publishing models opens GitHub and Azure Repos pull requests only.")
     if not _github_publisher_ready(db):
         return {"status": "NOT_CONFIGURED",
                 "detail": "GitHub publishing is not set up. An admin can set it up in the GitHub publishing card."}

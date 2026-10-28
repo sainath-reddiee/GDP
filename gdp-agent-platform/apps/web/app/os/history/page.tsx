@@ -8,6 +8,7 @@ import { loadDomains, loadRuns } from "@/lib/os/data";
 import { guard } from "@/lib/os/session";
 import { canSee } from "@/lib/os/access";
 import { AutoForm } from "@/components/os/client";
+import { DeleteRunButton } from "@/components/os/request-ui";
 import { Btn, Card, Empty, Kpi, PageHeader, SourceError, Tag, ago, pretty, type Tone } from "@/components/os/ui";
 
 export const dynamic = "force-dynamic";
@@ -100,7 +101,7 @@ export default async function RunHistoryPage({ searchParams }: { searchParams: {
         {list.length ? (
           <div className="overflow-x-auto" data-testid="run-history">
             <table className="os-table">
-              <thead><tr><th>Run</th><th>Domain</th><th>Pipeline</th><th>Outcome</th><th>Validation</th><th>Gates decided</th><th>Last activity</th></tr></thead>
+              <thead><tr><th>Run</th><th>Domain</th><th>Pipeline</th><th>Outcome</th><th>Validation</th><th>Gates decided</th><th>Last activity</th>{openRun && <th className="text-right">Actions</th>}</tr></thead>
               <tbody>
                 {list.map((r) => {
                   const h = history.data[r.run_id];
@@ -122,6 +123,11 @@ export default async function RunHistoryPage({ searchParams }: { searchParams: {
                         {h && h.decisions.length > 3 && <div className="os-faint">+{h.decisions.length - 3} earlier</div>}
                       </td>
                       <td className="os-faint whitespace-nowrap text-[11px]">{ago(r.updated_at ?? r.created_at)}</td>
+                      {openRun && (
+                        <td className="text-right">
+                          <DeleteRunButton runIds={[r.run_id]} iconOnly previewing={!!access.preview} />
+                        </td>
+                      )}
                     </tr>
                   );
                 })}

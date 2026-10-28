@@ -154,6 +154,40 @@ def suggest(model_id: str, body: SuggestIn, db: Db = Depends(current_db)):
     return _call(db, _svc().suggest, model_id, body.spec, body.refresh)
 
 
+class TableEvolveIn(BaseModel):
+    spec: dict
+    instructions: str = Field(min_length=3, max_length=16000)
+    domain: Optional[str] = None
+    table_type: Optional[str] = "STANDARD"
+
+
+@router.post("/api/hub/table-models/{model_id}/evolve")
+def evolve_table(model_id: str, body: TableEvolveIn, db: Db = Depends(current_db)):
+    """Human-in-the-loop AI evolution of a single table model specification."""
+    from app.main import _snowflake_error, invoke_source
+    from services.modeling import spec_v2
+    from services.modeling.ai_evolve import evolve_domain_model
+
+    svc = _svc()
+    base = svc.single(body.spec, model_id, domain=body.domain or "", table_type=body.table_type or "STANDARD")
+    try:
+        res = invoke_source(db, evolve_domain_model, base, body.instructions, model_id, [])
+    except AssertionError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+    evolved = svc.single(res["spec"], model_id, domain=body.domain or "", table_type=body.table_type or "STANDARD")
+    return {
+        "spec": evolved,
+        "issues": svc.validate(evolved),
+        "summary": spec_v2.summary(evolved),
+        "rationale": res["rationale"],
+        "counts": res["counts"],
+        **svc.render(evolved),
+    }
+
+
+
 @router.get("/api/hub/table-models/{model_id}/diff")
 def diff(model_id: str, to: int, from_version: Optional[int] = Query(default=None, alias="from", ge=1),
          db: Db = Depends(current_db)):
@@ -216,8 +250,8 @@ def publish(model_id: str, version: int, body: PublishIn, db: Db = Depends(curre
     if errors:
         raise HTTPException(409, f"Fix {len(errors)} problem(s) before publishing: {errors[0]['message']}")
     repo = next((r for r in _dbt_repos(db, None) if r["repo_id"] == body.repo_id), None)
-    if not repo or (repo.get("provider") or "") != "GITHUB":
-        raise HTTPException(409, "Choose a GitHub repository connected in Admin, Integrations.")
+    if not repo or (repo.get("provider") or "") not in ("GITHUB", "AZURE_DEVOPS"):
+        raise HTTPException(409, "Choose a GitHub or Azure Repos repository connected in Admin, Integrations.")
     if not _github_publisher_ready(db):
         return {"status": "NOT_CONFIGURED", "detail": "GitHub publishing is not set up. An admin can set it up in the GitHub publishing card."}
     slug = re.sub(r"[^a-z0-9]+", "-", out["model"]["table_name"].lower()).strip("-") or "table"

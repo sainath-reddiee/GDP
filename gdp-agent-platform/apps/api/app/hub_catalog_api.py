@@ -519,8 +519,8 @@ def publish_sttm(catalog_id: str, body: SttmPublishIn, db: Db = Depends(current_
     if str(entry.get("status") or "").upper() != "APPROVED":
         raise HTTPException(409, "Only an approved mapping version is published; approve it first.")
     repo = next((r for r in _dbt_repos(db, None) if r["repo_id"] == body.repo_id), None)
-    if not repo or (repo.get("provider") or "") != "GITHUB":
-        raise HTTPException(409, "Choose a GitHub repository connected in Admin, Integrations.")
+    if not repo or (repo.get("provider") or "") not in ("GITHUB", "AZURE_DEVOPS"):
+        raise HTTPException(409, "Choose a GitHub or Azure Repos repository connected in Admin, Integrations.")
     if not _github_publisher_ready(db):
         return {"status": "NOT_CONFIGURED", "detail": "GitHub publishing is not set up. An admin can set it up in the GitHub publishing card."}
     slug = re.sub(r"[^a-z0-9]+", "-", str(entry["target_entity"]).split(".")[-1].lower()).strip("-") or "mapping"

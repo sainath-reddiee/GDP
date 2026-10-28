@@ -810,7 +810,7 @@ those systems. A low match rate means many gold rows will carry <code>-1</code>.
 <div class="tablebox"><table>
 <tr><th>Variable</th><th>Purpose</th><th>Default</th></tr>
 <tr><td><code>AIP_AUTH</code></td><td><code>dev</code> (shared SSO session) or <code>pat</code> (per-user tokens)</td><td>dev</td></tr>
-<tr><td><code>AIP_SNOWFLAKE_CONNECTION</code></td><td>Connection name in connections.toml (dev)</td><td>anblicksorg-anblicksorg_aws</td></tr>
+<tr><td><code>AIP_SNOWFLAKE_CONNECTION</code></td><td>Connection name in connections.toml (dev)</td><td>gdp-dev</td></tr>
 <tr><td><code>AIP_DATABASE</code>, <code>AIP_WAREHOUSE</code></td><td>Platform database and warehouse</td><td>DEV_AI_PLATFORM, DBT_WH</td></tr>
 <tr><td><code>AIP_ACCOUNT</code>, <code>AIP_ROLE</code></td><td>Account (required for pat) and starting role</td><td></td></tr>
 <tr><td><code>AIP_SUPER_ADMINS</code></td><td>Users made SUPER_ADMIN at first bootstrap (comma separated)</td><td></td></tr>
@@ -838,7 +838,7 @@ those systems. A low match rate means many gold rows will carry <code>-1</code>.
 <p>One Atlassian OAuth app serves the whole organisation. An admin sets it up once; then each person connects their own Jira account with SSO, so every comment and status change in Jira shows as that person and Jira's own permissions apply. A separate bot account is used only for automatic incident tickets.</p>
 <div class="tablebox"><table>
 <tr><th>Value</th><th>Where it comes from</th><th>Where it goes</th><th>Secret?</th></tr>
-<tr><td>Site</td><td>Your Jira address, for example <code>https://anblicks.atlassian.net</code></td><td>Admin, Integrations, Jira</td><td>No</td></tr>
+<tr><td>Site</td><td>Your Jira address, for example <code>https://your-org.atlassian.net</code></td><td>Admin, Integrations, Jira</td><td>No</td></tr>
 <tr><td>Project key</td><td>The short code of the space, for example <code>GQT</code></td><td>Admin, default project</td><td>No</td></tr>
 <tr><td>Client ID</td><td>Atlassian app, Settings</td><td>Admin, or <code>JIRA_CLIENT_ID</code></td><td>No</td></tr>
 <tr><td>Client secret</td><td>Atlassian app, Settings</td><td><code>JIRA_CLIENT_SECRET</code> on the API host</td><td>Yes</td></tr>
@@ -895,7 +895,7 @@ JIRA_BOT_TOKEN=&lt;api token&gt;</code></pre>
 
 <h4>Part E. Admin settings and connecting</h4>
 <ol class="steps">
-  <li>In Admin, Integrations, Jira enter: site <code>https://anblicks.atlassian.net</code>, the client ID, the callback URL (the same address your browser uses, matching the Atlassian app and <code>JIRA_REDIRECT_URI</code>), and the default project key (for example <code>GQT</code>). Save.</li>
+  <li>In Admin, Integrations, Jira enter: site <code>https://your-org.atlassian.net</code>, the client ID, the callback URL (the same address your browser uses, matching the Atlassian app and <code>JIRA_REDIRECT_URI</code>), and the default project key (for example <code>GQT</code>). Save.</li>
   <li>Under "Your Jira account", choose <strong>Connect Jira</strong>, sign in through SSO and approve the consent page. You return to the platform connected.</li>
   <li>Each colleague does the same once, after the app is shared (Part A, step 6) and they have JIRA.READ.</li>
 </ol>

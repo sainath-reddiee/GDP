@@ -55,8 +55,9 @@ ITEM_COLS = ("ITEM_ID, REQUEST_ID, SOURCE_SYSTEM_ID, SOURCE_NAME, SOURCE_NOTE, R
              "ADDED_AT, UPDATED_AT, REMOVED_BY, REMOVED_AT")
 # V078: new or enhance; read apart so the requests keep working before it is deployed (every request is then NEW)
 INTENT_COLS = "INTENT, BASE_MODEL_VERSION"
-RUN_COLS = ("RUN_ID, RUN_NAME, DOMAIN_ID, SOURCE_SYSTEM_ID, CURRENT_STATE, FAILED_FROM_STATE, FAILURE_REASON, IS_ARCHIVED, "
-            "DELETED_AT, PARENT_RUN_ID, CREATED_AT, COALESCE(PIPELINE, 'SILVER') AS PIPELINE")
+RUN_COLS = ("RUN_ID, RUN_NAME, DOMAIN_ID, SOURCE_SYSTEM_ID, TARGET_MODEL, MODEL_ENTITY, CURRENT_STATE, "
+            "FAILED_FROM_STATE, FAILURE_REASON, IS_ARCHIVED, DELETED_AT, PARENT_RUN_ID, CREATED_AT, "
+            "COALESCE(PIPELINE, 'SILVER') AS PIPELINE")
 
 
 def _who(db: Db) -> Dict[str, Any]:
@@ -292,7 +293,19 @@ def refresh(db: Db, requests: List[Dict[str, Any]], write: bool = True) -> List[
     out = []
     for r in requests:
         its = items.get(r["request_id"], [])
-        a = rq.assess(r, its, domains.get(r.get("domain_id")) if r.get("domain_id") else None, sources, runs, children)
+        req_children: Dict[str, List[Dict[str, Any]]] = dict(children)
+        for i in its:
+            rid = i.get("run_id")
+            if not rid:
+                continue
+            parent_id = runs.get(rid, {}).get("parent_run_id") or rid
+            explicit = [c for c in children.get(parent_id, [])
+                        if not c.get("is_archived") and not c.get("deleted_at") and str(c.get("current_state") or "").upper() != "CANCELLED"]
+            if explicit:
+                req_children[rid] = sorted(explicit, key=lambda c: str(c.get("created_at") or ""))
+            else:
+                req_children[rid] = []
+        a = rq.assess(r, its, domains.get(r.get("domain_id")) if r.get("domain_id") else None, sources, runs, req_children)
         if write:
             _persist(db, r, its, a)
         domain = domains.get(r.get("domain_id") or "")
@@ -306,9 +319,24 @@ def refresh(db: Db, requests: List[Dict[str, Any]], write: bool = True) -> List[
                        "attention": a["items"][i["item_id"]].get("attention"),
                        "active_run_id": a["items"][i["item_id"]].get("run_id") or i.get("run_id"),
                        "run_name": runs.get(i.get("run_id") or "", {}).get("run_name"),
-                       "run_state": a["items"][i["item_id"]].get("state") or runs.get(i.get("run_id") or "", {}).get("current_state")} for i in its],
+                       "run_state": a["items"][i["item_id"]].get("state") or runs.get(i.get("run_id") or "", {}).get("current_state"),
+                       "table_runs": [_child_out(c) for c in req_children.get(i.get("run_id") or "", [])]} for i in its],
         })
     return out
+
+
+def _child_out(c: Dict[str, Any]) -> Dict[str, Any]:
+    st = rq.run_status(c)
+    return {
+        "run_id": c["run_id"],
+        "run_name": c.get("run_name"),
+        "target_model": c.get("target_model"),
+        "model_entity": c.get("model_entity"),
+        "current_state": c.get("current_state"),
+        "stage": st["stage"],
+        "status": st["status"],
+        "status_detail": st.get("detail"),
+    }
 
 
 def _persist(db: Db, r: Dict[str, Any], items: List[Dict[str, Any]], a: Dict[str, Any]) -> None:
@@ -319,6 +347,14 @@ def _persist(db: Db, r: Dict[str, Any], items: List[Dict[str, Any]], a: Dict[str
                        (s["status"], (s.get("detail") or "")[:1000] or None, i["item_id"]))
             for kind, note in rq.milestones(i, s, (r.get("request_type") or "").upper() == "PRODUCT", rq.enhances_source(r)):
                 _event(db, r["request_id"], kind, note, item_id=i["item_id"], frm=i.get("status"), to=s["status"], automatic=True)
+    if r.get("status") == rq.DONE and str(r.get("closed_by") or "").upper() == "PLATFORM" and a["status"] == rq.OPEN:
+        db.execute("UPDATE CORE.ONBOARDING_REQUEST SET STATUS = 'OPEN', STAGE = %s, WAITING_ON = %s, WAITING_LABEL = %s, ATTENTION = %s, "
+                   "CLOSED_BY = NULL, CLOSED_AT = NULL, CLOSE_REASON = NULL, UPDATED_AT = CURRENT_TIMESTAMP(), STAGE_CHANGED_AT = CURRENT_TIMESTAMP() "
+                   "WHERE REQUEST_ID = %s",
+                   (a["stage"], a["waiting_on"], (a["waiting_label"] or "")[:256] or None, (a["attention"] or "")[:1000] or None, r["request_id"]))
+        r["status"] = rq.OPEN
+        r["stage"] = a["stage"]
+        return
     if r.get("status") == rq.OPEN and a["status"] == rq.DONE:
         db.execute("UPDATE CORE.ONBOARDING_REQUEST SET STATUS = 'DONE', STAGE = 'DONE', WAITING_ON = NULL, WAITING_LABEL = NULL, ATTENTION = NULL, "
                    "CLOSED_BY = 'PLATFORM', CLOSED_AT = CURRENT_TIMESTAMP(), UPDATED_AT = CURRENT_TIMESTAMP(), STAGE_CHANGED_AT = CURRENT_TIMESTAMP() "
@@ -381,7 +417,7 @@ def list_requests(scope: str = Query("all", pattern="^(all|mine|waiting)$"), sta
     who = _who(db)
     where, params = ["1 = 1"], []
     if status == "OPEN":
-        where.append("STATUS = 'OPEN'")
+        where.append("(STATUS = 'OPEN' OR (STATUS = 'DONE' AND CLOSED_BY = 'PLATFORM'))")
     elif status == "CLOSED":
         where.append("STATUS <> 'OPEN'")
     if domain_id:
@@ -396,6 +432,11 @@ def list_requests(scope: str = Query("all", pattern="^(all|mine|waiting)$"), sta
     recent_closed = closed[:15]
     older_closed = closed[15:]
     out = refresh(db, live + recent_closed) + [{**_out(r), "items": [], "waits": []} for r in older_closed]
+    if status == "OPEN":
+        live_ids = {r["request_id"] for r in live}
+        out = [r for r in out if r["request_id"] in live_ids or r.get("status") == rq.OPEN]
+    elif status == "CLOSED":
+        out = [r for r in out if r.get("status") != rq.OPEN][:limit]
     if scope == "waiting":
         out = [r for r in out if r.get("status") == rq.OPEN and any(_holds(who, w["privilege"]) for w in r.get("waits", []))]
     out.sort(key=lambda r: (r.get("status") == rq.OPEN, str(r.get("updated_at") or "")), reverse=True)
@@ -779,6 +820,52 @@ def reopen(request_id: str, body: Note, db: Db = Depends(current_db)):
                "UPDATED_AT = CURRENT_TIMESTAMP(), STAGE_CHANGED_AT = CURRENT_TIMESTAMP() WHERE REQUEST_ID = %s", (request_id,))
     _event(db, request_id, "REOPENED", body.note, frm=r.get("status"), to="OPEN")
     return _detail(db, request_id)
+
+
+class DeleteRequestIn(BaseModel):
+    delete_runs: bool = True
+
+
+@router.post("/api/onboarding-requests/{request_id}/delete")
+@_guard_deployed
+def delete_request(request_id: str, body: DeleteRequestIn = DeleteRequestIn(), db: Db = Depends(current_db)):
+    """Delete an onboarding request and optionally soft-delete any runs linked to its sources."""
+    invalidate_sources()
+    who = _who(db)
+    r = _one(db, who, request_id)
+    _need(_holds(who, "SOURCE.CONNECT", "DOMAIN.ONBOARD", "ROLE.MANAGE"),
+          "deleting a request", "Data OS Administrator or Platform Admin")
+    items = db.query("SELECT RUN_ID FROM CORE.ONBOARDING_REQUEST_ITEM WHERE REQUEST_ID = %s AND RUN_ID IS NOT NULL", (request_id,))
+    run_ids = [str(i.get("run_id") or i.get("RUN_ID")) for i in items if i.get("run_id") or i.get("RUN_ID")]
+    if body.delete_runs and run_ids:
+        try:
+            placeholders = ", ".join(["%s"] * len(run_ids))
+            children = db.query(
+                f"SELECT RUN_ID FROM CORE.WORKFLOW_RUN WHERE PARENT_RUN_ID IN ({placeholders}) AND DELETED_AT IS NULL",
+                tuple(run_ids),
+            )
+            for c in children:
+                cid = str(c.get("run_id") or c.get("RUN_ID") or "")
+                if cid and cid not in run_ids:
+                    run_ids.append(cid)
+            all_ph = ", ".join(["%s"] * len(run_ids))
+            db.execute(
+                f"UPDATE CORE.WORKFLOW_RUN SET DELETED_AT = COALESCE(DELETED_AT, CURRENT_TIMESTAMP()), "
+                f"DELETED_BY = COALESCE(DELETED_BY, CURRENT_USER()), IS_ARCHIVED = TRUE, "
+                f"ARCHIVED_AT = COALESCE(ARCHIVED_AT, CURRENT_TIMESTAMP()), UPDATED_AT = CURRENT_TIMESTAMP() "
+                f"WHERE RUN_ID IN ({all_ph}) AND DELETED_AT IS NULL",
+                tuple(run_ids),
+            )
+        except Exception:
+            pass
+    try:
+        db.execute("DELETE FROM CORE.ONBOARDING_REQUEST_FILE WHERE REQUEST_ID = %s", (request_id,))
+    except Exception:
+        pass
+    db.execute("DELETE FROM CORE.ONBOARDING_REQUEST_EVENT WHERE REQUEST_ID = %s", (request_id,))
+    db.execute("DELETE FROM CORE.ONBOARDING_REQUEST_ITEM WHERE REQUEST_ID = %s", (request_id,))
+    db.execute("DELETE FROM CORE.ONBOARDING_REQUEST WHERE REQUEST_ID = %s", (request_id,))
+    return {"deleted": True, "request_id": request_id, "deleted_runs": run_ids if body.delete_runs else []}
 
 
 # ---------------------------------------------------------------- files (V079)

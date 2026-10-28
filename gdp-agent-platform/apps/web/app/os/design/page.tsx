@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ArrowRight, CircleHelp, FileText, GitBranch, Network, ScanSearch } from "lucide-react";
+import { ArrowLeft, ArrowRight, CircleHelp, FileText, GitBranch, Network, ScanSearch, Sparkles } from "lucide-react";
 import { GATES, stateLabel } from "@/lib/run-labels";
 import {
   loadDomainContract, loadDomainModel, loadDomainQuestions, loadDomains, loadKnowledge, loadMapping, loadBoardRuns, loadRuns, loadSources,
@@ -10,9 +10,11 @@ import { Action } from "@/components/os/action";
 import { gateHref } from "@/lib/os/lifecycle";
 import { boardView, leafRuns, pastStage, resolveBoardRun, runNeedsMe, stageOfRun } from "@/lib/os/work";
 import { Bar, Btn, Card, Empty, Field, SourceError, Tag, ago, pretty } from "@/components/os/ui";
-import { BoardList, BoardTabs, RunCard, Segmented, Track, runTrack } from "@/components/os/stage-board";
+import { BoardList, BoardTabs, Segmented, Track, WorkflowGroupCard, fiveStageTrack, groupRunsByWorkflow, runTrack } from "@/components/os/stage-board";
+import { DeleteRunButton } from "@/components/os/request-ui";
 import { HomeSearch } from "@/components/os/home-search";
 import { DomainEr } from "@/components/os/client";
+import { cn } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Design" };
@@ -52,8 +54,21 @@ export default async function DesignBoard({ searchParams }: { searchParams: Para
   // Selected with nothing selected opens the first run waiting on the viewer, else the first in design
   const fallback = lists.action[0] ?? lists.active[0] ?? lists.completed[0] ?? null;
   const picked = run ?? (searchParams.view === "selected" ? fallback : null);
-  const view = boardView(searchParams.view ?? (byDomain && run ? "selected" : undefined), !!picked, lists.action.length);
-  const rows = view === "selected" ? [] : lists[view];
+  const mine = (r: (typeof live)[number]) => runNeedsMe(r, access);
+  const groupedLists = {
+    action: groupRunsByWorkflow(lists.action, live, mine),
+    active: groupRunsByWorkflow(lists.active, live, mine),
+    completed: groupRunsByWorkflow(lists.completed, live, mine),
+  };
+  const view = boardView(searchParams.view ?? (byDomain && run ? "selected" : undefined), !!picked, groupedLists.action.length);
+  const grouped = view === "selected" ? [] : groupedLists[view];
+  const siblings = picked
+    ? leaves.filter((r) =>
+        picked.parent_run_id
+          ? r.parent_run_id === picked.parent_run_id
+          : r.parent_run_id === picked.run_id || r.run_id === picked.run_id,
+      )
+    : [];
   const viewList = view === "selected" ? all.active : all[view];
   const select = (id: string) => `/os/design?${new URLSearchParams({ view: "selected", run: id, ...(step ? { tab: step } : {}) })}`;
   // Profile, Model, Map: on a selected run, its tab; on a list, the runs at that step (again to show every step)
@@ -74,35 +89,39 @@ export default async function DesignBoard({ searchParams }: { searchParams: Para
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <BoardTabs base="/os/design" view={view} selection={picked ? ["run", picked.run_id] : null}
                    fallback={fallback ? ["run", fallback.run_id] : null} extra={step ? { tab: step } : undefined}
-                   counts={{ action: lists.action.length, active: lists.active.length, completed: lists.completed.length }} />
+                   counts={{ action: groupedLists.action.length, active: groupedLists.active.length, completed: groupedLists.completed.length }} />
         <span className="mx-1 hidden h-5 w-px bg-[var(--os-line)] sm:block" aria-hidden />
         <Segmented label="Design step" testId="design-steps" options={TABS.map((x) => ({
           key: x.key, label: x.label, href: stepHref(x.key), active: x.key === shownStep,
           // the runs of the list on show at each step (failed runs count where they failed)
-          ...(view !== "selected" ? { count: viewList.filter((r) => stepOf(r) === x.key).length } : {}),
+          ...(view !== "selected" ? { count: groupRunsByWorkflow(viewList.filter((r) => stepOf(r) === x.key), live, mine).length } : {}),
         }))} />
       </div>
       <SourceError what="Workflow runs" error={runs.error} />
       {view === "selected" && picked ? (
-        <Selected run={picked} tab={shownStep ?? tabOf(picked.current_state)}
+        <Selected run={picked} siblings={siblings} tab={shownStep ?? tabOf(picked.current_state)}
                   domainId={domains.data.find((d) => d.domain_name === picked.domain_name)?.domain_id ?? null}
                   sources={sources.data.sources} access={access} />
       ) : (
-        <BoardList count={rows.length} empty={view === "action"
+        <BoardList count={grouped.length} empty={view === "action"
           ? { title: "No design decision waits on you", body: "Field mappings, transformations and data quality checks your role decides show here." }
           : view === "active" ? { title: step ? `No run is at ${TABS.find((t) => t.key === step)?.label}` : "No run is in design" } : { title: "No run has finished design yet" }}>
-          {rows.map((r) => <RunCard key={r.run_id} run={r} href={select(r.run_id)} mine={runNeedsMe(r, access)} />)}
+          {grouped.map((g) => <WorkflowGroupCard key={g.key} group={g} selectHref={select} currentRunId={picked?.run_id} />)}
         </BoardList>
       )}
     </div>
   );
 }
 
-async function Selected({ run, tab, domainId, sources, access }: {
-  run: Awaited<ReturnType<typeof loadRuns>>["data"]["runs"][number]; tab: Tab; domainId: string | null;
+async function Selected({ run, siblings, tab, domainId, sources, access }: {
+  run: Awaited<ReturnType<typeof loadRuns>>["data"]["runs"][number];
+  siblings: Awaited<ReturnType<typeof loadRuns>>["data"]["runs"];
+  tab: Tab; domainId: string | null;
   sources: Awaited<ReturnType<typeof loadSources>>["data"]["sources"]; access: Awaited<ReturnType<typeof guard>>;
 }) {
   const t = runTrack(run);
+  const stages = fiveStageTrack([run], run.run_id);
+  const activeStage = stages.find((s) => s.state === "current" || s.state === "attention") ?? stages[stages.length - 1];
   const gate = GATES[run.current_state];
   return (
     <section className="flex flex-col gap-4" data-testid="design-selected">
@@ -113,17 +132,57 @@ async function Selected({ run, tab, domainId, sources, access }: {
             <div className="os-faint mt-1 flex flex-wrap items-center gap-x-1.5 text-[11.5px]">
               <span className="os-muted font-semibold">{run.domain_name ?? "No domain"}</span>
               {run.source_system_name && <span>· {run.source_system_name}</span>}
-              <span>· {t.pending ? `${t.pending} of 8 steps to go` : "all 8 steps done"} · updated {ago(run.updated_at ?? run.created_at)}</span>
+              <span>· Stage: <b className="text-[var(--os-ink)]">{activeStage?.label ?? "Design"}</b> · updated {ago(run.updated_at ?? run.created_at)}</span>
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            <Btn href="/os/design?view=active"><ArrowLeft className="h-3.5 w-3.5" /> All runs</Btn>
             <Tag tone={gate ? "amber" : "blue"}>{stateLabel(run.current_state)}</Tag>
             {gate && <Action access={access} id="decideGate" privilege={gate.privilege} label={`Decide: ${gate.name.toLowerCase()}`} href={gateHref(run.run_id, gate.slug)} variant="primary" />}
             <Btn href={`/os/build/runs/${run.run_id}`}>Run workspace <ArrowRight className="h-3.5 w-3.5" /></Btn>
+            <DeleteRunButton runIds={[run.run_id]} redirectTo="/os/design?view=active" previewing={!!access.preview} />
           </div>
         </div>
-        <Track steps={t.steps} note={t.note} since={t.since} className="mt-5" />
+        <Track steps={stages} note={t.note} since={t.since} className="mt-5" />
       </div>
+
+      {siblings.length > 1 && (
+        <div className="os-card p-3.5" data-testid="design-child-switcher">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-[12px]">
+            <span>
+              <b>Child pipelines in this workflow ({siblings.length})</b>{" "}
+              <span className="os-muted">
+                · {siblings.filter((s) => ["COMPLETED", "DBT_APPROVED"].includes(s.current_state)).length} completed
+              </span>
+            </span>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {siblings.map((s) => {
+              const name = (s.target_model ? s.target_model.split(".").pop() : null) ?? s.run_name;
+              const isCurrent = s.run_id === run.run_id;
+              const isDone = ["COMPLETED", "DBT_APPROVED"].includes(s.current_state);
+              const isFailed = s.current_state === "VALIDATION_FAILED" || s.current_state === "FAILED";
+              return (
+                <Link
+                  key={s.run_id}
+                  href={`/os/design?${new URLSearchParams({ view: "selected", run: s.run_id, tab })}`}
+                  scroll={false}
+                  aria-current={isCurrent ? "page" : undefined}
+                  className={cn(
+                    "inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11.5px] font-bold transition",
+                    isCurrent
+                      ? "border-[var(--os-forest)] bg-[var(--os-green-bg)] text-[var(--os-ink)] shadow-sm"
+                      : "border-[var(--os-line)] bg-[var(--os-surface)] hover:border-[var(--os-forest)]",
+                  )}
+                >
+                  <span>{name}</span>
+                  <Tag tone={isDone ? "green" : isFailed ? "red" : "blue"}>{stateLabel(s.current_state)}</Tag>
+                </Link>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       <h3 className="os-eyebrow -mb-1">{TABS.find((x) => x.key === tab)?.label}</h3>
 
@@ -168,7 +227,14 @@ async function ModelTab({ domainId, access }: { domainId: string | null; access:
   return (
     <div className="grid gap-4 xl:grid-cols-[minmax(0,1.65fr)_minmax(0,1fr)]">
       <Card title="Business model and relationships" subtitle={diagram ? `Model v${diagram.version} · ${pretty(diagram.status)}${diagram.approved_by ? ` · approved by ${diagram.approved_by}` : ""}` : "No model yet"}
-            action={<Action access={access} id="editModel" href={`/os/knowledge/domains/${domainId}`} />}>
+            action={<div className="flex flex-wrap items-center gap-2">
+              {model.data.model?.model_id && actMode(access, "MODEL.EDIT") !== "none" && (
+                <Btn href={`/os/design/modeling/${encodeURIComponent(model.data.model.model_id)}?evolve=1`} variant="primary">
+                  <Sparkles className="h-3.5 w-3.5" /> Evolve with AI
+                </Btn>
+              )}
+              <Action access={access} id="editModel" href={`/os/knowledge/domains/${domainId}`} />
+            </div>}>
         <SourceError what="Domain model" error={model.error} />
         {diagram?.entities.length
           ? <DomainEr className="h-[440px] rounded-xl border border-[var(--os-line)]" entities={diagram.entities} relationships={diagram.relationships} />

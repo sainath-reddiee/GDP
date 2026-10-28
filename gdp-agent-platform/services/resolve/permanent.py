@@ -432,11 +432,11 @@ def draft(db: Any, issue_id: str, actor: str, trigger: str = "MANUAL", instructi
         if reason:
             row = {**base, **common, "status": "UNAVAILABLE", "unavailable_reason": reason, "confidence": confidence}
         else:
-            github = str((located["repo"] or {}).get("provider") or "").upper() == "GITHUB"
+            github = str((located["repo"] or {}).get("provider") or "").upper() in ("GITHUB", "AZURE_DEVOPS")
             row = {**base, **common, "status": "DRAFTED", "confidence": confidence, "publishable": github,
                    "files": [{k: f[k] for k in ("path", "role", "base_sha256", "new_content", "change")} for f in files],
                    "diff": "".join(f["diff"] for f in files),
-                   "unavailable_reason": None if github else "the repository is not on GitHub; apply the change by hand"}
+                   "unavailable_reason": None if github else "the repository is not on GitHub or Azure Repos; apply the change by hand"}
     fix_id = _insert(db, row)
     db.execute("""UPDATE CORE.PERMANENT_FIX SET STATUS = 'SUPERSEDED', UPDATED_AT = CURRENT_TIMESTAMP()
                    WHERE ISSUE_ID = %s AND FIX_ID <> %s AND STATUS IN ('DRAFTED', 'ACCEPTED', 'UNAVAILABLE')""",

@@ -330,8 +330,8 @@ def test_an_unknown_connection_name_is_caught_before_sign_in(monkeypatch, tmp_pa
     monkeypatch.setattr(deploy, "ENV_DIR", tmp_path)
     (tmp_path / "x.toml").write_text('[snowflake]\nconnection = "client-prod"\nrole = "R"\nwarehouse = "W"\ndatabase = "D"\n'
                                      '[access]\nmodel = "database_roles"\n')
-    monkeypatch.setattr(deploy, "known_connections", lambda: ["anblicks"])
-    with pytest.raises(deploy.ConfigError, match="known: anblicks.*--setup"):
+    monkeypatch.setattr(deploy, "known_connections", lambda: ["gdp-dev"])
+    with pytest.raises(deploy.ConfigError, match="known: gdp-dev.*--setup"):
         deploy.load_env("x")
     monkeypatch.setattr(deploy, "known_connections", lambda: None)   # unreadable file: let the connector decide
     assert deploy.load_env("x")["connection"] == "client-prod"

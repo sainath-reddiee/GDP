@@ -126,7 +126,7 @@ def publishing(db: Db = Depends(current_db)):
     from app.main import _dbt_repos, _github_publisher_ready
 
     repos = [{k: r.get(k) for k in ("repo_id", "name", "git_url", "provider", "branch")} for r in _dbt_repos(db, None)
-             if (r.get("provider") or "") == "GITHUB"]
+             if (r.get("provider") or "") in ("GITHUB", "AZURE_DEVOPS")]
     return {"repos": repos, "publisher_ready": _github_publisher_ready(db)}
 
 
@@ -301,8 +301,8 @@ def publish(model_id: str, version: int, body: PublishIn, db: Db = Depends(curre
     if current.get("status") != "APPROVED":
         raise HTTPException(409, "Only an approved version is published; approve it first.")
     repo = next((r for r in _dbt_repos(db, None) if r["repo_id"] == body.repo_id), None)
-    if not repo or (repo.get("provider") or "") != "GITHUB":
-        raise HTTPException(409, "Choose a GitHub repository connected in Admin, Integrations.")
+    if not repo or (repo.get("provider") or "") not in ("GITHUB", "AZURE_DEVOPS"):
+        raise HTTPException(409, "Choose a GitHub or Azure Repos repository connected in Admin, Integrations.")
     if not _github_publisher_ready(db):
         return {"status": "NOT_CONFIGURED", "detail": "GitHub publishing is not set up. An admin can set it up in the GitHub publishing card."}
     slug = re.sub(r"[^a-z0-9]+", "-", out["model"]["domain_name"].lower()).strip("-") or "model"
@@ -427,6 +427,306 @@ async def import_model_file(model_id: str, file: UploadFile = File(...), spec: s
     return {"spec": merged, "issues": spec_v2.validate(merged), "counts": changes["counts"], "entities": parsed["entities"],
             "columns": parsed["columns"], "relationships": parsed["relationships"], "format": parsed["format"],
             "notes": parsed["notes"][:50], "file": file.filename}
+
+
+class EvolveIn(BaseModel):
+    spec: Optional[dict] = None
+    instructions: str = Field(min_length=3, max_length=16000)
+    save_knowledge: bool = False
+
+
+def _save_knowledge_proposals(db: Db, domain_id: Optional[str], domain_name: str, proposals: list[dict]) -> int:
+    if not domain_id or not proposals:
+        return 0
+    saved = 0
+    try:
+        import uuid
+        from services.knowledge.manage import new_key, prepare_item
+        from services.knowledge.writer import lineage_id
+
+        for prop in proposals:
+            item, problems = prepare_item(
+                prop.get("knowledge_type") or "BUSINESS_RULE",
+                prop.get("title") or "",
+                prop.get("content") or "",
+                prop.get("content_json"),
+            )
+            if problems:
+                continue
+            exists = db.query(
+                "SELECT KNOWLEDGE_ID FROM CORE.DOMAIN_KNOWLEDGE WHERE DOMAIN_ID = %s AND UPPER(TITLE) = UPPER(%s) AND IS_CURRENT = TRUE LIMIT 1",
+                (domain_id, item["title"]),
+            )
+            if exists:
+                continue
+            kid = str(uuid.uuid4())
+            key = new_key(domain_name or "DOMAIN", item["knowledge_type"], item["title"])
+            db.execute(
+                """INSERT INTO CORE.DOMAIN_KNOWLEDGE (KNOWLEDGE_ID, DOMAIN_ID, KNOWLEDGE_TYPE, TITLE, CONTENT,
+                          CONTENT_JSON, TAGS, SOURCE_REFERENCE, STATUS, VERSION, IS_CURRENT, CREATED_BY, LINEAGE_ID,
+                          ORIGIN, CHANGE_NOTE, LAYER)
+                   SELECT %s, %s, %s, %s, %s, PARSE_JSON(NULLIF(%s, '')), PARSE_JSON(%s), %s, 'ACTIVE', 1, TRUE,
+                          CURRENT_USER(), %s, 'COPILOT', 'Evolved with AI in Model Workbench', 'ANY'""",
+                (
+                    kid,
+                    domain_id,
+                    item["knowledge_type"],
+                    item["title"],
+                    item["content"],
+                    json.dumps(item["content_json"]) if item["content_json"] is not None else "",
+                    json.dumps(["COPILOT", "MODEL_WORKBENCH"]),
+                    key,
+                    lineage_id(domain_id, key),
+                ),
+            )
+            saved += 1
+    except Exception:
+        pass
+    return saved
+
+
+@router.post("/api/hub/domain-models/{model_id}/evolve")
+def evolve_model(model_id: str, body: EvolveIn, db: Db = Depends(current_db)):
+    """Human-in-the-loop AI recommendation & evolution of a domain model (`spec`) and its domain knowledge."""
+    import time
+    from services.modeling import render_v2
+    from services.modeling.ai_evolve import evolve_domain_model
+
+    base_spec = body.spec
+    if not base_spec or not (base_spec.get("design") or {}).get("entities"):
+        loaded = _call(db, _svc().get_model, model_id, None)
+        base_spec = (loaded.get("current") or {}).get("spec") or {}
+
+    domain_id: Optional[str] = None
+    domain_name: str = str(base_spec.get("domain") or "").strip().upper()
+    existing_knowledge: list[dict] = []
+    try:
+        rows = db.query("SELECT DOMAIN_ID, DOMAIN_NAME FROM CORE.DOMAIN_MODEL WHERE MODEL_ID = %s LIMIT 1", (model_id,))
+        if rows:
+            domain_id = rows[0].get("domain_id") or rows[0].get("DOMAIN_ID")
+            domain_name = str(rows[0].get("domain_name") or rows[0].get("DOMAIN_NAME") or domain_name).strip().upper()
+        if domain_id:
+            k_rows = db.query(
+                "SELECT KNOWLEDGE_TYPE, TITLE, CONTENT FROM CORE.DOMAIN_KNOWLEDGE "
+                "WHERE DOMAIN_ID = %s AND IS_CURRENT = TRUE AND STATUS = 'ACTIVE' ORDER BY UPDATED_AT DESC LIMIT 25",
+                (domain_id,),
+            )
+            existing_knowledge = [
+                {
+                    "type": r.get("knowledge_type") or r.get("KNOWLEDGE_TYPE"),
+                    "title": r.get("title") or r.get("TITLE"),
+                    "content": r.get("content") or r.get("CONTENT"),
+                }
+                for r in k_rows
+            ]
+    except Exception:
+        pass
+
+    started = time.time()
+    try:
+        result = invoke_source(db, evolve_domain_model, base_spec, body.instructions, model_id, existing_knowledge)
+    except AssertionError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+
+    try:
+        from app.main import _record_cost
+        _record_cost(db, None, "MODELING", result.get("model"), result.pop("usage", None), started)
+    except Exception:
+        result.pop("usage", None)
+
+    saved_knowledge = (
+        _save_knowledge_proposals(db, domain_id, domain_name, result.get("knowledge_proposals") or [])
+        if body.save_knowledge
+        else 0
+    )
+
+    ddl_preview = ""
+    dbt_preview = ""
+    try:
+        ddl_preview = render_v2.render_ddl(result["spec"])
+        dbt_files = render_v2.render_dbt(result["spec"])
+        dbt_preview = "\n\n".join(f"# {path}\n{content}" for path, content in list(dbt_files.items())[:4])
+    except Exception:
+        pass
+
+    return {
+        "spec": result["spec"],
+        "issues": result["issues"],
+        "counts": result["counts"],
+        "changes": result["changes"],
+        "breaking": result["breaking"],
+        "rationale": result["rationale"],
+        "knowledge_proposals": result["knowledge_proposals"],
+        "knowledge_saved": saved_knowledge,
+        "ddl_preview": ddl_preview,
+        "dbt_preview": dbt_preview,
+    }
+
+
+class EvolveWorkflowIn(BaseModel):
+    spec: dict
+    instructions: Optional[str] = Field(default=None, max_length=16000)
+    rationale: Optional[str] = Field(default=None, max_length=4000)
+    knowledge_proposals: list[dict] = Field(default_factory=list)
+    save_knowledge: bool = True
+    create_run: bool = True
+
+
+@router.post("/api/hub/domain-models/{model_id}/evolve/workflow")
+def apply_evolve_workflow(model_id: str, body: EvolveWorkflowIn, db: Db = Depends(current_db)):
+    """Accept AI model & knowledge recommendations, save the evolved draft, sync to the domain target registry,
+    and create/link the Design -> Build -> Validate -> Publish workflow run."""
+    import uuid
+    from services.modeling import spec_v2
+    from services.modeling.registry_sync import apply_spec
+
+    user = _user(db)
+    svc = _svc()
+    note = (body.rationale or body.instructions or "Evolved with AI").strip()[:1000]
+
+    # 1. Ensure an editable draft is open on CORE.DOMAIN_MODEL and save the evolved spec
+    detail = _call(db, svc.get_model, model_id, None)
+    header = detail["model"]
+    domain_id = header["domain_id"]
+    domain_name = str(header["domain_name"] or "DOMAIN").strip().upper()
+    open_v = detail.get("open")
+
+    if not open_v:
+        opened = _call(db, svc.open_draft, model_id, user, None, note)
+        draft_version = opened["version"]
+        etag = opened["etag"]
+    else:
+        draft_version = open_v["version"]
+        if open_v["status"] == "IN_REVIEW":
+            db.execute(
+                "UPDATE CORE.MODEL_DESIGNS SET STATUS = 'DRAFT', UPDATED_AT = CURRENT_TIMESTAMP() WHERE MODEL_ID = %s AND VERSION = %s",
+                (model_id, draft_version),
+            )
+        row = db.query("SELECT ETAG FROM CORE.MODEL_DESIGNS WHERE MODEL_ID = %s AND VERSION = %s", (model_id, draft_version))
+        etag = (row[0].get("etag") or row[0].get("ETAG")) if row else open_v.get("etag") or ""
+
+    normalized = spec_v2.normalize_v2(body.spec, model_id)
+    saved = _call(
+        db,
+        svc.save_draft,
+        model_id,
+        json.dumps({"spec": normalized, "etag": etag, "change_note": note}, default=str),
+        user,
+    )
+
+    # 2. Save extracted Domain Knowledge items to CORE.DOMAIN_KNOWLEDGE
+    knowledge_saved = (
+        _save_knowledge_proposals(db, domain_id, domain_name, body.knowledge_proposals)
+        if body.save_knowledge
+        else 0
+    )
+
+    # 3. Sync evolved entities & columns into CORE.TARGET_TABLE_REGISTRY / TARGET_COLUMN_REGISTRY so Build & Mapping see them
+    registry_applied = False
+    try:
+        invoke_source(db, apply_spec, domain_id, normalized)
+        registry_applied = True
+    except Exception:
+        pass
+
+    # 4. Create or link a Design -> Build -> Validate -> Publish workflow run for this evolved model
+    run_id: Optional[str] = None
+    run_name: Optional[str] = None
+    target_model: Optional[str] = None
+    entities = (normalized.get("design") or {}).get("entities") or []
+    active_entities = [e for e in entities if e.get("status") != "RETIRED"] or entities
+    if active_entities:
+        first_ent = active_entities[0]
+        phys = normalized.get("physical_defaults") or {}
+        t_db = first_ent.get("database") or phys.get("database") or "DEV_GDP_SILVER_DB"
+        t_sch = first_ent.get("schema") or phys.get("schema") or domain_name
+        target_model = f"{t_db}.{t_sch}.{first_ent['entity_name']}"
+
+    if body.create_run and domain_id:
+        try:
+            src_rows = db.query(
+                """SELECT SOURCE_SYSTEM_ID FROM CORE.WORKFLOW_RUN
+                    WHERE DOMAIN_ID = %s AND SOURCE_SYSTEM_ID IS NOT NULL AND DELETED_AT IS NULL
+                    ORDER BY CREATED_AT DESC LIMIT 1""",
+                (domain_id,),
+            )
+            source_system_id = (src_rows[0].get("source_system_id") or src_rows[0].get("SOURCE_SYSTEM_ID")) if src_rows else None
+            run_name = f"{domain_name} AI Model Evolution v{draft_version}"
+            payload = {
+                "RUN_NAME": run_name,
+                "DOMAIN_ID": domain_id,
+                "TARGET_MODEL": target_model,
+                "ENVIRONMENT": "DEV",
+            }
+            if source_system_id:
+                payload["SOURCE_SYSTEM_ID"] = source_system_id
+            created = db.call("CALL CORE.CREATE_RUN(%s)", (json.dumps(payload),))
+            run_id = (created or {}).get("run_id") or (created or {}).get("RUN_ID")
+            if run_id and source_system_id:
+                # Position the workflow at DOMAIN_IDENTIFIED (Stage 2: Design -> Build -> Validate -> Publish)
+                db.execute(
+                    "UPDATE CORE.WORKFLOW_RUN SET CURRENT_STATE = 'DOMAIN_IDENTIFIED', SOURCE_SYSTEM_ID = %s, TARGET_MODEL = %s WHERE RUN_ID = %s",
+                    (source_system_id, target_model, run_id),
+                )
+        except Exception:
+            pass
+
+    run_qs = f"&run={run_id}" if run_id else ""
+    workflow_stages = [
+        {
+            "key": "design",
+            "step": 1,
+            "label": "Design",
+            "detail": f"Draft v{draft_version} saved ({len(active_entities)} entities) · Profile & map fields",
+            "status": "ACTIVE",
+            "href": f"/os/design?view=selected{run_qs}" if run_id else f"/os/design/modeling/{model_id}?tab=entities",
+        },
+        {
+            "key": "build",
+            "step": 2,
+            "label": "Build",
+            "detail": "Generate Snowflake DDL, dbt models & DQ checks",
+            "status": "NEXT",
+            "href": f"/os/build?view=selected{run_qs}" if run_id else f"/os/design/modeling/{model_id}?tab=publish",
+        },
+        {
+            "key": "validate",
+            "step": 3,
+            "label": "Validate",
+            "detail": f"{len([i for i in saved.get('issues', []) if i.get('severity') == 'ERROR'])} error(s) · Run validation & standards gate",
+            "status": "NEXT",
+            "href": f"/os/review?view=selected{run_qs}" if run_id else f"/os/design/modeling/{model_id}?tab=standards",
+        },
+        {
+            "key": "publish",
+            "step": 4,
+            "label": "Publish",
+            "detail": "Approve model, open Git PR & release",
+            "status": "NEXT",
+            "href": f"/os/release?view=selected{run_qs}" if run_id else f"/os/design/modeling/{model_id}?tab=publish",
+        },
+    ]
+
+    return {
+        "model_id": model_id,
+        "domain_id": domain_id,
+        "domain_name": domain_name,
+        "version": draft_version,
+        "etag": saved.get("etag", etag),
+        "spec": normalized,
+        "issues": saved.get("issues", []),
+        "counts": saved.get("counts", {}),
+        "breaking": saved.get("breaking", False),
+        "registry_applied": registry_applied,
+        "knowledge_saved": knowledge_saved,
+        "run_id": run_id,
+        "run_name": run_name,
+        "target_model": target_model,
+        "workflow_stages": workflow_stages,
+    }
+
 
 
 @router.get("/api/hub/domain-models/{model_id}/versions/{version}/comments")

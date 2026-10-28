@@ -33,7 +33,7 @@ export default async function People() {
 
   return (
     <>
-      <PageHeader eyebrow="Admin / Super admins only" title="People and personas"
+      <PageHeader eyebrow="Admin / Platform Admin" title="People and personas"
                   subtitle="Give people personas instead of roles. Each persona is a bundle of governance roles; the platform grants the roles and shows each person only the personas they hold. Anyone without a persona is a Viewer."
                   actions={<Btn href="/os/admin/settings?section=access">Advanced: roles and policies</Btn>} />
       <SourceError what="People" error={people.error} />
@@ -82,7 +82,7 @@ export default async function People() {
           <div className="border-t border-[var(--os-line)] px-5 py-4"><AddPerson options={options} /></div>
         </Card>
 
-        <Card title="Personas" subtitle="What each persona grants. Changing a bundle moves everyone who holds it; Super admin always grants SUPER_ADMIN." pad={false}
+        <Card title="Personas" subtitle="What each persona grants. Changing a bundle moves everyone who holds it; Platform Admin always grants SUPER_ADMIN." pad={false}
               action={<PreviewPersona persona="viewer" label="Viewer" />}>
           <div className="os-divide">
             {(personas.data?.personas ?? []).map((p) => (

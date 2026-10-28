@@ -41,6 +41,18 @@ export async function suggestColumns(id: string, spec: DmSpec, refresh = false) 
     send("POST", { spec, refresh })));
 }
 
+export async function evolveTableWithAi(
+  id: string,
+  body: { spec: DmSpec; instructions: string; domain?: string | null; table_type?: TmTableType },
+) {
+  return storeAction(() =>
+    api<TmRendered & { spec: DmSpec; issues: DmIssue[]; rationale: string; counts: Record<string, number> }>(
+      `${BASE}/${enc(id)}/evolve`,
+      send("POST", body),
+    ),
+  );
+}
+
 export async function loadTableDiff(id: string, to: number, from?: number | null) {
   return storeAction(() => api<DmDiff>(`${BASE}/${enc(id)}/diff?to=${to}${from ? `&from=${from}` : ""}`));
 }

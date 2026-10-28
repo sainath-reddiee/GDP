@@ -5,6 +5,7 @@ import { guard } from "@/lib/os/session";
 import { actMode, canSee } from "@/lib/os/access";
 import { Banner, Bar, Btn, Card, Empty, Kpi, PageHeader, SourceError, Tag, ago, type Tone } from "@/components/os/ui";
 import { BuildAllReady, BuildEndToEnd } from "@/components/os/build-run";
+import { DeleteRunButton } from "@/components/os/request-ui";
 import { cn } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -125,11 +126,12 @@ export default async function ReadyToBuild({ searchParams }: { searchParams: { b
                             <Bar value={r.percent} tone={r.percent === 100 ? "green" : "amber"} className="mt-1.5 h-1" />
                             {r.waiting && <div className="os-muted mt-1 text-[11px]">{r.waiting}</div>}
                           </div>
-                          <div className="flex items-start justify-end">
+                          <div className="flex items-start justify-end gap-1.5">
                             {(r.status === "READY" || r.status === "BUILDING") && mode !== "none"
                               ? <BuildEndToEnd key={`${r.run_id}-${r.status}`} runId={r.run_id} previewing={!!access.preview} disabled={r.status === "BUILDING" || mode !== "do"}
                                                label={mode === "do" ? "Build end to end" : "Needs RUN.OPERATE"} />
                               : next ? <Btn href={next.href}>{next.label} <ArrowRight className="h-3 w-3" /></Btn> : null}
+                            <DeleteRunButton runIds={[r.run_id]} iconOnly previewing={!!access.preview} />
                           </div>
                         </div>
                       );

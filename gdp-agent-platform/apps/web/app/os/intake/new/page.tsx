@@ -61,7 +61,7 @@ export default async function Intake({ searchParams }: { searchParams: { type?: 
   const head = (
     <>
       <PageHeader eyebrow={`${persona.label} / Request and define`} title="Create an onboarding request"
-                  subtitle="One intake for a source, a domain or a data product, new or enhanced. Link what already exists so the agents reuse it instead of re-entering it." />
+                  subtitle="Request a new or enhanced source, domain, or data product." />
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <div className="flex flex-wrap gap-2" role="tablist" aria-label="What is requested">
           {TYPES.map((t) => (
@@ -99,7 +99,7 @@ export default async function Intake({ searchParams }: { searchParams: { type?: 
       <>
         {head}
         <SourceError what="Domains" error={domains.error} />
-        <div className="grid gap-4 xl:grid-cols-[minmax(0,1.45fr)_minmax(0,1fr)]">
+        <div className="max-w-3xl">
           <Card title="Enhance a domain" subtitle={type.enhance}>
             <div data-testid="domain-enhance" className="grid gap-4">
               <AutoForm action="/os/intake/new">
@@ -108,25 +108,23 @@ export default async function Intake({ searchParams }: { searchParams: { type?: 
                 <label className="os-label" htmlFor="domain">Domain to enhance</label>
                 <select id="domain" name="domain" defaultValue={domain?.domain_id ?? ""} className="os-input">
                   <option value="">Choose an onboarded domain...</option>
-                  {domains.data.map((d) => <option key={d.domain_id} value={d.domain_id}>{d.domain_name}{d.description ? ` · ${d.description.slice(0, 60)}` : ""}</option>)}
+                  {domains.data.map((d) => <option key={d.domain_id} value={d.domain_id}>{d.domain_name}</option>)}
                 </select>
               </AutoForm>
               {domain && entities.length > 0 && (
                 <div className="flex flex-wrap items-center gap-1.5 text-[11px]"><span className="os-faint">Its model today:</span>
                   {entities.map((e) => <Tag key={e.entity_name} tone={e.kind === "HUB" ? "green" : "neutral"}>{e.entity_name}</Tag>)}</div>
               )}
-              <SubmitRequest type="DOMAIN" intent="ENHANCE" domainId={domain?.domain_id ?? null} domainName={domain?.domain_name ?? null} picked={[]} previewing={!!access.preview} />
+              <SubmitRequest
+                type="DOMAIN"
+                intent="ENHANCE"
+                domainId={domain?.domain_id ?? null}
+                domainName={domain?.domain_name ?? null}
+                picked={[]}
+                availableSources={sources.data.sources.map((s) => ({ source_system_id: s.source_system_id, source_name: s.source_system_name }))}
+                previewing={!!access.preview}
+              />
             </div>
-          </Card>
-          <Card title="Where the request goes" subtitle="Routed by the platform, step by step">
-            <ol className="flex flex-col gap-2.5 text-[12px]">
-              {ENHANCE_DOMAIN_ROUTE.map((x, i) => (
-                <li key={x.t} className="flex gap-2.5">
-                  <span className="os-faint grid h-6 w-6 shrink-0 place-items-center rounded-full bg-[var(--os-neutral-bg)] text-[11px] font-extrabold">{i + 1}</span>
-                  <span><b>{x.t}</b><span className="os-faint block text-[11px]">{x.s}</span></span>
-                </li>
-              ))}
-            </ol>
           </Card>
         </div>
       </>
@@ -138,24 +136,21 @@ export default async function Intake({ searchParams }: { searchParams: { type?: 
     return (
       <>
         {head}
-        <div className="grid gap-4 xl:grid-cols-[minmax(0,1.45fr)_minmax(0,1fr)]">
+        <div className="max-w-3xl">
           <Card title="New domain" subtitle={type.hint}>
             <div data-testid="domain-request">
-              <SubmitRequest type="DOMAIN" domainId={null} domainName={null} picked={[]} previewing={!!access.preview} />
+              <SubmitRequest
+                type="DOMAIN"
+                domainId={null}
+                domainName={null}
+                picked={[]}
+                availableSources={sources.data.sources.map((s) => ({ source_system_id: s.source_system_id, source_name: s.source_system_name }))}
+                previewing={!!access.preview}
+              />
             </div>
             <p className="os-faint mt-4 border-t border-[var(--os-line)] pt-3 text-[11.5px]">
               Domains are onboarded by the Data OS Administrator. For a domain already on the platform, <Link href={link("domain", "enhance")} className="underline">enhance it</Link> or file a <Link href={link("source", "new")} className="underline">source request</Link>.
             </p>
-          </Card>
-          <Card title="Where the request goes" subtitle="Routed by the platform, step by step">
-            <ol className="flex flex-col gap-2.5 text-[12px]">
-              {DOMAIN_ROUTE.map((x, i) => (
-                <li key={x.t} className="flex gap-2.5">
-                  <span className="os-faint grid h-6 w-6 shrink-0 place-items-center rounded-full bg-[var(--os-neutral-bg)] text-[11px] font-extrabold">{i + 1}</span>
-                  <span><b>{x.t}</b><span className="os-faint block text-[11px]">{x.s}</span></span>
-                </li>
-              ))}
-            </ol>
           </Card>
         </div>
       </>

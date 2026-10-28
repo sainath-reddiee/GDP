@@ -1,8 +1,8 @@
 import type { RunSummary } from "@/lib/types";
 import { GATES } from "@/lib/run-labels";
 import { LIFECYCLE, type StepKey } from "@/lib/os/lifecycle";
-import { has, type Grants } from "@/lib/os/access";
-import { waitRole, type OnboardingRequest, type RequestItem, type Wait } from "@/lib/os/requests";
+import { canSee, has, screenOfPath, type Grants } from "@/lib/os/access";
+import { actHref, enhancesSource, waitRole, type OnboardingRequest, type RequestItem, type RequestStage, type Wait } from "@/lib/os/requests";
 import { PERSONAS } from "@/lib/os/personas";
 
 // Which stage board a workflow belongs on, whether it waits on the viewer, and where Home sends a click. Shared by Home
@@ -40,16 +40,75 @@ export function mergeRuns<T extends { run_id: string }>(...lists: T[][]): T[] {
   return lists.flat().filter((r) => (seen.has(r.run_id) ? false : (seen.add(r.run_id), true)));
 }
 
-/** A run mapped to several tables fans out into its table runs; the leaf runs are the ones boards list and work on. */
-export function leafRuns<T extends { run_id: string; parent_run_id?: string | null; is_archived?: boolean; current_state?: string }>(runs: T[]): T[] {
+const runStateRank = (state?: string): number => {
+  const s = (state ?? "").toUpperCase();
+  if (["COMPLETED", "DEPLOYED", "PIPELINE_ENABLED", "DBT_APPROVED"].includes(s)) return 5;
+  if (["DBT_REVIEW", "VALIDATION_PASSED"].includes(s)) return 4;
+  if (["VALIDATION_RUNNING", "VALIDATION_PENDING", "VALIDATION_FAILED", "DBT_GENERATING", "DBT_PENDING", "SODA_APPROVED", "SODA_REVIEW", "SODA_PENDING", "STTM_APPROVED"].includes(s)) return 3;
+  if (/^(STTM|MAPPING|DOMAIN|PROFILING)_/.test(s)) return 2;
+  if (s === "CANCELLED") return 0;
+  return 1;
+};
+
+const runTargetKey = (r: { target_model?: string | null; run_name?: string }): string => {
+  if (r.target_model) {
+    const parts = r.target_model.split(".");
+    return (parts[parts.length - 1] || r.target_model).trim().toUpperCase();
+  }
+  if (r.run_name?.includes(":")) {
+    return (r.run_name.split(":").pop() || "").trim().toUpperCase();
+  }
+  return "";
+};
+
+/** A run mapped to several tables fans out into its table runs; the leaf runs are the ones boards list and work on.
+ *  Top-level sibling runs targeting the same (domain, source, target table) are deduplicated so superseded runs don't duplicate pills. */
+export function leafRuns<T extends {
+  run_id: string;
+  parent_run_id?: string | null;
+  is_archived?: boolean;
+  current_state?: string;
+  domain_name?: string | null;
+  source_system_name?: string | null;
+  target_model?: string | null;
+  run_name?: string;
+  created_at?: string | null;
+  updated_at?: string | null;
+}>(runs: T[]): T[] {
   const parents = new Set(
     runs.filter((r) => !r.is_archived && r.current_state !== "CANCELLED").map((r) => r.parent_run_id).filter(Boolean) as string[],
   );
-  return runs.filter((r) => !parents.has(r.run_id));
+  const leaves = runs.filter((r) => !parents.has(r.run_id));
+  const bestByTarget = new Map<string, T>();
+  for (const r of leaves) {
+    if (r.parent_run_id || !r.domain_name || !r.source_system_name) continue;
+    const target = runTargetKey(r);
+    if (!target) continue;
+    const key = `${r.domain_name.toUpperCase()}::${r.source_system_name.toUpperCase()}::${target}`;
+    const prev = bestByTarget.get(key);
+    if (!prev) {
+      bestByTarget.set(key, r);
+      continue;
+    }
+    const rRank = runStateRank(r.current_state);
+    const pRank = runStateRank(prev.current_state);
+    const rTs = r.created_at ?? r.updated_at ?? "";
+    const pTs = prev.created_at ?? prev.updated_at ?? "";
+    if (rRank > pRank || (rRank === pRank && rTs > pTs)) {
+      bestByTarget.set(key, r);
+    }
+  }
+  const winners = new Set(Array.from(bestByTarget.values()).map((r) => r.run_id));
+  return leaves.filter((r) => {
+    if (r.parent_run_id || !r.domain_name || !r.source_system_name) return true;
+    const target = runTargetKey(r);
+    if (!target) return true;
+    return winners.has(r.run_id);
+  });
 }
 
 /** Resolves a run id from the URL: when it names a parent run whose work continues in its table runs, picks the
- *  table run waiting on the viewer (or at the board's stage). */
+ *  table run waiting on the viewer (or at the board's stage). If it names a superseded sibling run, resolves to the active sibling. */
 export function resolveBoardRun(runs: RunSummary[], runId: string | undefined,
                                 access: Grants & { persona?: { states: string[] } }, stage: Stage): RunSummary | null {
   if (!runId) return null;
@@ -60,7 +119,21 @@ export function resolveBoardRun(runs: RunSummary[], runId: string | undefined,
       ?? kids.find((r) => r.current_state !== "COMPLETED" && r.current_state !== "DBT_APPROVED")
       ?? kids[0];
   }
-  return runs.find((r) => r.run_id === runId) ?? null;
+  const exact = runs.find((r) => r.run_id === runId) ?? null;
+  if (!exact) return null;
+  const deduped = leafRuns(runs.filter((r) => !r.is_archived && r.current_state !== "CANCELLED"));
+  if (deduped.some((r) => r.run_id === exact.run_id)) return exact;
+  const siblings = deduped.filter(
+    (r) => !r.parent_run_id && r.domain_name && r.source_system_name
+      && r.domain_name === exact.domain_name && r.source_system_name === exact.source_system_name,
+  );
+  if (siblings.length) {
+    return siblings.find((r) => runNeedsMe(r, access))
+      ?? siblings.find((r) => stageOfRun(r) === stage)
+      ?? siblings.find((r) => r.current_state !== "COMPLETED" && r.current_state !== "DBT_APPROVED")
+      ?? siblings[0];
+  }
+  return exact;
 }
 
 /** A run waits on the viewer: a gate they decide, a failed validation or run they operate, or a step their persona
@@ -118,11 +191,56 @@ export const workflowHref = (r: Pick<OnboardingRequest, "request_id">) =>
 export function stageHref(r: OnboardingRequest): string | null {
   if (r.status !== "OPEN") return null;
   const run = requestRun(r);
-  if (r.stage === "ENABLE") return "/os/enable";
+  if (r.stage === "DOMAIN") return `/os/enable/new-domain?${new URLSearchParams({ request: r.request_id })}`;
+  if (r.stage === "ENABLE") {
+    const w = r.waits[0];
+    const item = w ? r.items.find((i) => i.item_id === w.item_id) : undefined;
+    const act = w ? actHref(w, item, r.domain_id, r.request_type === "PRODUCT", r.request_id, enhancesSource(r)) : null;
+    return act ?? "/os/enable";
+  }
   if (r.stage === "DESIGN" && run) return `/os/design?${new URLSearchParams({ view: "selected", run })}`;
   if (r.stage === "BUILD" && run) return `/os/build?${new URLSearchParams({ view: "selected", run })}`;
-  if (r.stage === "REVIEW" && run) return `/os/review?run=${encodeURIComponent(run)}`;
+  if (r.stage === "REVIEW" && run) return `/os/review?${new URLSearchParams({ view: "selected", run })}`;
   return null;
+}
+
+/** Where a specific stage pill on a request's progress track navigates to. */
+export function requestStepHref(
+  r: OnboardingRequest,
+  stage: RequestStage,
+  access?: Grants,
+  onIntake = false,
+): string {
+  const run = requestRun(r);
+  const intakeUrl = workflowHref(r);
+  let target = intakeUrl;
+  if (stage === "DOMAIN") {
+    target = r.domain_id
+      ? `/os/knowledge/domains/${r.domain_id}`
+      : `/os/enable/new-domain?${new URLSearchParams({ request: r.request_id })}`;
+  } else if (stage === "NEW" || stage === "ENABLE") {
+    if (onIntake && stage === "ENABLE") {
+      const w = r.waits[0];
+      const item = w ? r.items.find((i) => i.item_id === w.item_id) : undefined;
+      const act = w ? actHref(w, item, r.domain_id, r.request_type === "PRODUCT", r.request_id, enhancesSource(r)) : null;
+      target = act ?? "/os/enable";
+    } else {
+      target = intakeUrl;
+    }
+  } else if (stage === "DESIGN") {
+    target = run ? `/os/design?${new URLSearchParams({ view: "selected", run })}` : "/os/design";
+  } else if (stage === "BUILD") {
+    target = run ? `/os/build?${new URLSearchParams({ view: "selected", run })}` : "/os/build";
+  } else if (stage === "REVIEW") {
+    target = run ? `/os/review?${new URLSearchParams({ view: "selected", run })}` : "/os/review";
+  } else if (stage === "DONE") {
+    target = run ? `/os/release?${new URLSearchParams({ view: "selected", run })}` : "/os/release";
+  }
+  if (access) {
+    const screen = screenOfPath(target.split("?")[0]);
+    if (screen && !canSee(access, screen.key)) return intakeUrl;
+  }
+  return target;
 }
 
 /** Open requests by intent, for the in-flight counts beside New and Enhance. */
