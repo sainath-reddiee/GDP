@@ -66,8 +66,8 @@ export function SourceIntakeForm({ enhance, domains, sources, runs: _runs, initi
 }) {
   const router = useRouter();
   const { pending, outcome, run } = useRequestCall();
-  const switchHref = (toEnhance: boolean, sourceIds: string[]) => {
-    const q = new URLSearchParams({ type: "source", intent: toEnhance ? "enhance" : "new" });
+  const switchHref = (toEnhance: boolean, currentDomainId: string | null, sourceIds: string[]) => {
+    const q = new URLSearchParams({ type: "source", intent: toEnhance ? "enhance" : "new", ...(currentDomainId ? { domain: currentDomainId } : {}) });
     for (const id of sourceIds) q.append("source", id);
     return `/os/intake/new?${q}`;
   };
@@ -75,12 +75,14 @@ export function SourceIntakeForm({ enhance, domains, sources, runs: _runs, initi
   const [outcomeText, setOutcomeText] = useState("");
   const [priority, setPriority] = useState<"LOW" | "MEDIUM" | "HIGH">("MEDIUM");
   const [neededBy, setNeededBy] = useState("");
+  const [domainId, setDomainId] = useState(initialDomain ?? "");
   const [picked, setPicked] = useState<string[]>(initialSources);
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [named, setNamed] = useState<{ name: string; note: string }[]>([]);
   const [draft, setDraft] = useState({ name: "", note: "" });
   const [dupes, setDupes] = useState<Duplicate[] | null>(null);
 
+  const domain = domains.find((d) => d.domain_id === domainId) ?? null;
   const usable = enhance ? picked.filter((id) => sources.some((s) => s.id === id)) : [];
   const chosen = sources.filter((s) => usable.includes(s.id));
   const effectiveNamed = useMemo(() => {
@@ -93,27 +95,16 @@ export function SourceIntakeForm({ enhance, domains, sources, runs: _runs, initi
     return list;
   }, [enhance, named, draft.name, draft.note]);
 
-  const resolvedDomainId = useMemo(() => {
-    if (initialDomain) return initialDomain;
-    for (const s of chosen) {
-      const feedDomain = s.feeds[0]?.domain;
-      if (feedDomain) {
-        const match = domains.find((d) => d.domain_name === feedDomain);
-        if (match) return match.domain_id;
-      }
-    }
-    return domains.find((d) => d.domain_name === "GENERAL")?.domain_id ?? domains[0]?.domain_id ?? null;
-  }, [initialDomain, chosen, domains]);
-
   const sourceCount = usable.length + effectiveNamed.length;
   const missing = !title.trim() ? "Give the request a title."
+    : !domain ? "Choose the domain."
     : !sourceCount ? (enhance ? "Pick the source to enhance." : "Enter the source name.")
     : enhance && usable.some((id) => !(notes[id] ?? "").trim()) ? "Say what to add for the selected source." : "";
 
   const submit = (allowDuplicate = false) => {
     const body: NewRequestInput = {
       request_type: "SOURCE", intent: enhance ? "ENHANCE" : "NEW", title: title.trim(), business_outcome: outcomeText.trim() || undefined,
-      priority, needed_by: neededBy || null, domain_id: resolvedDomainId, proposed_domain: null, allow_duplicate: allowDuplicate,
+      priority, needed_by: neededBy || null, domain_id: domain?.domain_id ?? null, proposed_domain: null, allow_duplicate: allowDuplicate,
       sources: [
         ...usable.map((id) => ({ source_system_id: id, note: (notes[id] ?? "").trim() || undefined })),
         ...effectiveNamed.map((n) => ({ source_name: n.name, note: n.note || undefined })),
@@ -137,7 +128,7 @@ export function SourceIntakeForm({ enhance, domains, sources, runs: _runs, initi
           <div className="mt-3 grid gap-3 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)]">
             <div><label className="os-label" htmlFor="rq-title">Request title</label>
               <input id="rq-title" value={title} onChange={(e) => setTitle(e.target.value)} maxLength={256} disabled={previewing}
-                     placeholder={enhance ? "e.g. Salesforce: add campaign tables" : "e.g. Opportunity from Salesforce"} className="os-input" /></div>
+                     placeholder={enhance ? "e.g. Salesforce: add campaign tables" : `e.g. ${domain?.domain_name ?? "Opportunity"} from Salesforce`} className="os-input" /></div>
             <div><label className="os-label" htmlFor="rq-priority">Priority</label>
               <select id="rq-priority" value={priority} onChange={(e) => setPriority(e.target.value as typeof priority)} disabled={previewing} className="os-input">
                 <option value="LOW">Low</option><option value="MEDIUM">Medium</option><option value="HIGH">High</option>
@@ -150,12 +141,28 @@ export function SourceIntakeForm({ enhance, domains, sources, runs: _runs, initi
                       placeholder="What the business gets, the consumers and their SLA" className="os-input resize-y" /></div>
         </section>
 
-        {/* 2. which source */}
+        {/* 2. where it goes, and which source */}
         <section className="os-card os-rise p-5" aria-labelledby="rq-sources" data-testid="attach-sources">
           <h2 id="rq-sources" className="text-[14.5px] font-extrabold">{enhance ? "Source to enhance" : "Source to onboard"}</h2>
           <p className="os-muted mt-0.5 text-[12px]">
-            {enhance ? "Choose the onboarded source and specify what to add: tables, columns or changes." : "Specify the new source system to onboard and what is needed from it."}
+            {enhance ? "Choose the business domain and the onboarded source, and specify what to add: tables, columns or changes." : "Choose the business domain and specify the new source system to onboard and what is needed from it."}
           </p>
+
+          <div className="mt-3">
+            <label className="os-label" htmlFor="domain">Business domain</label>
+            <select
+              id="domain"
+              value={domainId}
+              onChange={(e) => setDomainId(e.target.value)}
+              disabled={previewing}
+              className="os-input"
+            >
+              <option value="">Choose an onboarded domain...</option>
+              {domains.map((d) => (
+                <option key={d.domain_id} value={d.domain_id}>{d.domain_name}</option>
+              ))}
+            </select>
+          </div>
 
           {enhance ? (
             <div className="mt-3 flex flex-col gap-3" data-testid="sources-feeding">
@@ -241,7 +248,7 @@ export function SourceIntakeForm({ enhance, domains, sources, runs: _runs, initi
 
         <p className="os-faint text-[11px]">
           {enhance ? "Need a source that is not onboarded yet? " : "Asking for more from a source already onboarded? "}
-          <Link className="font-bold underline" href={switchHref(!enhance, usable)}>{enhance ? "File a New source request" : "Enhance it instead"}</Link>.
+          <Link className="font-bold underline" href={switchHref(!enhance, domain?.domain_id ?? null, usable)}>{enhance ? "File a New source request" : "Enhance it instead"}</Link>.
         </p>
       </div>
     </div>
