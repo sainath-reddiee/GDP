@@ -35,7 +35,7 @@ import uuid
 from datetime import date
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Body, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
@@ -267,21 +267,34 @@ def refresh(db: Db, requests: List[Dict[str, Any]], write: bool = True) -> List[
     source_ids = sorted({i["source_system_id"] for i in all_items if i.get("source_system_id")})
     runs, children, by_source = _runs(db, run_ids, source_ids)
     by_id = {r["request_id"]: r for r in requests}
+    taken_run_ids = set(run_ids)
 
     # a ready source with no run gets the run that already onboards it into the request's domain
     linked_now = False
     for it in all_items:
         req = by_id[it["request_id"]]
         if write and not it.get("run_id") and it.get("source_system_id") and not it.get("removed_at") and req.get("status") == rq.OPEN:
+            created_at = str(req.get("created_at") or "")
+            candidates = [
+                c for c in by_source.get(it["source_system_id"], [])
+                if c["run_id"] not in taken_run_ids
+                and not (
+                    created_at
+                    and str(c.get("current_state") or "").upper() in rq.DONE_STATES
+                    and str(c.get("created_at") or "")
+                    and str(c.get("created_at") or "") < created_at
+                )
+            ]
             # an Enhance source request links only a run started after it was filed, never the run that first
             # onboarded the source (that one is done, and would close the request at once)
-            run = rq.pick_run(it["source_system_id"], req.get("domain_id"), by_source.get(it["source_system_id"], []),
-                              after=str(req.get("created_at") or "") if rq.enhances_source(req) else None)
+            run = rq.pick_run(it["source_system_id"], req.get("domain_id"), candidates,
+                              after=created_at if rq.enhances_source(req) else None)
             if run:
                 db.execute("UPDATE CORE.ONBOARDING_REQUEST_ITEM SET RUN_ID = %s, UPDATED_AT = CURRENT_TIMESTAMP() WHERE ITEM_ID = %s AND RUN_ID IS NULL",
                            (run["run_id"], it["item_id"]))
                 _event(db, it["request_id"], "RUN_LINKED", f"Found the run {run['run_name']}", item_id=it["item_id"], to=run["run_id"], automatic=True)
                 it["run_id"] = run["run_id"]
+                taken_run_ids.add(run["run_id"])
                 linked_now = True
     # a run linked just now: load it with its table runs (a multi-table run stands where its table runs stand)
     if linked_now or any(i.get("run_id") and i["run_id"] not in runs for i in all_items):
@@ -671,19 +684,40 @@ def link_run(request_id: str, item_id: str, body: LinkRun, db: Db = Depends(curr
     return _detail(db, request_id)
 
 
-@router.post("/api/onboarding-requests/{request_id}/sources/{item_id}/enhance-run")
-@_guard_deployed
-def start_enhance_run(request_id: str, item_id: str, db: Db = Depends(current_db)):
-    """The Data Designer starts the enhancement run of an Enhance source request: a new run of the source already
-    onboarded, in the request's domain, carrying what the request asks to add. The run is linked to the source."""
+class StartRequestRunBody(BaseModel):
+    run_name: Optional[str] = Field(default=None, max_length=256)
+    tables: List[str] = Field(default_factory=list, max_length=500)
+    targets: List[Dict[str, Any]] = Field(default_factory=list, max_length=50)
+    modeling_standard: Optional[str] = Field(default=None, max_length=16)
+    proposed_name: Optional[str] = Field(default=None, max_length=255)
+    proposed_schema: Optional[str] = Field(default=None, max_length=255)
+    autopilot: bool = False
+
+
+def _start_item_run(
+    request_id: str,
+    item_id: str,
+    body: Optional[StartRequestRunBody],
+    db: Db,
+    require_enhance: bool,
+) -> Dict[str, Any]:
+    from app import main as m
     from app.main import CreateRun, create_run
 
     who = _who(db)
     r = _one(db, who, request_id)
     _open(r)
-    _need(_holds(who, "RUN.CREATE"), "starting an enhancement run", "the RUN.CREATE privilege")
-    if not rq.enhances_source(r):
-        raise HTTPException(422, "Only an Enhance source request starts an enhancement run.")
+    is_enhance = rq.enhances_source(r)
+    if require_enhance:
+        _need(_holds(who, "RUN.CREATE"), "starting an enhancement run", "the RUN.CREATE privilege")
+        if not is_enhance:
+            raise HTTPException(422, "Only an Enhance source request starts an enhancement run.")
+    else:
+        _need(
+            _holds(who, "RUN.CREATE", "SOURCE.CONNECT", "RUN.OPERATE"),
+            "starting a request run",
+            "RUN.CREATE, SOURCE.CONNECT or RUN.OPERATE",
+        )
     it = _item(db, request_id, item_id)
     if it.get("removed_at"):
         raise HTTPException(409, f"{it['source_name']} was removed from this request.")
@@ -693,21 +727,104 @@ def start_enhance_run(request_id: str, item_id: str, db: Db = Depends(current_db
     if not src:
         raise HTTPException(422, f"{it['source_name']} is not registered: enhancing needs a source already on the platform.")
     domain = _domains(db, [r["domain_id"]]).get(r["domain_id"]) if r.get("domain_id") else None
-    name = f"{src['source_system_name']} {domain['domain_name'] if domain else ''} enhancement".replace("  ", " ")[:256]
-    intent = {
-        "source": {"origin": "snowflake", "source_system_name": src["source_system_name"], "source_type": src.get("source_type"),
-                   "database": src.get("database_name"), "schema": src.get("schema_name")},
-        "domain_id": r.get("domain_id"),
-        "enhance": {"request_id": request_id, "scope": it.get("source_note")},
+    default_suffix = "enhancement" if is_enhance else "onboarding"
+    default_name = f"{src['source_system_name']} {domain['domain_name'] if domain else ''} {default_suffix}".replace("  ", " ").strip()[:256]
+    name = (body.run_name.strip() if body and body.run_name and body.run_name.strip() else default_name)[:256]
+    tables = sorted(set(body.tables)) if body and body.tables else []
+    targets = list(body.targets) if body and body.targets else []
+    std = body.modeling_standard if body and body.modeling_standard in ("GDP", "GENERIC") else None
+    proposed = None
+    if tables and not targets and body and (body.proposed_name or body.proposed_schema):
+        try:
+            proposed = m._register_proposed_target(db, src, tables, r.get("domain_id"), body.proposed_name, body.proposed_schema)
+        except Exception:
+            proposed = None
+
+    source_intent: Dict[str, Any] = {
+        "origin": "snowflake",
+        "source_system_name": src["source_system_name"],
+        "source_type": src.get("source_type"),
+        "database": src.get("database_name"),
+        "schema": src.get("schema_name"),
     }
-    created = create_run(CreateRun(run_name=name, domain_id=r.get("domain_id"), intent=intent), db)
+    if tables:
+        source_intent["tables"] = tables
+    intent: Dict[str, Any] = {
+        "source": source_intent,
+        "domain_id": r.get("domain_id"),
+    }
+    if is_enhance:
+        intent["enhance"] = {"request_id": request_id, "scope": it.get("source_note")}
+    if tables or targets or proposed:
+        intent.update({
+            "path": "map_existing" if targets else "profile_suggest",
+            "run_name": name,
+            "proposed_target": proposed,
+            "model_existing": bool(targets),
+            "targets": targets,
+            "modeling_standard": std or "GENERIC",
+            "target": {"storage_type": "IN_PLACE"},
+        })
+    target_model = targets[0].get("fqn") if targets else ((proposed or {}).get("fqn") if proposed else None)
+    create_kwargs: Dict[str, Any] = {"run_name": name, "domain_id": r.get("domain_id"), "intent": intent}
+    if target_model:
+        create_kwargs["target_model"] = target_model
+    if std:
+        create_kwargs["modeling_standard"] = std
+    created = create_run(CreateRun(**create_kwargs), db)
     run_id = (created or {}).get("run_id") or (created or {}).get("RUN_ID")
     if not run_id:
         raise HTTPException(502, "The run could not be created.")
+    if targets:
+        try:
+            m._lock_selected_targets(db, run_id, r.get("domain_id"), targets)
+        except Exception:
+            pass
     db.execute("UPDATE CORE.ONBOARDING_REQUEST_ITEM SET RUN_ID = %s, UPDATED_AT = CURRENT_TIMESTAMP() WHERE ITEM_ID = %s", (run_id, item_id))
-    note = "Enhancement run started" + (f"; the source could not be attached yet: {created['registration_error']}" if created.get("registration_error") else "")
+    label_prefix = "Enhancement run started" if is_enhance else "Onboarding run started"
+    note = label_prefix + (f"; the source could not be attached yet: {created['registration_error']}" if created.get("registration_error") else "")
     _event(db, request_id, "RUN_LINKED", note[:4000], item_id=item_id, to=run_id)
+    if tables and not created.get("registration_error"):
+        if body and body.autopilot:
+            try:
+                from app import autopilot_api
+
+                autopilot_api._start(db, run_id)
+            except Exception:
+                pass
+        else:
+            try:
+                prepared = m.prepare_source(run_id, m.AccessRequest(selected=tables), db)
+                if prepared.get("passed"):
+                    m.run_profiling(run_id, None, db)
+            except Exception:
+                pass
     return _detail(db, request_id)
+
+
+@router.post("/api/onboarding-requests/{request_id}/sources/{item_id}/enhance-run")
+@_guard_deployed
+def start_enhance_run(
+    request_id: str,
+    item_id: str,
+    body: Optional[StartRequestRunBody] = Body(default=None),
+    db: Db = Depends(current_db),
+):
+    """The Data Designer starts the enhancement run of an Enhance source request: a new run of the source already
+    onboarded, in the request's domain, carrying what the request asks to add. The run is linked to the source."""
+    return _start_item_run(request_id, item_id, body, db, require_enhance=True)
+
+
+@router.post("/api/onboarding-requests/{request_id}/sources/{item_id}/start-run")
+@_guard_deployed
+def start_request_run(
+    request_id: str,
+    item_id: str,
+    body: Optional[StartRequestRunBody] = Body(default=None),
+    db: Db = Depends(current_db),
+):
+    """Start a pipeline run for a registered source on an onboarding request (New or Enhance) with selected tables and target models."""
+    return _start_item_run(request_id, item_id, body, db, require_enhance=False)
 
 
 @router.post("/api/onboarding-requests/{request_id}/sources/{item_id}/remove")

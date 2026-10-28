@@ -40,8 +40,23 @@ export const linkRequestSource = async (id: string, itemId: string, sourceId: st
 export const linkRequestRun = async (id: string, itemId: string, runId: string | null) =>
   call(`/api/onboarding-requests/${id}/sources/${itemId}/run`, { run_id: runId });
 export const removeRequestSource = async (id: string, itemId: string) => call(`/api/onboarding-requests/${id}/sources/${itemId}/remove`, {});
+export type StartRequestRunOptions = {
+  run_name?: string | null;
+  tables?: string[];
+  targets?: { fqn: string; target_table: string; domain_name?: string | null; target_table_id?: string | null }[];
+  modeling_standard?: "GDP" | "GENERIC";
+  proposed_name?: string | null;
+  proposed_schema?: string | null;
+  autopilot?: boolean;
+};
+
 /** An Enhance source request: the Data Designer starts the enhancement run of an onboarded source (the delta flow). */
-export const startEnhancementRun = async (id: string, itemId: string) => call(`/api/onboarding-requests/${id}/sources/${itemId}/enhance-run`, {});
+export const startEnhancementRun = async (id: string, itemId: string, options: StartRequestRunOptions = {}) =>
+  call(`/api/onboarding-requests/${id}/sources/${itemId}/enhance-run`, options);
+
+/** Start a pipeline run for a registered source on an onboarding request (New or Enhance) with selected tables and target models. */
+export const startRequestRun = async (id: string, itemId: string, options: StartRequestRunOptions = {}) =>
+  call(`/api/onboarding-requests/${id}/sources/${itemId}/start-run`, options);
 export const linkRequestDomain = async (id: string, domainId: string) => call(`/api/onboarding-requests/${id}/domain`, { domain_id: domainId });
 export const commentRequest = async (id: string, note: string) => call(`/api/onboarding-requests/${id}/comment`, { note });
 export const cancelRequest = async (id: string, note: string) => call(`/api/onboarding-requests/${id}/cancel`, { note });
@@ -99,14 +114,38 @@ export async function startSourceRunForRequest(input: {
   domainId?: string | null;
   domainName?: string | null;
   note?: string | null;
+  runName?: string | null;
+  tables?: string[];
+  targets?: { fqn: string; target_table: string; domain_name?: string | null; target_table_id?: string | null }[];
+  modelingStandard?: "GDP" | "GENERIC";
+  proposedName?: string | null;
+  proposedSchema?: string | null;
+  autopilot?: boolean;
 }): Promise<{ ok: true; runId: string } | { ok: false; error: string }> {
   try {
-    const runName = `${input.sourceName}${input.domainName ? ` · ${input.domainName}` : ""}`.slice(0, 256);
+    const runName = (input.runName?.trim() || `${input.sourceName}${input.domainName ? ` · ${input.domainName}` : ""}`).slice(0, 256);
+    const viaRequest = await startRequestRun(input.requestId, input.itemId, {
+      run_name: runName,
+      tables: input.tables ?? [],
+      targets: input.targets ?? [],
+      modeling_standard: input.modelingStandard ?? "GENERIC",
+      proposed_name: input.proposedName ?? null,
+      proposed_schema: input.proposedSchema ?? null,
+      autopilot: input.autopilot ?? false,
+    });
+    if (viaRequest.ok) {
+      const linkedItem = viaRequest.data.items.find((i) => i.item_id === input.itemId);
+      const runId = linkedItem?.active_run_id ?? linkedItem?.run_id ?? "";
+      revalidatePath("/os", "layout");
+      return { ok: true, runId };
+    }
     const created = await api<{ run_id?: string; RUN_ID?: string }>("/api/runs", {
       method: "POST",
       body: JSON.stringify({
         run_name: runName,
         domain_id: input.domainId ?? null,
+        target_model: input.targets?.[0]?.fqn ?? undefined,
+        modeling_standard: input.modelingStandard ?? undefined,
         intent: {
           source: {
             origin: "snowflake",
@@ -114,7 +153,9 @@ export async function startSourceRunForRequest(input: {
             source_type: input.sourceType ?? "SNOWFLAKE",
             database: input.databaseName ?? null,
             schema: input.schemaName ?? null,
+            ...(input.tables?.length ? { tables: input.tables } : {}),
           },
+          ...(input.targets?.length ? { targets: input.targets, model_existing: true, path: "map_existing" } : {}),
           domain_id: input.domainId ?? null,
           request_id: input.requestId,
           scope: input.note ?? null,

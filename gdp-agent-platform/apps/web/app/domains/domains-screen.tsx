@@ -4,6 +4,7 @@ import { api } from "@/lib/api";
 import { displayDomain } from "@/lib/catalog-display";
 import { ago } from "../skills/types";
 import { Avatars, cleanDescription, DomainMark } from "./domain-ui";
+import { PurgeDeletedDomainsButton } from "./domain-tools";
 import { PackEditor } from "./pack-editor";
 
 import { mdmBadge, type MdmRole } from "@/lib/layers";
@@ -34,10 +35,11 @@ export async function DomainsGrid({ showDeleted }: { showDeleted: boolean }) {
       <PackEditor domains={named.filter((d) => d.active_flag && d.domain_name !== "GDP")
         .map((d) => ({ domain_id: d.domain_id, domain_name: d.domain_name, label: displayDomain(d.domain_name) ?? d.domain_name }))} />
       {deletedCount > 0 && (
-        <div className="flex justify-end text-xs">
+        <div className="flex flex-wrap items-center justify-end gap-3 text-xs">
           <Link href={showDeleted ? "/os/knowledge?view=domains" : "/os/knowledge?view=domains&deleted=1"} className="text-primary hover:underline">
             {showDeleted ? "Back to active domains" : `Show deleted domains (${deletedCount})`}
           </Link>
+          <PurgeDeletedDomainsButton count={deletedCount} />
         </div>
       )}
       {visible.length === 0 && (

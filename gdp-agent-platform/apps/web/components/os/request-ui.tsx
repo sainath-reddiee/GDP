@@ -2,14 +2,16 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useState, useTransition, type ReactNode } from "react";
-import { Ban, Check, Link2, Loader2, MessageSquare, Play, Plus, RotateCcw, Send, Trash2, Unlink, X } from "lucide-react";
+import { useEffect, useMemo, useState, useTransition, type ReactNode } from "react";
+import { Ban, Check, Layers, Link2, Loader2, MessageSquare, Play, Plus, RotateCcw, Send, Table2, Trash2, Unlink, X } from "lucide-react";
 import {
   addRequestSource, cancelRequest, commentRequest, createRequest, deleteRequestAction, deleteRunsAction, linkRequestDomain, linkRequestRun, linkRequestSource, rejectRequest,
   removeRequestSource, reopenRequest, startEnhancementRun, startSourceRunForRequest, uploadRequestFiles, type NewRequestInput, type RequestResult,
 } from "@/app/os/requests/actions";
+import { analyzeTables, loadCatalogInventory, loadOverview } from "@/app/sources/actions";
 import { FilePicker, formOf } from "@/components/os/request-files";
 import type { Duplicate, RequestDetail, RequestItem } from "@/lib/os/requests";
+import { DEFAULT_BANDS, type AnalyzeResult, type CatalogInventory } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 // The request controls of the /os screens. Each one calls the API (app/os/requests/actions.ts), which checks who may
@@ -59,82 +61,676 @@ export function LiveWorkflowRefresh({ active }: { active: boolean }) {
   return null;
 }
 
-/** An Enhance source request's next step for the Data Designer: start the enhancement run of the onboarded source,
- *  carrying what the request asks to add. Shown only to holders of RUN.CREATE while the source has no run. */
-export function StartEnhancementRun({ requestId, itemId, source, previewing }: { requestId: string; itemId: string; source: string; previewing: boolean }) {
-  const { pending, outcome, run } = useRequestCall();
-  return (
-    <span className="flex flex-col items-end">
-      <B variant="primary" disabled={pending || previewing} testId={`start-enhancement-${itemId.slice(0, 8)}`}
-         title={`Start a new run of ${source} in this domain for what the request adds`}
-         onClick={() => run(() => startEnhancementRun(requestId, itemId), "Enhancement run started. The Data Designer maps the delta next.")}>
-        {pending ? <Loader2 className="os-spin h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />} Start enhancement run
-      </B>
-      {previewing && <Off />}
-      <Line outcome={outcome} />
-    </span>
-  );
-}
-
-/** One-click button to start and link a pipeline run for a request item whose source is already registered and landed. */
-export function StartSourceRunButton({
+function RequestRunDrawer({
   requestId,
   itemId,
   sourceName,
+  sourceSystemId,
   sourceType,
   databaseName,
   schemaName,
   domainId,
   domainName,
   note,
-  previewing = false,
+  enhance,
+  onClose,
 }: {
   requestId: string;
   itemId: string;
   sourceName: string;
+  sourceSystemId?: string | null;
   sourceType?: string | null;
   databaseName?: string | null;
   schemaName?: string | null;
   domainId?: string | null;
   domainName?: string | null;
   note?: string | null;
-  previewing?: boolean;
+  enhance: boolean;
+  onClose: () => void;
 }) {
   const router = useRouter();
+  const [dbSchema, setDbSchema] = useState<{ database: string; schema: string } | null>(
+    databaseName && schemaName ? { database: databaseName, schema: schemaName } : null,
+  );
+  const [inventory, setInventory] = useState<CatalogInventory | null>(null);
+  const [loadingInv, setLoadingInv] = useState(true);
+  const [tableFilter, setTableFilter] = useState("");
+  const [checkedTables, setCheckedTables] = useState<string[]>([]);
+  const [analysis, setAnalysis] = useState<AnalyzeResult | null>(null);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [mode, setMode] = useState<"existing" | "new">("existing");
+  const [pickedTargets, setPickedTargets] = useState<string[]>([]);
+  const [proposedName, setProposedName] = useState("");
+  const [proposedSchema, setProposedSchema] = useState("SILVER");
+  const [standard, setStandard] = useState<"GDP" | "GENERIC">("GDP");
+  const [runName, setRunName] = useState(
+    `${sourceName}${domainName ? ` · ${domainName}` : ""} ${enhance ? "enhancement" : "onboarding"}`,
+  );
+  const [autopilot, setAutopilot] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [pending, start] = useTransition();
-  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    async function load() {
+      setLoadingInv(true);
+      setError(null);
+      let resolved = dbSchema;
+      if (!resolved) {
+        const ov = await loadOverview();
+        if (!live) return;
+        if (ov.ok) {
+          const hit = ov.data.sources.find(
+            (s) =>
+              (sourceSystemId && s.source_system_id === sourceSystemId) ||
+              s.source_system_name.toUpperCase() === sourceName.toUpperCase(),
+          );
+          if (hit?.database_name && hit?.schema_name) {
+            resolved = { database: hit.database_name, schema: hit.schema_name };
+            setDbSchema(resolved);
+          }
+        }
+      }
+      if (!resolved) {
+        setLoadingInv(false);
+        return;
+      }
+      const inv = await loadCatalogInventory(resolved.database, resolved.schema);
+      if (!live) return;
+      setLoadingInv(false);
+      if (!inv.ok) {
+        setError(inv.error);
+        return;
+      }
+      setInventory(inv.data);
+      const allNames = inv.data.tables.map((t) => t.table_name);
+      setCheckedTables(allNames);
+    }
+    void load();
+    return () => {
+      live = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sourceSystemId, sourceName, databaseName, schemaName]);
+
+  useEffect(() => {
+    if (!dbSchema || checkedTables.length === 0) {
+      setAnalysis(null);
+      return;
+    }
+    let live = true;
+    setAnalyzing(true);
+    analyzeTables(dbSchema.database, dbSchema.schema, checkedTables).then((r) => {
+      if (!live) return;
+      setAnalyzing(false);
+      if (!r.ok) return;
+      setAnalysis(r.data);
+      setStandard(r.data.suggested_standard === "GDP" ? "GDP" : "GENERIC");
+      const domUpper = (domainName ?? r.data.domain?.detected?.domain_name ?? "").toUpperCase();
+      const rawExisting = (r.data.models.suggestions ?? []).filter(
+        (s) => s.kind === "existing" && !/(\.|^)[^.]*bronze/i.test(s.fqn),
+      );
+      const inDom = domUpper
+        ? rawExisting.filter(
+            (s) => (s.domain_name ?? "").toUpperCase() === domUpper || s.fqn.toUpperCase().includes(`.${domUpper}.`),
+          )
+        : rawExisting;
+      const list = inDom.length ? inDom : rawExisting;
+      if (list.length === 0) {
+        setMode("new");
+      } else {
+        setMode("existing");
+        setPickedTargets((prev) => {
+          const valid = prev.filter((f) => list.some((s) => s.fqn === f));
+          if (valid.length > 0) return valid;
+          const rec0 = r.data.models.recommendation;
+          if (rec0?.fqn && list.some((s) => s.fqn === rec0.fqn)) return [rec0.fqn];
+          const strong = list
+            .filter((s) => s.score >= (r.data.bands ?? DEFAULT_BANDS).model_match_strong)
+            .map((s) => s.fqn);
+          return strong.length ? strong : [list[0].fqn];
+        });
+      }
+    });
+    return () => {
+      live = false;
+    };
+  }, [dbSchema, checkedTables, domainName]);
+
+  const domUpper = (domainName ?? analysis?.domain?.detected?.domain_name ?? "").toUpperCase();
+  const existingModels = useMemo(() => {
+    const raw = (analysis?.models.suggestions ?? []).filter(
+      (s) => s.kind === "existing" && !/(\.|^)[^.]*bronze/i.test(s.fqn),
+    );
+    if (!domUpper) return raw;
+    const inDom = raw.filter(
+      (s) => (s.domain_name ?? "").toUpperCase() === domUpper || s.fqn.toUpperCase().includes(`.${domUpper}.`),
+    );
+    const other = raw.filter((s) => !inDom.includes(s));
+    return [...inDom, ...other];
+  }, [analysis, domUpper]);
+
+  const shownTables = useMemo(() => {
+    const all = inventory?.tables ?? [];
+    if (!tableFilter.trim()) return all;
+    const q = tableFilter.toLowerCase();
+    return all.filter((t) => t.table_name.toLowerCase().includes(q));
+  }, [inventory, tableFilter]);
+
+  const submit = () =>
+    start(async () => {
+      setError(null);
+      const targets =
+        mode === "existing"
+          ? existingModels
+              .filter((s) => pickedTargets.includes(s.fqn))
+              .map((s) => ({
+                fqn: s.fqn,
+                target_table: s.target_table,
+                domain_name: s.domain_name ?? null,
+                target_table_id: analysis?.models.targets.find((t) => t.fqn === s.fqn)?.target_table_id ?? null,
+              }))
+          : [];
+      if (enhance) {
+        const r = await startEnhancementRun(requestId, itemId, {
+          run_name: runName.trim() || null,
+          tables: checkedTables,
+          targets,
+          modeling_standard: standard,
+          proposed_name: mode === "new" ? proposedName.trim() || null : null,
+          proposed_schema: mode === "new" ? proposedSchema.trim() || null : null,
+          autopilot,
+        });
+        if (!r.ok) {
+          setError(r.error);
+          return;
+        }
+        onClose();
+        router.refresh();
+        return;
+      }
+      const res = await startSourceRunForRequest({
+        requestId,
+        itemId,
+        sourceName,
+        sourceType,
+        databaseName: dbSchema?.database ?? databaseName,
+        schemaName: dbSchema?.schema ?? schemaName,
+        domainId,
+        domainName,
+        note,
+        runName: runName.trim() || null,
+        tables: checkedTables,
+        targets,
+        modelingStandard: standard,
+        proposedName: mode === "new" ? proposedName.trim() || null : null,
+        proposedSchema: mode === "new" ? proposedSchema.trim() || null : null,
+        autopilot,
+      });
+      if (!res.ok) {
+        setError(res.error);
+        return;
+      }
+      onClose();
+      router.refresh();
+    });
+
+  const strongBand = (analysis?.bands ?? DEFAULT_BANDS).model_match_strong;
+
+  return (
+    <div className="fixed inset-0 z-50 flex justify-end" data-testid="request-run-drawer">
+      <button type="button" aria-label="Close" className="absolute inset-0 bg-black/35" onClick={onClose} />
+      <aside
+        role="dialog"
+        aria-label="Configure and start pipeline run"
+        className="relative flex h-full w-[920px] max-w-full flex-col overflow-hidden border-l border-[var(--os-line)] bg-[var(--os-surface)] shadow-2xl"
+      >
+        <header className="flex items-start gap-3 border-b border-[var(--os-line)] px-6 py-4">
+          <Layers className="mt-0.5 h-5 w-5 text-[var(--os-forest)]" />
+          <div className="min-w-0 flex-1">
+            <h3 className="text-[16px] font-extrabold tracking-[-0.02em]">
+              Configure &amp; Start Run · {sourceName}
+              {domainName ? ` → ${domainName}` : ""}
+            </h3>
+            <p className="os-faint font-mono text-[11px]">
+              {dbSchema ? `${dbSchema.database}.${dbSchema.schema}` : "Select source tables and target models"}
+              {note ? ` · Scope: ${note}` : ""}
+            </p>
+          </div>
+          <button type="button" onClick={onClose} className="os-btn" aria-label="Close">
+            <X className="h-4 w-4" />
+          </button>
+        </header>
+
+        <div className="flex-1 space-y-5 overflow-y-auto px-6 py-5">
+          {error && (
+            <div role="alert" className="os-banner os-banner-red text-[12px]">
+              {error}
+            </div>
+          )}
+
+          {/* 1. Run name & Modeling standard */}
+          <section className="grid gap-4 sm:grid-cols-2">
+            <div>
+              <label className="os-label" htmlFor="req_run_name">
+                Run name
+              </label>
+              <input
+                id="req_run_name"
+                value={runName}
+                onChange={(e) => setRunName(e.target.value)}
+                className="os-input"
+                placeholder={`${sourceName} modeling`}
+              />
+            </div>
+            <div>
+              <span className="os-label">Modeling standard</span>
+              <div className="grid grid-cols-2 gap-2">
+                {(
+                  [
+                    ["GDP", "GDP", "Hub & spoke, GDP keys & audit columns"],
+                    ["GENERIC", "Generic", "Plain model, no GDP conventions"],
+                  ] as const
+                ).map(([val, title, sub]) => (
+                  <button
+                    key={val}
+                    type="button"
+                    onClick={() => setStandard(val)}
+                    className={cn(
+                      "rounded-lg border p-2 text-left transition",
+                      standard === val
+                        ? "border-[var(--os-forest)] bg-[var(--os-green-bg)]"
+                        : "border-[var(--os-line)] hover:bg-[var(--os-subtle)]",
+                    )}
+                  >
+                    <div className="text-[12.5px] font-extrabold">{title}</div>
+                    <div className="os-faint text-[10.5px]">{sub}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </section>
+
+          {/* 2. Granular Source Table Selection */}
+          <section className="rounded-xl border border-[var(--os-line)] p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Table2 className="h-4 w-4 text-[var(--os-forest)]" />
+                <span className="text-[13px] font-extrabold">
+                  1. Source tables ({checkedTables.length} of {inventory?.tables.length ?? 0} selected)
+                </span>
+              </div>
+              {inventory && inventory.tables.length > 0 && (
+                <div className="flex items-center gap-2">
+                  {inventory.tables.length > 6 && (
+                    <input
+                      value={tableFilter}
+                      onChange={(e) => setTableFilter(e.target.value)}
+                      placeholder="Filter tables..."
+                      className="os-input h-7 w-44 text-[11.5px]"
+                    />
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setCheckedTables(inventory.tables.map((t) => t.table_name))}
+                    className="os-btn text-[11px]"
+                  >
+                    Select all
+                  </button>
+                  <button type="button" onClick={() => setCheckedTables([])} className="os-btn text-[11px]">
+                    Clear
+                  </button>
+                </div>
+              )}
+            </div>
+            {loadingInv ? (
+              <p className="os-muted mt-3 flex items-center gap-2 text-[12px]">
+                <Loader2 className="os-spin h-3.5 w-3.5" /> Loading source tables…
+              </p>
+            ) : !inventory || inventory.tables.length === 0 ? (
+              <p className="os-muted mt-2 text-[12px]">
+                No tables discovered yet. Starting the run will open the Source stage to discover and select tables.
+              </p>
+            ) : (
+              <div className="mt-3 grid max-h-56 gap-1.5 overflow-y-auto pr-1 sm:grid-cols-2">
+                {shownTables.map((t) => {
+                  const on = checkedTables.includes(t.table_name);
+                  return (
+                    <label
+                      key={t.table_name}
+                      className={cn(
+                        "flex cursor-pointer items-center justify-between gap-2 rounded-lg border px-3 py-2 text-[12px] transition",
+                        on
+                          ? "border-[var(--os-forest)] bg-[var(--os-green-bg)]/60 font-semibold"
+                          : "border-[var(--os-line)] hover:bg-[var(--os-subtle)]",
+                      )}
+                    >
+                      <span className="flex min-w-0 items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={on}
+                          onChange={() =>
+                            setCheckedTables((prev) =>
+                              prev.includes(t.table_name)
+                                ? prev.filter((x) => x !== t.table_name)
+                                : [...prev, t.table_name],
+                            )
+                          }
+                        />
+                        <span className="truncate font-mono">{t.table_name}</span>
+                      </span>
+                      <span className="os-faint shrink-0 text-[10.5px] tabular-nums">
+                        {t.row_count != null ? `${t.row_count.toLocaleString()} rows` : ""}
+                        {t.status === "STAGED_READY_FOR_MODELING" ? " · profiled" : ""}
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+
+          {/* 3. Granular Target Model Selection */}
+          <section className="rounded-xl border border-[var(--os-line)] p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Layers className="h-4 w-4 text-[var(--os-forest)]" />
+                <span className="text-[13px] font-extrabold">
+                  2. Target models{domainName ? ` in ${domainName}` : ""}
+                  {mode === "existing" ? ` (${pickedTargets.length} selected)` : " (New model)"}
+                </span>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                {mode === "existing" && existingModels.length > 0 && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const domFqns = domUpper
+                          ? existingModels
+                              .filter(
+                                (s) =>
+                                  (s.domain_name ?? "").toUpperCase() === domUpper ||
+                                  s.fqn.toUpperCase().includes(`.${domUpper}.`),
+                              )
+                              .map((s) => s.fqn)
+                          : existingModels.map((s) => s.fqn);
+                        const targetsToPick = domFqns.length ? domFqns : existingModels.map((s) => s.fqn);
+                        const allChosen = targetsToPick.every((f) => pickedTargets.includes(f));
+                        setPickedTargets(allChosen ? [] : targetsToPick);
+                      }}
+                      className="os-btn text-[11px]"
+                    >
+                      {domUpper ? `Select all ${domUpper} models` : "Select all models"}
+                    </button>
+                    <button type="button" onClick={() => setPickedTargets([])} className="os-btn text-[11px]">
+                      Clear
+                    </button>
+                  </>
+                )}
+                <div role="tablist" className="inline-flex rounded-lg border border-[var(--os-line)] bg-[var(--os-subtle)] p-0.5">
+                  {(
+                    [
+                      ["existing", `Map to existing (${existingModels.length})`],
+                      ["new", "New model"],
+                    ] as const
+                  ).map(([val, label]) => (
+                    <button
+                      key={val}
+                      type="button"
+                      role="tab"
+                      aria-selected={mode === val}
+                      disabled={val === "existing" && existingModels.length === 0}
+                      onClick={() => setMode(val)}
+                      className={cn(
+                        "rounded-md px-2.5 py-1 text-[11.5px] font-bold disabled:opacity-40",
+                        mode === val ? "bg-[var(--os-surface)] shadow-sm" : "os-muted",
+                      )}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {analyzing ? (
+              <p className="os-muted mt-3 flex items-center gap-2 text-[12px]">
+                <Loader2 className="os-spin h-3.5 w-3.5" /> Matching selected source tables against domain models…
+              </p>
+            ) : mode === "existing" ? (
+              existingModels.length === 0 ? (
+                <p className="os-muted mt-3 text-[12px]">
+                  No existing target models found for these tables. Switch to &ldquo;New model&rdquo; or design on the Model stage.
+                </p>
+              ) : (
+                <div className="mt-3 space-y-2 max-h-72 overflow-y-auto pr-1">
+                  {existingModels.map((s) => {
+                    const on = pickedTargets.includes(s.fqn);
+                    const pct = Math.round(s.score * 100);
+                    return (
+                      <label
+                        key={s.fqn}
+                        className={cn(
+                          "block cursor-pointer rounded-xl border p-3 transition",
+                          on
+                            ? "border-[var(--os-forest)] bg-[var(--os-green-bg)]/55"
+                            : "border-[var(--os-line)] hover:bg-[var(--os-subtle)]",
+                        )}
+                      >
+                        <div className="flex items-start gap-2.5">
+                          <input
+                            type="checkbox"
+                            className="mt-1"
+                            checked={on}
+                            onChange={() =>
+                              setPickedTargets((prev) =>
+                                prev.includes(s.fqn) ? prev.filter((x) => x !== s.fqn) : [...prev, s.fqn],
+                              )
+                            }
+                          />
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="font-mono text-[13px] font-extrabold">{s.target_table}</span>
+                              {s.domain_name && (
+                                <span className="rounded-md border border-[var(--os-line)] px-1.5 py-0.5 text-[10px] font-bold">
+                                  {s.domain_name}
+                                </span>
+                              )}
+                              <span
+                                className={cn(
+                                  "ml-auto rounded-full px-2 py-0.5 text-[11px] font-bold tabular-nums",
+                                  s.score >= strongBand
+                                    ? "bg-[var(--os-green-bg)] text-[var(--os-green-ink)]"
+                                    : "bg-[var(--os-subtle)] os-muted",
+                                )}
+                              >
+                                {pct}% match
+                              </span>
+                            </div>
+                            <p className="os-faint truncate font-mono text-[11px]">{s.fqn}</p>
+                            {s.reason && <p className="os-muted mt-0.5 text-[11.5px]">{s.reason}</p>}
+                          </div>
+                        </div>
+                      </label>
+                    );
+                  })}
+                </div>
+              )
+            ) : (
+              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                <div>
+                  <label className="os-label" htmlFor="req_proposed_name">
+                    Proposed model name
+                  </label>
+                  <input
+                    id="req_proposed_name"
+                    value={proposedName}
+                    onChange={(e) => setProposedName(e.target.value)}
+                    className="os-input font-mono"
+                    placeholder="DIM_..."
+                  />
+                </div>
+                <div>
+                  <label className="os-label" htmlFor="req_proposed_schema">
+                    Target schema
+                  </label>
+                  <input
+                    id="req_proposed_schema"
+                    value={proposedSchema}
+                    onChange={(e) => setProposedSchema(e.target.value)}
+                    className="os-input font-mono"
+                  />
+                </div>
+              </div>
+            )}
+          </section>
+
+          {/* 4. Execution mode */}
+          <label className="flex cursor-pointer items-center gap-2.5 rounded-xl border border-[var(--os-line)] bg-[var(--os-subtle)]/40 px-4 py-3 text-[12.5px]">
+            <input type="checkbox" checked={autopilot} onChange={(e) => setAutopilot(e.target.checked)} />
+            <span>
+              <b>Run autonomous happy-path build (Autopilot)</b> — automatically profiles selected tables, maps to the locked target models, and advances to review.
+            </span>
+          </label>
+        </div>
+
+        <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--os-line)] px-6 py-3.5">
+          <span className="os-muted text-[11.5px]">
+            {checkedTables.length} source table{checkedTables.length === 1 ? "" : "s"}
+            {mode === "existing" && pickedTargets.length > 0
+              ? ` → ${pickedTargets.length} target model${pickedTargets.length === 1 ? "" : "s"}`
+              : mode === "new"
+                ? " → New model"
+                : ""}
+          </span>
+          <div className="flex items-center gap-2">
+            <button type="button" onClick={onClose} className="os-btn">
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={pending || Boolean(inventory && inventory.tables.length > 0 && checkedTables.length === 0)}
+              onClick={submit}
+              data-testid="confirm-request-run"
+              className="os-btn os-btn-primary"
+            >
+              {pending ? <Loader2 className="os-spin h-3.5 w-3.5" /> : <Check className="h-3.5 w-3.5" />}
+              {pending ? "Starting run…" : "Lock Selection & Start Run"}
+            </button>
+          </div>
+        </footer>
+      </aside>
+    </div>
+  );
+}
+
+/** An Enhance source request's next step for the Data Designer: configure tables & target models and start the enhancement run. */
+export function StartEnhancementRun({
+  requestId,
+  itemId,
+  source,
+  sourceSystemId,
+  domainId,
+  domainName,
+  note,
+  previewing,
+}: {
+  requestId: string;
+  itemId: string;
+  source: string;
+  sourceSystemId?: string | null;
+  domainId?: string | null;
+  domainName?: string | null;
+  note?: string | null;
+  previewing: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <span className="flex flex-col items-end">
+      <B
+        variant="primary"
+        disabled={previewing}
+        testId={`start-enhancement-${itemId.slice(0, 8)}`}
+        title={`Select tables and target models to start a new run of ${source}`}
+        onClick={() => setOpen(true)}
+      >
+        <Play className="h-3.5 w-3.5" /> Start enhancement run
+      </B>
+      {previewing && <Off />}
+      {open && (
+        <RequestRunDrawer
+          requestId={requestId}
+          itemId={itemId}
+          sourceName={source}
+          sourceSystemId={sourceSystemId}
+          domainId={domainId}
+          domainName={domainName}
+          note={note}
+          enhance={true}
+          onClose={() => setOpen(false)}
+        />
+      )}
+    </span>
+  );
+}
+
+/** Button to configure source tables & target models and start a pipeline run for a request item whose source is registered. */
+export function StartSourceRunButton({
+  requestId,
+  itemId,
+  sourceName,
+  sourceSystemId,
+  sourceType,
+  databaseName,
+  schemaName,
+  domainId,
+  domainName,
+  note,
+  label = "Start run",
+  previewing = false,
+}: {
+  requestId: string;
+  itemId: string;
+  sourceName: string;
+  sourceSystemId?: string | null;
+  sourceType?: string | null;
+  databaseName?: string | null;
+  schemaName?: string | null;
+  domainId?: string | null;
+  domainName?: string | null;
+  note?: string | null;
+  label?: string;
+  previewing?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
   return (
     <span className="inline-flex flex-col items-end">
       <button
         type="button"
-        disabled={pending || previewing}
+        disabled={previewing}
         data-testid={`start-source-run-${itemId.slice(0, 8)}`}
-        onClick={() =>
-          start(async () => {
-            setErr(null);
-            const res = await startSourceRunForRequest({
-              requestId,
-              itemId,
-              sourceName,
-              sourceType,
-              databaseName,
-              schemaName,
-              domainId,
-              domainName,
-              note,
-            });
-            if (!res.ok) {
-              setErr(res.error);
-              return;
-            }
-            router.refresh();
-          })
-        }
+        onClick={() => setOpen(true)}
         className="os-btn os-btn-primary"
       >
-        {pending ? <Loader2 className="os-spin h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />} Start run
+        <Play className="h-3.5 w-3.5" /> {label}
       </button>
-      {err && <span className="mt-1 text-[11px] text-[var(--os-red-ink)]">{err}</span>}
+      {open && (
+        <RequestRunDrawer
+          requestId={requestId}
+          itemId={itemId}
+          sourceName={sourceName}
+          sourceSystemId={sourceSystemId}
+          sourceType={sourceType}
+          databaseName={databaseName}
+          schemaName={schemaName}
+          domainId={domainId}
+          domainName={domainName}
+          note={note}
+          enhance={false}
+          onClose={() => setOpen(false)}
+        />
+      )}
     </span>
   );
 }

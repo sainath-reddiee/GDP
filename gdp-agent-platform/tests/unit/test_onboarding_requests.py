@@ -693,3 +693,121 @@ def test_new_domain_requests_look_their_domains_up_in_one_query():
     db = FakeDb().on("UPPER(DOMAIN_NAME) IN", [{"domain_id": "d9", "domain_name": "TENANT"}])
     out = api_mod._domains_named(db, ["tenant", " Lease ", "TENANT"])
     assert out == {"TENANT": {"domain_id": "d9", "domain_name": "TENANT"}}
+
+
+def test_store_rerun_with_new_run_name_creates_new_request_when_prior_request_is_done():
+    import app.main as main
+
+    # Case 1: no unlinked OPEN request exists (prior request was DONE or already has a run_id) -> inserts a new request
+    db = (
+        FakeDb()
+        .on("SELECT SOURCE_SYSTEM_ID FROM CORE.WORKFLOW_RUN", [{"source_system_id": "s1"}])
+        .on("SELECT R.REQUEST_ID, I.ITEM_ID, I.RUN_ID", [])
+    )
+    req_id = main._ensure_store_request(
+        db,
+        "run-new-2",
+        "LIGHTBOX rerun v2",
+        "d1",
+        {"source_system_id": "s1", "source_system_name": "LIGHTBOX"},
+        ["ASSESSMENT"],
+        [{"fqn": "DEV_GDP_SILVER_DB.PROPERTY.PROPERTY_CORE"}],
+    )
+    assert req_id is not None
+    req_inserts = db.wrote("BUSINESS_OUTCOME")
+    item_inserts = db.wrote("INSERT INTO CORE.ONBOARDING_REQUEST_ITEM")
+    assert len(req_inserts) == 1 and req_inserts[0][1] == "LIGHTBOX rerun v2"
+    assert len(item_inserts) == 1 and item_inserts[0][5] == "run-new-2"
+    assert "Tables: ASSESSMENT → PROPERTY_CORE" in item_inserts[0][4]
+
+    # Case 2: an OPEN request with RUN_ID IS NULL exists -> attaches the new run_id to that open request item
+    db_open = (
+        FakeDb()
+        .on("SELECT SOURCE_SYSTEM_ID FROM CORE.WORKFLOW_RUN", [{"source_system_id": "s1"}])
+        .on("SELECT R.REQUEST_ID, I.ITEM_ID, I.RUN_ID", [{"request_id": "r-open", "item_id": "i-open", "run_id": None}])
+    )
+    reused_id = main._ensure_store_request(
+        db_open,
+        "run-new-3",
+        "LIGHTBOX open build",
+        "d1",
+        {"source_system_id": "s1", "source_system_name": "LIGHTBOX"},
+        ["ASSESSMENT"],
+        [],
+    )
+    assert reused_id == "r-open"
+    updates = db_open.wrote("UPDATE CORE.ONBOARDING_REQUEST_ITEM SET RUN_ID")
+    assert len(updates) == 1 and updates[0] == ("run-new-3", "i-open")
+
+
+def test_refresh_does_not_autolink_old_completed_or_taken_runs(monkeypatch):
+    import app.requests_api as api_mod
+
+    monkeypatch.setattr(api_mod, "_sources", lambda db: {"s1": HEALTHY})
+    old_done = run("COMPLETED", run_id="run-old-done", created_at="2026-10-01T00:00:00")
+    db = (
+        FakeDb()
+        .on("FROM CORE.WORKFLOW_RUN WHERE", [old_done])
+        .on("FROM CORE.ONBOARDING_REQUEST_ITEM WHERE REQUEST_ID IN", [item(run_id=None)])
+        .on("FROM CORE.DOMAIN_REGISTRY D", [DOMAIN])
+    )
+    out = api_mod.refresh(db, [req(created_at="2026-10-20T00:00:00")])[0]
+    assert out["items"][0]["run_id"] is None
+    assert not db.wrote("UPDATE CORE.ONBOARDING_REQUEST_ITEM SET RUN_ID")
+
+
+def test_start_request_run_locks_selected_tables_and_target_models(api, monkeypatch):
+    client, db, who = api
+    import app.main as main
+
+    made = {}
+
+    def fake_create_run(body, db_arg):
+        made["body"] = body
+        return {"run_id": "run-granular-1"}
+
+    def fake_lock(db_arg, run_id, domain_id, targets):
+        made["locked"] = (run_id, domain_id, targets)
+
+    def fake_prepare(run_id, body, db_arg):
+        made["prepared"] = (run_id, body.selected)
+        return {"passed": True}
+
+    def fake_profile(run_id, body, db_arg):
+        made["profiled"] = run_id
+        return {"profiled": {}}
+
+    monkeypatch.setattr(main, "create_run", fake_create_run)
+    monkeypatch.setattr(main, "_lock_selected_targets", fake_lock)
+    monkeypatch.setattr(main, "prepare_source", fake_prepare)
+    monkeypatch.setattr(main, "run_profiling", fake_profile)
+
+    db.on("FROM CORE.ONBOARDING_REQUEST WHERE", [req(intent="NEW", requested_by="ANA")])
+    db.on("FROM CORE.ONBOARDING_REQUEST_ITEM WHERE ITEM_ID", [item(source_note="Only assessment table")])
+    who["privileges"] = {"RUN.CREATE"}
+
+    res = client.post(
+        "/api/onboarding-requests/r1/sources/i1/start-run",
+        json={
+            "run_name": "LIGHTBOX Selected Assessment Run",
+            "tables": ["ASSESSMENT"],
+            "targets": [
+                {
+                    "fqn": "DEV_GDP_SILVER_DB.PROPERTY.PROPERTY_CORE",
+                    "target_table": "PROPERTY_CORE",
+                    "target_table_id": "t-core",
+                }
+            ],
+            "modeling_standard": "GDP",
+            "autopilot": False,
+        },
+    )
+    assert res.status_code == 200
+    assert made["body"].run_name == "LIGHTBOX Selected Assessment Run"
+    assert made["body"].target_model == "DEV_GDP_SILVER_DB.PROPERTY.PROPERTY_CORE"
+    assert made["body"].intent["source"]["tables"] == ["ASSESSMENT"]
+    assert made["locked"][0] == "run-granular-1" and made["locked"][1] == "d1"
+    assert len(made["locked"][2]) == 1 and made["locked"][2][0]["target_table"] == "PROPERTY_CORE"
+    assert made["prepared"] == ("run-granular-1", ["ASSESSMENT"])
+    assert made["profiled"] == "run-granular-1"
+

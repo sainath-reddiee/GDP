@@ -164,7 +164,7 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("POST", r"/api/governance/requests/[^/]+/(approve|reject|cancel)", None, ""),  # checked by the endpoint
     # onboarding requests (apps/api/app/requests_api.py): who may file, link, cancel or reject depends on the request
     # (its requester, the domain's owners) as much as on privileges, so every write is checked by the endpoint
-    ("POST", r"/api/onboarding-requests(/[^/]+/(sources(/[^/]+/(source|run|remove|enhance-run))?|files(/[^/]+/remove)?|domain|comment|cancel|reject|reopen))?", None, ""),
+    ("POST", r"/api/onboarding-requests(/[^/]+/(sources(/[^/]+/(source|run|remove|enhance-run|start-run))?|files(/[^/]+/remove)?|domain|comment|cancel|reject|reopen))?", None, ""),
     ("POST", r"/api/governance/roles", "ROLE.MANAGE", "Create a role"),
     ("POST", r"/api/governance/roles/[^/]+/members", "ROLE.MANAGE", "Change role members"),
     ("PUT", r"/api/governance/(users|roles|policies)/[^/]+", "ROLE.MANAGE", "Change access or an approval policy"),
@@ -203,7 +203,8 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("POST", r"/api/domains/[^/]+/documents/(confluence|upload|[^/]+/refresh|[^/]+/remove)", "KNOWLEDGE.EDIT",
      "Link, upload or refresh a domain document"),
     ("POST", r"/api/domains/[^/]+/examples/[^/]+", "KNOWLEDGE.EDIT", "Upload correct-output examples of a table"),
-    ("DELETE", r"/api/domains/[^/]+", "DOMAIN.EDIT", "Delete a domain"),
+    ("DELETE", r"/api/domains/[^/]+(/purge)?", "DOMAIN.EDIT", "Delete a domain"),
+    ("POST", r"/api/domains/purge-deleted", "DOMAIN.EDIT", "Purge soft-deleted domains"),
     ("POST", r"/api/domains/[^/]+/restore", "DOMAIN.EDIT", "Restore a domain"),
     ("PUT", r"/api/domains/[^/]+/rules", "DOMAIN.EDIT", "Change domain rules"),
     ("PUT", r"/api/domains/[^/]+/members", "DOMAIN.EDIT", "Change domain owners and stewards"),

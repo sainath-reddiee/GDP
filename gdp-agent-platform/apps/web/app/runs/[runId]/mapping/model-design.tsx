@@ -178,37 +178,61 @@ function EntityCard({ entity, index, issues, editable, onChange, onRemove }: {
   );
 }
 
-/** Use the domain's approved model as it is: no AI design and no proposal; the run maps to its hub and every
- * spoke with columns. */
+/** Use the domain's approved model as it is: no AI design and no proposal; the user can select which specific
+ * entities of the approved model to include in this run's target set. */
 function UseDomainModel({ dm, inUse, canApply, busy, onUse }: {
-  dm: DomainModelSummary; inUse: boolean; canApply: boolean; busy: boolean; onUse: () => void;
+  dm: DomainModelSummary; inUse: boolean; canApply: boolean; busy: boolean; onUse: (entities: string[]) => void;
 }) {
   const usable = dm.entities.filter((e) => e.columns > 0);
   const empty = dm.entities.filter((e) => e.columns === 0);
+  const [picked, setPicked] = useState<string[]>(() => usable.map((e) => e.entity));
+  useEffect(() => {
+    setPicked(usable.map((e) => e.entity));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dm.model_id, dm.version]);
   return (
     <div className="space-y-2 rounded-lg border border-emerald-300/60 bg-emerald-50/40 p-3 dark:border-emerald-900 dark:bg-emerald-950/20" data-testid="use-domain-model">
       <div className="flex flex-wrap items-start gap-2">
         <div className="min-w-0 flex-1">
           <p className="text-sm font-semibold">Use the {dm.domain_name ?? "domain"} model as it is</p>
           <p className="text-xs text-muted-foreground">
-            The source maps to the approved model v{dm.version}: its hub and every table below. No design and no proposal;
-            anything the source has that the model does not is left unmapped.
+            Select which target tables from approved model v{dm.version} to map in this run ({picked.length} of {usable.length} selected).
+            No design and no proposal; anything the source has that the selected tables do not is left unmapped.
           </p>
         </div>
-        {inUse ? <Badge variant="success">In use</Badge> : (
-          <Button size="sm" onClick={onUse} disabled={busy || !canApply || !dm.hub} data-testid="use-domain-model-button"
-                  title={!canApply ? "The run is past mapping, or you lack MODEL.EDIT" : !dm.hub ? "No table with columns" : undefined}>
-            {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}Use v{dm.version} as it is
+        <div className="flex flex-wrap items-center gap-1.5">
+          {usable.length > 1 && canApply && (
+            <>
+              <Button size="sm" variant="outline" onClick={() => setPicked(usable.map((e) => e.entity))} disabled={busy}>
+                Select all
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setPicked([])} disabled={busy}>
+                Clear
+              </Button>
+            </>
+          )}
+          {inUse && picked.length === usable.length && <Badge variant="success">In use</Badge>}
+          <Button size="sm" onClick={() => onUse(picked)} disabled={busy || !canApply || !dm.hub || picked.length === 0} data-testid="use-domain-model-button"
+                  title={!canApply ? "The run is past mapping, or you lack MODEL.EDIT" : !dm.hub ? "No table with columns" : picked.length === 0 ? "Select at least one target table" : undefined}>
+            {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+            {picked.length === usable.length ? `Use v${dm.version} as it is` : `Use ${picked.length} selected table${picked.length === 1 ? "" : "s"} (v${dm.version})`}
           </Button>
-        )}
+        </div>
       </div>
       <div className="flex flex-wrap gap-1.5">
-        {usable.map((e) => (
-          <span key={e.entity} className="inline-flex items-center gap-1 rounded-md border bg-card px-2 py-0.5 text-[11px]" title={e.fqn}>
-            <span className="font-mono font-medium">{e.entity}</span>
-            <span className="text-muted-foreground">{e.role.toLowerCase()} · {e.columns} col{e.columns === 1 ? "" : "s"}</span>
-          </span>
-        ))}
+        {usable.map((e) => {
+          const checked = picked.includes(e.entity);
+          return (
+            <label key={e.entity} title={e.fqn}
+                   className={cn("inline-flex cursor-pointer items-center gap-1.5 rounded-md border px-2.5 py-1 text-[11px] transition",
+                     checked ? "border-emerald-600/60 bg-card font-medium shadow-sm" : "border-border/60 bg-card/50 opacity-65 hover:opacity-100")}>
+              <input type="checkbox" checked={checked} disabled={!canApply || busy}
+                     onChange={() => setPicked((prev) => (prev.includes(e.entity) ? prev.filter((x) => x !== e.entity) : [...prev, e.entity]))} />
+              <span className="font-mono font-medium">{e.entity}</span>
+              <span className="text-muted-foreground">{e.role.toLowerCase()} · {e.columns} col{e.columns === 1 ? "" : "s"}</span>
+            </label>
+          );
+        })}
       </div>
       {empty.length > 0 && (
         <p className="text-[11px] text-amber-700">
@@ -369,9 +393,9 @@ export function ModelDesign({ runId, data, canApply, state, canEdit = true, canA
     }
     router.refresh();
   });
-  const useAsIs = () => start(async () => {
+  const useAsIs = (entities: string[]) => start(async () => {
     setMessage(null);
-    const r = await applyDomainModel(runId);
+    const r = await applyDomainModel(runId, entities);
     if (!r.ok) { say(false, r.error); return; }
     const tables = r.data.entities.filter((e) => e.columns > 0).length;
     say(true, `The run maps to domain model v${r.data.version} as it is: ${r.data.entity}${tables > 1 ? ` and ${tables - 1} more table${tables === 2 ? "" : "s"}` : ""}. Generate mapping candidates next.`

@@ -34,6 +34,7 @@ export async function importPack(pack: Pack) {
 
 function refreshDomains() {
   revalidatePath("/domains");
+  revalidatePath("/os/knowledge");
   revalidatePath("/dashboard/sources");
 }
 
@@ -47,6 +48,23 @@ export async function deleteDomain(domainId: string, force: boolean) {
 
 export async function restoreDomain(domainId: string) {
   const result = await attemptValue(() => api<{ restored: boolean }>(`/api/domains/${domainId}/restore`, { method: "POST" }));
+  if (result.ok) refreshDomains();
+  return result;
+}
+
+/** Permanently purge a soft-deleted domain (ACTIVE_FLAG = FALSE) from all platform tables. */
+export async function purgeDomain(domainId: string) {
+  const result = await attemptValue(() =>
+    api<{ domain_id: string; domain_name: string; purged: boolean }>(`/api/domains/${encodeURIComponent(domainId)}/purge`, { method: "DELETE" }));
+  if (result.ok) refreshDomains();
+  return result;
+}
+
+/** Permanently purge all soft-deleted domains (ACTIVE_FLAG = FALSE) from all platform tables. */
+export async function purgeDeletedDomains() {
+  const result = await attemptValue(() =>
+    api<{ purged: string[]; purged_count: number; skipped: { domain_id: string; domain_name: string; reason: string }[] }>(
+      "/api/domains/purge-deleted", { method: "POST" }));
   if (result.ok) refreshDomains();
   return result;
 }

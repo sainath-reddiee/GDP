@@ -7,9 +7,48 @@ import { Button } from "@/components/ui/button";
 import { SuggestionsPanel } from "@/components/suggestions-panel";
 import { cn } from "@/lib/utils";
 import {
-  askDomain, askDomainReview, decideDomainSuggestion, deleteDomain, exportPack, loadDomainReview, restoreDomain,
+  askDomain, askDomainReview, decideDomainSuggestion, deleteDomain, exportPack, loadDomainReview, purgeDeletedDomains, purgeDomain, restoreDomain,
   type DomainAnswer,
 } from "./actions";
+
+/** One-click button on the Domains screen to permanently purge all soft-deleted domains (ACTIVE_FLAG = FALSE). */
+export function PurgeDeletedDomainsButton({ count }: { count: number }) {
+  const router = useRouter();
+  const [confirming, setConfirming] = useState(false);
+  const [error, setError] = useState("");
+  const [pending, start] = useTransition();
+
+  const purgeAll = () => start(async () => {
+    setError("");
+    const r = await purgeDeletedDomains();
+    if (!r.ok) { setError(r.error); return; }
+    setConfirming(false);
+    router.push("/os/knowledge?view=domains");
+    router.refresh();
+  });
+
+  if (!confirming) {
+    return (
+      <Button size="sm" variant="ghost" className="h-auto px-2 py-0.5 text-xs text-destructive hover:text-destructive"
+              onClick={() => setConfirming(true)}>
+        <Trash2 className="mr-1 h-3 w-3" /> Purge deleted ({count})
+      </Button>
+    );
+  }
+
+  return (
+    <span className="inline-flex flex-wrap items-center gap-2 rounded-lg border border-destructive/40 bg-destructive/5 px-2.5 py-1 text-xs">
+      <span>Permanently purge {count} deleted domain{count === 1 ? "" : "s"} from all tables?</span>
+      <Button size="sm" variant="destructive" className="h-6 px-2 text-xs" disabled={pending} onClick={purgeAll}>
+        {pending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />} Confirm purge
+      </Button>
+      <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" disabled={pending} onClick={() => setConfirming(false)}>
+        Cancel
+      </Button>
+      {error && <span role="alert" className="text-destructive">{error}</span>}
+    </span>
+  );
+}
 
 type Tab = "ask" | "review" | null;
 
@@ -59,6 +98,14 @@ export function DomainTools({ domainId, name, deletable, reason, activeRuns, del
     router.refresh();
   });
 
+  const purge = () => start(async () => {
+    setError("");
+    const r = await purgeDomain(domainId);
+    if (!r.ok) { setError(r.error); return; }
+    router.push("/os/knowledge?view=domains");
+    router.refresh();
+  });
+
   const ask = () => start(async () => {
     setError(""); setAnswer(null);
     const r = await askDomain(domainId, question);
@@ -69,9 +116,16 @@ export function DomainTools({ domainId, name, deletable, reason, activeRuns, del
     return (
       <div className="flex flex-wrap items-center gap-2 border-t pt-3">
         <span className="text-xs text-muted-foreground">Deleted. Its targets and knowledge are inactive; past runs keep their history.</span>
-        <Button size="sm" variant="outline" className="ml-auto" disabled={pending} onClick={restore}>
-          {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />} Restore
-        </Button>
+        <div className="ml-auto flex items-center gap-2">
+          <Button size="sm" variant="outline" disabled={pending} onClick={restore}>
+            {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />} Restore
+          </Button>
+          {deletable && (
+            <Button size="sm" variant="destructive" disabled={pending} onClick={purge}>
+              {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />} Purge permanently
+            </Button>
+          )}
+        </div>
         {error && <p role="alert" className="w-full text-xs text-destructive">{error}</p>}
       </div>
     );

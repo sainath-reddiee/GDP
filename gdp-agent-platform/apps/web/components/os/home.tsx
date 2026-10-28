@@ -12,7 +12,7 @@ import { Btn, Tag, ago, pretty } from "./ui";
 import { Track, type TrackStep } from "./stage-board";
 import { RUNNING_STATES, requestStepHref, stageHref, waitIsMine } from "@/lib/os/work";
 import { RequestFiles } from "@/components/os/request-files";
-import { DeleteRequestButton, DeleteRunButton, LiveWorkflowRefresh, StartEnhancementRun } from "./request-ui";
+import { DeleteRequestButton, DeleteRunButton, LiveWorkflowRefresh, StartEnhancementRun, StartSourceRunButton } from "./request-ui";
 import type { ActionItem } from "@/lib/os/actions";
 import { personaForPrivilege } from "@/lib/os/personas";
 import { cn } from "@/lib/utils";
@@ -303,7 +303,28 @@ export function RequestFocus({ r, access }: { r: RequestDetail; access: OsAccess
                     </div>
                     <div className="flex shrink-0 items-center gap-2">
                       {you && enhance && w?.privilege === "RUN.CREATE" && !i.run_id && i.source_system_id ? (
-                        <StartEnhancementRun requestId={r.request_id} itemId={i.item_id} source={i.source_name} previewing={!!access.preview} />
+                        <StartEnhancementRun
+                          requestId={r.request_id}
+                          itemId={i.item_id}
+                          source={i.source_name}
+                          sourceSystemId={i.source_system_id}
+                          domainId={r.domain_id}
+                          domainName={r.domain_name}
+                          note={i.source_note}
+                          previewing={!!access.preview}
+                        />
+                      ) : you && !enhance && !product && !i.run_id && i.source_system_id && i.status === "NO_RUN" ? (
+                        <StartSourceRunButton
+                          requestId={r.request_id}
+                          itemId={i.item_id}
+                          sourceName={i.source_name}
+                          sourceSystemId={i.source_system_id}
+                          domainId={r.domain_id}
+                          domainName={r.domain_name}
+                          note={i.source_note}
+                          label="Start onboarding run"
+                          previewing={!!access.preview}
+                        />
                       ) : you && w && act ? (
                         <Btn href={act} variant="primary" title={w.label}>{waitCta(w)} <ArrowRight className="h-3.5 w-3.5" /></Btn>
                       ) : w && role ? (

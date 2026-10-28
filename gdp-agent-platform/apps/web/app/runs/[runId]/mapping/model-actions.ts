@@ -93,12 +93,15 @@ export async function proposeDesign(runId: string, version: number) {
   return r;
 }
 
-/** Map the run to the domain's approved model as it is: pinned to its hub, every active table its target set; no AI
- * design and no proposal. */
-export async function applyDomainModel(runId: string) {
+/** Map the run to the domain's approved model as it is: pinned to its hub (or first selected table), with the selected
+ * tables (or every active table) in its target set; no AI design and no proposal. */
+export async function applyDomainModel(runId: string, entities?: string[]) {
   const r = await attemptValue(() => api<{ model_id: string; version: number; entity: string; target_model?: string;
                                            entities: DomainModelEntity[]; withdrawn: number; mapping_reset?: boolean }>(
-    `/api/runs/${runId}/model/use-domain-model`, { method: "POST" }));
+    `/api/runs/${runId}/model/use-domain-model`, {
+      method: "POST",
+      ...(entities && entities.length > 0 ? { body: JSON.stringify({ entities }) } : {}),
+    }));
   if (r.ok) revalidatePath(`/runs/${runId}`, "layout");
   return r;
 }

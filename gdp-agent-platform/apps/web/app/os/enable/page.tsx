@@ -220,6 +220,7 @@ export default async function SourceReadiness({ searchParams }: { searchParams: 
                         requestId={r.request_id}
                         itemId={i.item_id}
                         sourceName={srcObj?.source_system_name ?? i.source_name}
+                        sourceSystemId={i.source_system_id}
                         sourceType={srcObj?.source_type}
                         databaseName={srcObj?.database_name}
                         schemaName={srcObj?.schema_name}

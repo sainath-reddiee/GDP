@@ -84,11 +84,19 @@ export function SourceStudio({
     return map;
   }, [overview.landing]);
 
+  const preLanding = ["CREATED", "SOURCE_REGISTERED", "ACCESS_VALIDATION", "ACCESS_APPROVED", "LANDING_PENDING", "LANDING_RUNNING"];
+  const preProfile = [...preLanding, "LANDING_COMPLETE", "PROFILING_PENDING", "PROFILING_RUNNING"];
+  const failed = currentState === "FAILED";
+  const landed = failed ? !preLanding.includes(failedIn ?? "") : !preLanding.includes(currentState);
+  const profiled = !failed && !preProfile.includes(currentState);
+  const canEditTarget = !landed;
+  const checksFailed = !landed && (overview.checks ?? []).some((c) => c.checked_at === overview.checks[0]?.checked_at && c.status === "FAILED");
+
   const fromRun = objects.filter((o) => o.selected_flag).map((o) => o.object_name);
   const planned = intent?.source.tables?.length ? intent.source.tables : available;
-  const hasPlan = Boolean(intent) || fromRun.length > 0;
-  const [picked, setPicked] = useState<string[]>(() => (fromRun.length ? fromRun : hasPlan ? planned : []));
-  const tables = fromRun.length ? fromRun : hasPlan ? planned : picked;
+  const hasPlan = Boolean(intent?.source?.tables?.length) || fromRun.length > 0;
+  const [picked, setPicked] = useState<string[]>(() => (fromRun.length ? fromRun : hasPlan ? planned : available));
+  const tables = landed && fromRun.length ? fromRun : picked;
 
   const [editingTarget, setEditingTarget] = useState(false);
   const [landingSchema, setLandingSchema] = useState(target.landing_schema);
@@ -101,14 +109,6 @@ export function SourceStudio({
   const [error, setError] = useState("");
   const [pending, start] = useTransition();
   const [query, setQuery] = useState("");
-
-  const preLanding = ["CREATED", "SOURCE_REGISTERED", "ACCESS_VALIDATION", "ACCESS_APPROVED", "LANDING_PENDING", "LANDING_RUNNING"];
-  const preProfile = [...preLanding, "LANDING_COMPLETE", "PROFILING_PENDING", "PROFILING_RUNNING"];
-  const failed = currentState === "FAILED";
-  const landed = failed ? !preLanding.includes(failedIn ?? "") : !preLanding.includes(currentState);
-  const profiled = !failed && !preProfile.includes(currentState);
-  const canEditTarget = !landed;
-  const checksFailed = !landed && (overview.checks ?? []).some((c) => c.checked_at === overview.checks[0]?.checked_at && c.status === "FAILED");
 
   const status = (step: Phase): StepStatus => {
     const done = step === "register" ? currentState !== "CREATED" : step === "land" ? landed : profiled;
@@ -300,19 +300,29 @@ export function SourceStudio({
       <Card>
         <CardHeader className="flex flex-row flex-wrap items-end gap-3 space-y-0">
           <div className="mr-auto">
-            <CardTitle>{hasPlan ? "Tables in this run" : "Choose tables"}</CardTitle>
+            <CardTitle>{landed ? "Tables in this run" : "Choose tables for this run"}</CardTitle>
             <CardDescription>
               {hasPlan
-                ? `Chosen in Sources (${displayDomain(intent?.domain_name) || "no domain yet"}). Landing and profile status update as the plan runs.`
-                : "This run was created without a plan. Pick the tables to onboard."}
+                ? `Chosen in Sources (${displayDomain(intent?.domain_name) || "no domain yet"}). You can adjust which tables are included before landing.`
+                : "Pick the specific source tables to onboard in this run."}
             </CardDescription>
           </div>
+          {!landed && available.length > 0 && (
+            <div className="flex items-center gap-1.5">
+              <Button size="sm" variant="outline" onClick={() => setPicked(available)}>
+                Select all ({available.length})
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setPicked([])}>
+                Clear
+              </Button>
+            </div>
+          )}
           {tables.length > 8 && (
             <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Filter tables" className="w-56" />
           )}
         </CardHeader>
         <CardContent>
-          {!hasPlan && (
+          {!landed && (
             <div className="mb-3 flex flex-wrap gap-2">
               {available.map((t) => (
                 <button key={t} type="button" aria-pressed={picked.includes(t)}

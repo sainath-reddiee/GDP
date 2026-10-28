@@ -12,7 +12,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Literal, Optional
 
-from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, Request, UploadFile
+from fastapi import Body, Depends, FastAPI, File, Header, HTTPException, Query, Request, UploadFile
 
 _ROOT = Path(__file__).resolve().parents[3]
 if str(_ROOT) not in sys.path:
@@ -1079,10 +1079,18 @@ def _workbench_state(db: Db, run_id: str) -> dict:
     return out
 
 
+class UseDomainModelIn(BaseModel):
+    entities: Optional[list[str]] = Field(default=None, max_length=100)
+
+
 @app.post("/api/runs/{run_id}/model/use-domain-model")
-def use_domain_model(run_id: str, db: Db = Depends(current_db)):
-    """Map the run to the domain's approved model as it is: pinned to its hub, every active entity (hub and spokes)
-    its target set, with no AI design and no proposal (any undecided proposal of the run is withdrawn)."""
+def use_domain_model(
+    run_id: str,
+    body: Optional[UseDomainModelIn] = Body(default=None),
+    db: Db = Depends(current_db),
+):
+    """Map the run to the domain's approved model as it is: pinned to its hub (or first selected entity), with
+    either all active entities or the caller's selected subset in CORE.RUN_TARGET."""
     from services.modeling.run_link import domain_model_summary, withdraw_run_proposals
 
     found = db.query("SELECT DOMAIN_ID, CURRENT_STATE FROM CORE.WORKFLOW_RUN WHERE RUN_ID = %s", (run_id,))
@@ -1101,21 +1109,49 @@ def use_domain_model(run_id: str, db: Db = Depends(current_db)):
                                  "the Model Workbench.")
     if not summary["hub"]:
         raise HTTPException(409, f"Domain model v{summary['version']} has no table with columns to map to.")
+    wanted = {str(x).strip().upper() for x in (body.entities if body and body.entities else []) if str(x).strip()}
+    chosen_entity = summary["hub"]
+    if wanted:
+        usable_in_wanted = [e["entity"] for e in summary["entities"] if e.get("columns", 0) > 0 and e["entity"].upper() in wanted]
+        if not usable_in_wanted:
+            raise HTTPException(409, "Select at least one domain model table with columns.")
+        chosen_entity = summary["hub"] if summary["hub"].upper() in wanted else usable_in_wanted[0]
     try:
-        pin = pin_run_model(db, run_id, summary["model_id"], summary["version"], summary["hub"], 0)
+        pin = pin_run_model(db, run_id, summary["model_id"], summary["version"], chosen_entity, 0)
     except AssertionError as exc:
         raise HTTPException(409, str(exc)) from exc
     except Exception as exc:
         raise _snowflake_error(exc) from exc
     if not pin.get("pinned"):
         raise HTTPException(409, pin.get("detail") or "the run could not use the domain model")
+    if wanted:
+        try:
+            if hasattr(db, "execute"):
+                db.execute(
+                    "UPDATE CORE.RUN_TARGET SET INCLUDED = ARRAY_CONTAINS(UPPER(ENTITY_NAME)::VARIANT, PARSE_JSON(%s)::ARRAY), "
+                    "EXCLUDED_REASON = IFF(ARRAY_CONTAINS(UPPER(ENTITY_NAME)::VARIANT, PARSE_JSON(%s)::ARRAY), EXCLUDED_REASON, 'not selected for this run') "
+                    "WHERE RUN_ID = %s AND IS_CURRENT",
+                    (json.dumps(sorted(wanted)), json.dumps(sorted(wanted)), run_id),
+                )
+        except Exception:
+            pass
+        if isinstance(pin.get("targets"), list):
+            for t in pin["targets"]:
+                if str(t.get("entity") or "").upper() not in wanted:
+                    t["included"] = False
+                    t["excluded_reason"] = "not selected for this run"
     withdrawn = 0
     try:
         withdrawn = invoke_source(db, withdraw_run_proposals, run_id, str(db.user or ""))
     except Exception:
         pass  # before V039: no proposals to withdraw
-    return {**pin, "model_id": summary["model_id"], "version": summary["version"], "entity": summary["hub"],
-            "entities": summary["entities"], "withdrawn": withdrawn}
+    returned_entities = (
+        [e for e in summary["entities"] if e["entity"].upper() in wanted]
+        if wanted
+        else summary["entities"]
+    )
+    return {**pin, "model_id": summary["model_id"], "version": summary["version"], "entity": chosen_entity,
+            "entities": returned_entities, "withdrawn": withdrawn}
 
 
 def pin_run_model(db: Db, run_id: str, model_id: str, version: int, entity: str, design_version: int = 0) -> dict:
@@ -5035,11 +5071,18 @@ def _ensure_store_request(
                  FROM CORE.ONBOARDING_REQUEST R
                  JOIN CORE.ONBOARDING_REQUEST_ITEM I ON I.REQUEST_ID = R.REQUEST_ID
                 WHERE I.REMOVED_AT IS NULL
-                  AND R.STATUS IN ('OPEN', 'DONE')
-                  AND (I.RUN_ID = %s OR (COALESCE(R.DOMAIN_ID, '') = COALESCE(%s, '') AND I.SOURCE_SYSTEM_ID = %s))
-                ORDER BY IFF(COALESCE(R.INTENT, 'NEW') = 'NEW', 0, 1), R.CREATED_AT ASC
+                  AND (
+                      I.RUN_ID = %s
+                      OR (
+                          R.STATUS = 'OPEN'
+                          AND I.RUN_ID IS NULL
+                          AND COALESCE(R.DOMAIN_ID, '') = COALESCE(%s, '')
+                          AND I.SOURCE_SYSTEM_ID = %s
+                      )
+                  )
+                ORDER BY IFF(I.RUN_ID = %s, 0, 1), IFF(COALESCE(R.INTENT, 'NEW') = 'NEW', 0, 1), R.CREATED_AT ASC
                 LIMIT 1""",
-            (run_id, domain_id or "", sys_id or ""),
+            (run_id, domain_id or "", sys_id or "", run_id),
         )
         if existing:
             req_id = existing[0]["request_id"]
@@ -5048,11 +5091,6 @@ def _ensure_store_request(
                     "UPDATE CORE.ONBOARDING_REQUEST_ITEM SET RUN_ID = %s, UPDATED_AT = CURRENT_TIMESTAMP() WHERE ITEM_ID = %s",
                     (run_id, existing[0]["item_id"]),
                 )
-            db.execute(
-                "UPDATE CORE.ONBOARDING_REQUEST SET STATUS = 'OPEN', CLOSED_BY = NULL, CLOSED_AT = NULL, UPDATED_AT = CURRENT_TIMESTAMP() "
-                "WHERE REQUEST_ID = %s AND STATUS = 'DONE' AND CLOSED_BY = 'PLATFORM'",
-                (req_id,),
-            )
             return req_id
         request_id = str(uuid.uuid4())
         item_id = str(uuid.uuid4())
@@ -6355,6 +6393,115 @@ def restore_domain(domain_id: str, db: Db = Depends(current_db)):
     _domain_caches_changed()
     _domain_snapshot(db, domain_id, "RESTORE", "Domain restored")
     return {"domain_id": domain_id, "restored": True}
+
+
+def _purge_single_domain(db: Db, domain_id: str) -> None:
+    """Hard-delete a soft-deleted domain and all of its dependent records across CORE tables."""
+    with transaction(db):
+        db.execute(
+            """DELETE FROM CORE.TARGET_COLUMN_REGISTRY
+                WHERE TARGET_TABLE_ID IN (
+                    SELECT TARGET_TABLE_ID FROM CORE.TARGET_TABLE_REGISTRY WHERE DOMAIN_ID = %s
+                )""",
+            (domain_id,),
+        )
+        db.execute(
+            """DELETE FROM CORE.DOMAIN_QA_QUERIES
+                WHERE PACK_ID IN (
+                    SELECT PACK_ID FROM CORE.DOMAIN_QA_PACKS WHERE DOMAIN_ID = %s
+                )""",
+            (domain_id,),
+        )
+        db.execute(
+            """DELETE FROM CORE.MODEL_CHANGE
+                WHERE MODEL_ID IN (
+                    SELECT MODEL_ID FROM CORE.DOMAIN_MODEL WHERE DOMAIN_ID = %s
+                )""",
+            (domain_id,),
+        )
+        db.execute(
+            """DELETE FROM CORE.MODEL_REVIEW_COMMENT
+                WHERE MODEL_ID IN (
+                    SELECT MODEL_ID FROM CORE.DOMAIN_MODEL WHERE DOMAIN_ID = %s
+                )""",
+            (domain_id,),
+        )
+        db.execute(
+            """DELETE FROM CORE.TABLE_MODEL_VERSION
+                WHERE TABLE_MODEL_ID IN (
+                    SELECT TABLE_MODEL_ID FROM CORE.TABLE_MODEL WHERE DOMAIN_ID = %s
+                )""",
+            (domain_id,),
+        )
+        for req_child in ("ONBOARDING_REQUEST_ITEM", "ONBOARDING_REQUEST_EVENT", "ONBOARDING_REQUEST_FILE"):
+            db.execute(
+                f"""DELETE FROM CORE.{req_child}
+                     WHERE REQUEST_ID IN (
+                         SELECT REQUEST_ID FROM CORE.ONBOARDING_REQUEST WHERE DOMAIN_ID = %s
+                     )""",
+                (domain_id,),
+            )
+        for tbl in (
+            "TARGET_TABLE_REGISTRY",
+            "DOMAIN_KNOWLEDGE",
+            "DOMAIN_MODEL",
+            "MODEL_DESIGNS",
+            "TABLE_MODEL",
+            "DOMAIN_QA_PACKS",
+            "DOMAIN_SKILL",
+            "DOMAIN_RECOMMENDATION",
+            "DOMAIN_MEMBER",
+            "DOMAIN_VERSION",
+            "OPEN_QUESTION",
+            "REFERENCE_INPUT",
+            "REFERENCE_SCORE",
+            "CONFLUENCE_SOURCE",
+            "ONBOARDING_REQUEST",
+            "WORKFLOW_RUN",
+        ):
+            db.execute(f"DELETE FROM CORE.{tbl} WHERE DOMAIN_ID = %s", (domain_id,))
+        db.execute("UPDATE CORE.SOURCE_REGISTRY SET DOMAIN_ID = NULL WHERE DOMAIN_ID = %s", (domain_id,))
+        db.execute("DELETE FROM CORE.DOMAIN_REGISTRY WHERE DOMAIN_ID = %s", (domain_id,))
+
+
+@app.delete("/api/domains/{domain_id}/purge")
+def purge_domain(domain_id: str, db: Db = Depends(current_db)):
+    """Permanently purge a soft-deleted domain (ACTIVE_FLAG = FALSE) from all CORE tables."""
+    from services.knowledge.domain_admin import can_delete, repository_pack_names
+
+    row = _domain_row(db, domain_id)
+    ok, reason = can_delete(domain_id, row["domain_name"], row["config"], repository_pack_names())
+    if not ok:
+        raise HTTPException(409, reason)
+    if row.get("active_flag"):
+        raise HTTPException(409, f"{row['domain_name']} is still active. Soft-delete it first before purging permanently.")
+    _purge_single_domain(db, domain_id)
+    _domain_caches_changed()
+    return {"domain_id": domain_id, "domain_name": row["domain_name"], "purged": True}
+
+
+@app.post("/api/domains/purge-deleted")
+def purge_deleted_domains(db: Db = Depends(current_db)):
+    """Permanently purge all soft-deleted domains (ACTIVE_FLAG = FALSE) from all CORE tables."""
+    from services.knowledge.domain_admin import can_delete, repository_pack_names
+
+    repo_names = repository_pack_names()
+    rows = db.query(
+        "SELECT DOMAIN_ID, DOMAIN_NAME, ACTIVE_FLAG, CONFIG FROM CORE.DOMAIN_REGISTRY WHERE ACTIVE_FLAG = FALSE"
+    )
+    purged: list[str] = []
+    skipped: list[dict] = []
+    for r in rows:
+        cfg = _json(r.get("config")) or {}
+        ok, reason = can_delete(r["domain_id"], r["domain_name"], cfg, repo_names)
+        if not ok:
+            skipped.append({"domain_id": r["domain_id"], "domain_name": r["domain_name"], "reason": reason})
+            continue
+        _purge_single_domain(db, r["domain_id"])
+        purged.append(r["domain_name"])
+    if purged:
+        _domain_caches_changed()
+    return {"purged": purged, "purged_count": len(purged), "skipped": skipped}
 
 
 # ---------------------------------------------------------------- Domains: AI review of the pack, Ask the domain

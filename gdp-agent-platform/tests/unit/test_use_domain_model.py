@@ -117,3 +117,28 @@ def test_using_the_domain_model_needs_model_edit():
     from services.governance.policy import privilege_for
 
     assert privilege_for("POST", "/api/runs/r1/model/use-domain-model")[0] == "MODEL.EDIT"
+
+
+def test_use_domain_model_filters_to_selected_entities(api):
+    client, db, calls = api
+    calls["summary"] = {
+        "model_id": "m1",
+        "version": 1,
+        "domain_name": "PROPERTY",
+        "hub": "PROPERTY_CORE",
+        "entities": [
+            {"entity": "PROPERTY_CORE", "role": "HUB", "columns": 2, "fqn": "DB.PROPERTY.PROPERTY_CORE"},
+            {"entity": "PROPERTY_ADDRESS", "role": "SPOKE", "columns": 2, "fqn": "DB.PROPERTY.PROPERTY_ADDRESS"},
+            {"entity": "PROPERTY_USAGE", "role": "SPOKE", "columns": 2, "fqn": "DB.PROPERTY.PROPERTY_USAGE"},
+        ],
+    }
+    executed = []
+    db.execute = lambda sql, params=(): executed.append((sql, params))
+    res = client.post("/api/runs/r1/model/use-domain-model", json={"entities": ["PROPERTY_ADDRESS"]})
+    assert res.status_code == 200
+    body = res.json()
+    assert calls["pin"] == ("r1", "m1", 1, "PROPERTY_ADDRESS", 0)
+    assert body["entity"] == "PROPERTY_ADDRESS"
+    assert [e["entity"] for e in body["entities"]] == ["PROPERTY_ADDRESS"]
+    assert any("UPDATE CORE.RUN_TARGET SET INCLUDED" in sql for sql, _ in executed)
+
