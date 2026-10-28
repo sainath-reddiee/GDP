@@ -13,7 +13,7 @@ import { listSchemas, listShareSchemas, mountShare, onboardShare, previewShare, 
   type ShareSchema } from "../actions";
 import type { DomainOption } from "./wizard";
 
-const BASE_STEPS = ["Share", "Schema", "Tables", "Landing", "Load"] as const;
+const BASE_STEPS = ["Database / Share", "Schema", "Tables", "Landing", "Load"] as const;
 const LOAD_TYPES = ["APPEND", "TRUNCATE", "SCD2"];
 const BRONZE_LOAD_TYPES = ["TRUNCATE", "SCD2", "MERGE"];
 const FREQUENCIES = ["HOURLY", "DAILY", "WEEKLY", "MONTHLY", "ON_DEMAND"];
@@ -22,13 +22,13 @@ const NAME = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
 /** readable: the database the share is mounted as is one this role can read (listed in INFORMATION_SCHEMA); a share
  *  can be mounted in the account while the role lacks IMPORTED PRIVILEGES on it. */
 type ShareEntry = { key: string; share: string | null; provider: string | null; database: string | null; comment?: string | null;
-  readable: boolean };
+  readable: boolean; kind: "share" | "database" };
 
 const slug = (s: string) => s.toUpperCase().replace(/[^A-Z0-9_]/g, "_").replace(/^([^A-Z])/, "S_$1").slice(0, 64);
 const landingName = (source: string, table: string) => `${source.toUpperCase()}__${table.toUpperCase().replace(/[^A-Z0-9_]/g, "_")}`;
 const n = (v: number | null | undefined) => (v == null ? "-" : Number(v).toLocaleString());
 
-/** Onboard tables from a Snowflake share: pick the share (mount it if needed), one of its schemas and its tables,
+/** Onboard tables from a Snowflake database or share: pick the database or share (mount it if needed), one of its schemas and its tables,
  * choose where they land, then land them (each table unloaded once to Parquet, copied into landing) and continue to
  * profiling. Every choice is listed from Snowflake; changing one clears the choices made after it. */
 export function ShareWizard({ shares, domains, databases, landing, initialName = "" }: {
@@ -40,18 +40,35 @@ export function ShareWizard({ shares, domains, databases, landing, initialName =
     const out: ShareEntry[] = shares.shares.map((s) => {
       if (s.database_name) seen.add(s.database_name.toUpperCase());
       return { key: `${s.owner_account}.${s.name}`, share: s.name, provider: s.owner_account, database: s.database_name, comment: s.comment,
-               readable: !!s.database_name && readable.has(s.database_name.toUpperCase()) };
+               readable: !!s.database_name && readable.has(s.database_name.toUpperCase()), kind: "share" };
     });
     for (const d of shares.mounted) {
-      if (!seen.has(d.toUpperCase())) out.push({ key: `db:${d}`, share: null, provider: null, database: d, readable: true });
+      if (!seen.has(d.toUpperCase())) {
+        seen.add(d.toUpperCase());
+        out.push({ key: `db:${d}`, share: null, provider: null, database: d, readable: true, kind: "share" });
+      }
+    }
+    for (const d of databases) {
+      if (!seen.has(d.database_name.toUpperCase())) {
+        seen.add(d.database_name.toUpperCase());
+        out.push({
+          key: `db:${d.database_name}`,
+          share: null,
+          provider: null,
+          database: d.database_name,
+          readable: true,
+          kind: d.type === "IMPORTED DATABASE" ? "share" : "database",
+        });
+      }
     }
     return out;
-  }, [shares]);
+  }, [shares, databases]);
 
   const [step, setStep] = useState(0);
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [q, setQ] = useState("");
+  const [kindFilter, setKindFilter] = useState<"all" | "database" | "share">("all");
   const [entry, setEntry] = useState<ShareEntry | null>(null);
   const [mountAs, setMountAs] = useState("");
   const [manual, setManual] = useState({ provider: "", share: "" });
@@ -89,7 +106,7 @@ export function ShareWizard({ shares, domains, databases, landing, initialName =
                         bronze_load_type: String(d.bronze_load_type ?? s.bronze_load_type), load_frequency: String(d.load_frequency ?? s.load_frequency) }));
     });
   }, []);
-  const STEPS: readonly string[] = sync ? ["Share", "Schema", "Tables", "Landing", "SnapLogic", "Load"] : BASE_STEPS;
+  const STEPS: readonly string[] = sync ? ["Database / Share", "Schema", "Tables", "Landing", "SnapLogic", "Load"] : BASE_STEPS;
   const loadStep = STEPS.length - 1;
   const snapStep = sync ? 4 : -1;
   const snaplogicAnswers = () => sync ? {
@@ -116,7 +133,11 @@ export function ShareWizard({ shares, domains, databases, landing, initialName =
     setRetried(`SnapLogic rows written: master row ${r.data.snaplogic?.master_config_id}, detail rows ${(r.data.snaplogic?.child_config_ids ?? []).join(", ")}.`);
   });
 
-  const shownEntries = entries.filter((e) => `${e.share ?? ""} ${e.provider ?? ""} ${e.database ?? ""}`.toLowerCase().includes(q.toLowerCase()));
+  const shownEntries = entries.filter(
+    (e) =>
+      (kindFilter === "all" || e.kind === kindFilter) &&
+      `${e.share ?? ""} ${e.provider ?? ""} ${e.database ?? ""}`.toLowerCase().includes(q.toLowerCase()),
+  );
   const shownTables = useMemo(() => (tables ?? []).filter((t) => t.table_name.toLowerCase().includes(filter.toLowerCase())), [tables, filter]);
 
   // choosing earlier never leaves stale choices behind
@@ -191,36 +212,57 @@ export function ShareWizard({ shares, domains, databases, landing, initialName =
           <div className="flex flex-wrap items-center gap-3">
             <div className="relative">
               <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-              <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search shares or providers" aria-label="Search shares" className="w-72 pl-8" />
+              <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search databases, shares or providers" aria-label="Search databases or shares" className="w-72 pl-8" />
             </div>
-            <span className="text-xs text-muted-foreground">{entries.length} share{entries.length === 1 ? "" : "s"} visible to your role</span>
+            <div role="tablist" aria-label="Filter by object type" className="inline-flex rounded-lg border bg-muted/40 p-0.5 text-xs">
+              {([
+                ["all", `All (${entries.length})`],
+                ["database", `Databases (${entries.filter((x) => x.kind === "database").length})`],
+                ["share", `Shares (${entries.filter((x) => x.kind === "share").length})`],
+              ] as const).map(([val, label]) => (
+                <button
+                  key={val}
+                  type="button"
+                  role="tab"
+                  aria-selected={kindFilter === val}
+                  onClick={() => setKindFilter(val)}
+                  className={cn(
+                    "rounded-md px-2.5 py-1 font-medium transition",
+                    kindFilter === val ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <span className="text-xs text-muted-foreground">{shownEntries.length} object{shownEntries.length === 1 ? "" : "s"} visible to your role</span>
           </div>
           {shownEntries.length ? (
-            <div className="grid gap-2 md:grid-cols-2" role="radiogroup" aria-label="Shares">
+            <div className="grid gap-2 md:grid-cols-2" role="radiogroup" aria-label="Databases and shares">
               {shownEntries.map((e) => (
                 <button key={e.key} type="button" role="radio" aria-checked={entry?.key === e.key} onClick={() => pickEntry(e)} data-testid={`share-${e.share ?? e.database}`}
                         className={cn("flex min-w-0 items-start gap-3 rounded-xl border p-3 text-left transition",
                           entry?.key === e.key ? "border-primary/50 bg-accent/50 ring-1 ring-primary/20" : "hover:border-primary/30")}>
                   <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary">
-                    {e.share ? <Share2 className="h-4 w-4" /> : <Database className="h-4 w-4" />}
+                    {e.kind === "share" ? <Share2 className="h-4 w-4" /> : <Database className="h-4 w-4" />}
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="block truncate font-mono text-sm font-medium">{e.share ?? e.database}</span>
                     <span className="block truncate text-xs text-muted-foreground">
-                      {e.provider ? `from ${e.provider}` : "database created from a share"}{e.comment ? ` · ${e.comment}` : ""}
+                      {e.provider ? `from ${e.provider}` : e.kind === "database" ? "Snowflake database" : "database created from a share"}{e.comment ? ` · ${e.comment}` : ""}
                     </span>
                   </span>
                   <span className={cn("shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold",
                     e.database && e.readable ? "bg-success/10 text-success" : "bg-warning/10 text-warning")}
                         title={e.database && !e.readable ? "Mounted in the account, but your role cannot read it" : undefined}>
-                    {!e.database ? "not mounted" : e.readable ? `mounted as ${e.database}` : `${e.database} · no access`}
+                    {e.kind === "database" ? "database" : !e.database ? "not mounted" : e.readable ? `mounted as ${e.database}` : `${e.database} · no access`}
                   </span>
                 </button>
               ))}
             </div>
           ) : (
             <p className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground">
-              {entries.length ? "No share matches the search." : "No inbound shares are visible to your role. Enter one below or ask the provider to share it with this account."}
+              {entries.length ? "No database or share matches the search." : "No databases or inbound shares are visible to your role."}
             </p>
           )}
           {noAccess && entry && (

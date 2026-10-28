@@ -659,7 +659,11 @@ def onboard_share(body: ShareOnboard, db: Db = Depends(current_db)):
     if missing:
         raise HTTPException(400, f"Not in {database}.{schema}: {', '.join(missing[:10])}")
 
-    payload = {"RUN_NAME": body.run_name or f"Share {database}.{schema}", "DOMAIN_ID": body.domain_id,
+    db_kind = db.query("SELECT TYPE FROM INFORMATION_SCHEMA.DATABASES WHERE DATABASE_NAME = %s", (database,))
+    is_imported = bool(body.share_name) or bool(db_kind and str(db_kind[0].get("type") or "").upper() == "IMPORTED DATABASE")
+    source_type = "SNOWFLAKE_SHARE" if is_imported else "SNOWFLAKE_DATABASE"
+    default_prefix = "Share" if is_imported else "Database"
+    payload = {"RUN_NAME": body.run_name or f"{default_prefix} {database}.{schema}", "DOMAIN_ID": body.domain_id,
                "ENVIRONMENT": "DEV"}
     try:
         created = db.call("CALL CORE.CREATE_RUN(%s)", (json.dumps({k: v for k, v in payload.items() if v}),))
@@ -667,7 +671,7 @@ def onboard_share(body: ShareOnboard, db: Db = Depends(current_db)):
         raise _snowflake_error(exc) from exc
     run_id = (created or {}).get("run_id") or (created or {}).get("RUN_ID")
     steps.append({"step": "run", "ok": bool(run_id), "detail": run_id})
-    register = {"SOURCE_SYSTEM_NAME": body.source_system_name, "SOURCE_TYPE": "SNOWFLAKE_SHARE", "DATABASE": database,
+    register = {"SOURCE_SYSTEM_NAME": body.source_system_name, "SOURCE_TYPE": source_type, "DATABASE": database,
                 "SCHEMA": schema, "DOMAIN_ID": body.domain_id, "LANDING_DATABASE": body.landing_database,
                 "LANDING_SCHEMA": body.landing_schema, "STORAGE_TYPE": "MANAGED"}
     plan = [

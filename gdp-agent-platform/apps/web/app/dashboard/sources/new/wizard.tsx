@@ -12,7 +12,7 @@ type Branch = "share" | "external";
 export type SourceKind = "database" | "file";
 
 const BRANCHES: Choice<Branch>[] = [
-  { key: "share", label: "Snowflake share", icon: Share2, slug: "snowflake-share" },
+  { key: "share", label: "Snowflake database or share", icon: Share2, slug: "snowflake-share" },
   { key: "external", label: "Other sources (PostgreSQL, Oracle, SQL Server, S3, SharePoint)", icon: CloudCog, slug: "other-sources" },
 ];
 // Other sources ask different questions for a database and for files (the onboarding configuration workbook)
@@ -49,7 +49,7 @@ export function OnboardWizard({ initialBranch, initialKind = null, shares, domai
       <ChoiceStep n={2} title="Source type" choices={BRANCHES} value={branch} onChange={choose} testId="onboard-source" />
       {branch === "share" && (
         <Reveal key="share">
-          <RailStep n={3} title="Onboard the share" last>
+          <RailStep n={3} title="Onboard the database or share" last>
             <ShareWizard shares={shares} domains={domains} databases={databases} landing={landing} initialName={initialName} />
           </RailStep>
         </Reveal>
