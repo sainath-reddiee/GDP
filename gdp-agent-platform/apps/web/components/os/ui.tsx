@@ -4,7 +4,7 @@ import { AlertTriangle, Check, Circle, Clock, Hand, Loader2, X } from "lucide-re
 import { cn } from "@/lib/utils";
 import type { StepStatus, StepView } from "@/lib/os/lifecycle";
 
-// The building blocks of the Agentic Data OS screens, in the CBRE look of the UX package (app/os/ados.css).
+// The building blocks of the Agentic Data OS screens, in the look of the UX package (app/os/ados.css).
 // Server-safe: no hooks, so pages stay server components and read the platform directly.
 
 type Icon = ComponentType<{ className?: string }>;

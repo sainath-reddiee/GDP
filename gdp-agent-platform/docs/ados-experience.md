@@ -1,6 +1,6 @@
 # Agentic Data OS experience (`/os`)
 
-A persona-led front end for the platform, built from the CBRE ADOS UX package (ten screens, one shell, one eight-step lifecycle). Every signed-in page, the `/os` screens and all the classic pages alike, opens in the same shell. The rail has the package's ten entries, plus Admin for admins. Every page is a tab under one of them. No classic feature was rebuilt or removed: the classic pages render unchanged inside the new frame.
+A persona-led front end for the platform, built from the ADOS UX package (ten screens, one shell, one eight-step lifecycle). Every signed-in page, the `/os` screens and all the classic pages alike, opens in the same shell. The rail has the package's ten entries, plus Admin for admins. Every page is a tab under one of them. No classic feature was rebuilt or removed: the classic pages render unchanged inside the new frame.
 
 Every screen reads live platform data through the endpoints the classic pages already use. There is no sample data. When an endpoint fails or has nothing to return, the screen shows the reason or an empty state.
 
@@ -152,7 +152,7 @@ A request shows the earliest phase of the parts at its stage. Two milestones are
 | Path | What |
 |---|---|
 | `apps/web/app/os/**` | The shell layout, the ten screens, Help and the loading state |
-| `apps/web/app/os/ados.css` | CBRE tokens and `os-*` classes, scoped under `.ados`, light and dark |
+| `apps/web/app/os/ados.css` | Theme tokens and `os-*` classes, scoped under `.ados`, light and dark |
 | `apps/web/components/os/**` | Shell (header, rail, persona), UI primitives, run picker, interactive bits |
 | `apps/web/lib/os/data.ts` | Read-only adapters over the API, validation score, artifact grouping |
 | `apps/web/lib/os/lifecycle.ts` | Workflow states mapped onto Intake, Enable, Ingest, Design, Generate, Validate, PR, Release |

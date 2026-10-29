@@ -245,6 +245,31 @@ def _facts(db: Db, run_id: str) -> Tuple[str, Dict[str, Any], Dict[str, Any]]:
     if not run:
         raise HTTPException(404, "run not found")
     r = run[0]
+    if (
+        isinstance(db, Db)
+        and str(r.get("pipeline") or "SILVER").upper() == "SILVER"
+        and r.get("domain_id")
+        and (
+            (r["current_state"] in ("DOMAIN_IDENTIFIED", "MAPPING_PENDING") and not r.get("target_model"))
+            or (r["current_state"] == "FAILED" and "NO_TARGET_MODEL" in str(r.get("failure_reason") or ""))
+        )
+    ):
+        try:
+            from app.main import use_domain_model
+
+            if r["current_state"] == "FAILED" and hasattr(db, "execute"):
+                db.execute(
+                    "UPDATE CORE.WORKFLOW_RUN SET CURRENT_STATE = 'MAPPING_PENDING', STATUS = 'IN_PROGRESS', "
+                    "FAILURE_REASON = NULL, UPDATED_AT = CURRENT_TIMESTAMP() WHERE RUN_ID = %s AND CURRENT_STATE = 'FAILED'",
+                    (run_id,),
+                )
+                r["current_state"] = "MAPPING_PENDING"
+                r["failure_reason"] = None
+            pinned = use_domain_model(run_id, None, db)
+            if pinned and pinned.get("target_model"):
+                r["target_model"] = pinned["target_model"]
+        except Exception:
+            pass
     intent = _load_intent(db, run_id) or {}
     facts: Dict[str, Any] = {"pipeline": r["pipeline"], "has_target": bool(r.get("target_model")),
                              "planned_tables": len((intent.get("source") or {}).get("tables") or []),

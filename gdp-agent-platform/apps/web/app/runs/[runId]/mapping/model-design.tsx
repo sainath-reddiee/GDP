@@ -440,7 +440,7 @@ export function ModelDesign({ runId, data, canApply, state, canEdit = true, canA
           {wb?.enforced && <WorkbenchBanner wb={wb} />}
           {wb?.domain_model && (
             <UseDomainModel dm={wb.domain_model} busy={busy} onUse={useAsIs}
-              canApply={canEdit && ["PROFILING_COMPLETE", "DOMAIN_IDENTIFIED", "MAPPING_PENDING", "MAPPING_REVIEW"].includes(state)}
+              canApply={canEdit && ["PROFILING_COMPLETE", "DOMAIN_IDENTIFIED", "MAPPING_PENDING", "MAPPING_REVIEW", "FAILED"].includes(state)}
               inUse={wb.model_id === wb.domain_model.model_id && wb.model_version === wb.domain_model.version
                      && wb.model_entity === wb.domain_model.hub && !wb.proposal} />
           )}

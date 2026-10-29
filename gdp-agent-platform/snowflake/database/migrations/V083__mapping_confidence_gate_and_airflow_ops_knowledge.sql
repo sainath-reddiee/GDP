@@ -31,7 +31,7 @@ Runtime: Airflow 3.x on AWS MWAA (Task SDK; no ORM access in tasks/callbacks), S
 | `gdp_soda.py` | Soda contract verify / consolidated scan tasks, digest emails, Datadog events | No |
 | `gdp_snaplogic.py` | SnapLogic trigger + recursive status polling (`build_snaplogic_trigger_task`) | No |
 | `gdp_notify.py` | Failure/recovery emails, threading, dedupe (no `gdp_utils` import) | No |
-| `gdp_alerts.py` | Alert hub: re-exports + SnapLogic summary email, success/cycle emails, CBRE HTML shell | No |
+| `gdp_alerts.py` | Alert hub: re-exports + SnapLogic summary email, success/cycle emails, branded HTML shell | No |
 
 `.airflowignore` lists every library module so the DAG processor only parses `gdp_dags.py`, `gdp_post_mdm.py`, `gdp_dataset_reset.py`. Library modules are still importable via `sys.path`.
 
@@ -263,7 +263,7 @@ Pools: `_dbt_pool_for_domain()` → `gdp_heavy` for all dbt; `_gdp_pool()` for S
 - Recipients: Variable `GDP_ALERT_EMAILS` → env `GDP_ALERT_EMAILS` → `AIRFLOW_VAR_GDP_ALERT_EMAILS` → last-good → default. `parse_email_list` accepts comma/semicolon/JSON/`Name <addr>`.
 - Threading: one open thread per DAG in Variable `gdp_alert_thread__<dag_id>`; replies `RE: <subject>` with Thread-Topic/Thread-Index (MS-OXOMSG); Message-IDs unique per email (SES rewrites; Exchange drops duplicates). Recovery (`notify_recovery`, `pipeline_done`) replies "RESOLVED" and closes thread.
 - Dedupe keys `dag::run::task::try`; intermediate retries skipped; stale-skipped runs suppressed.
-- `gdp_alerts`: SnapLogic summary email (`GDP_SNAPLOGIC_EMAIL_MODE`), success/cycle emails (`GDP_SUCCESS_ALERTS_ENABLED`, `GDP_CYCLE_LOOKBACK_HOURS`), CBRE shell (brand `#003F2D`), `gdp_subject(env, headline)`.
+- `gdp_alerts`: SnapLogic summary email (`GDP_SNAPLOGIC_EMAIL_MODE`), success/cycle emails (`GDP_SUCCESS_ALERTS_ENABLED`, `GDP_CYCLE_LOOKBACK_HOURS`), branded HTML shell, `gdp_subject(env, headline)`.
 - Alerts must never raise into tasks (wrap in try/except).
 
 ---
@@ -355,7 +355,7 @@ Runtime: Airflow 3.x on AWS MWAA (Task SDK; no ORM access in tasks/callbacks), S
 | `gdp_soda.py` | Soda contract verify / consolidated scan tasks, digest emails, Datadog events | No |
 | `gdp_snaplogic.py` | SnapLogic trigger + recursive status polling (`build_snaplogic_trigger_task`) | No |
 | `gdp_notify.py` | Failure/recovery emails, threading, dedupe (no `gdp_utils` import) | No |
-| `gdp_alerts.py` | Alert hub: re-exports + SnapLogic summary email, success/cycle emails, CBRE HTML shell | No |
+| `gdp_alerts.py` | Alert hub: re-exports + SnapLogic summary email, success/cycle emails, branded HTML shell | No |
 
 `.airflowignore` lists every library module so the DAG processor only parses `gdp_dags.py`, `gdp_post_mdm.py`, `gdp_dataset_reset.py`. Library modules are still importable via `sys.path`.
 
@@ -587,7 +587,7 @@ Pools: `_dbt_pool_for_domain()` → `gdp_heavy` for all dbt; `_gdp_pool()` for S
 - Recipients: Variable `GDP_ALERT_EMAILS` → env `GDP_ALERT_EMAILS` → `AIRFLOW_VAR_GDP_ALERT_EMAILS` → last-good → default. `parse_email_list` accepts comma/semicolon/JSON/`Name <addr>`.
 - Threading: one open thread per DAG in Variable `gdp_alert_thread__<dag_id>`; replies `RE: <subject>` with Thread-Topic/Thread-Index (MS-OXOMSG); Message-IDs unique per email (SES rewrites; Exchange drops duplicates). Recovery (`notify_recovery`, `pipeline_done`) replies "RESOLVED" and closes thread.
 - Dedupe keys `dag::run::task::try`; intermediate retries skipped; stale-skipped runs suppressed.
-- `gdp_alerts`: SnapLogic summary email (`GDP_SNAPLOGIC_EMAIL_MODE`), success/cycle emails (`GDP_SUCCESS_ALERTS_ENABLED`, `GDP_CYCLE_LOOKBACK_HOURS`), CBRE shell (brand `#003F2D`), `gdp_subject(env, headline)`.
+- `gdp_alerts`: SnapLogic summary email (`GDP_SNAPLOGIC_EMAIL_MODE`), success/cycle emails (`GDP_SUCCESS_ALERTS_ENABLED`, `GDP_CYCLE_LOOKBACK_HOURS`), branded HTML shell, `gdp_subject(env, headline)`.
 - Alerts must never raise into tasks (wrap in try/except).
 
 ---

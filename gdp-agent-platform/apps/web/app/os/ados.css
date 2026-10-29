@@ -1,4 +1,4 @@
-/* Agentic Data OS experience (/os): the CBRE palette from the UX package, scoped under .ados so no other page changes.
+/* Agentic Data OS experience (/os): the palette from the UX package, scoped under .ados so no other page changes.
    Every class here starts with os- and only applies inside the .ados root the /os layout draws. */
 
 .ados {
@@ -17,7 +17,7 @@
   --os-emerald: #058763;
   --os-leaf: #15a778;
   --os-accent-ink: #006247;
-  /* CBRE accent green, and celadon for completed steps */
+  /* accent green, and celadon for completed steps */
   --os-accent: #17e88f;
   --os-step-done: #80bbad;
   --os-step-done-ink: #538184;
@@ -133,7 +133,7 @@
 .ados .os-code .del { color: #f39a9a; text-decoration: line-through; opacity: 0.8; }
 .ados .os-code .cmt { color: #7fa497; }
 
-/* the step a workflow is at: CBRE accent green with a soft glow */
+/* the step a workflow is at: accent green with a soft glow */
 @keyframes os-step-glow { 0%, 100% { box-shadow: 0 0 0 0 rgba(23, 232, 143, 0.45); } 50% { box-shadow: 0 0 0 4px rgba(23, 232, 143, 0); } }
 .ados .os-step-now { animation: os-step-glow 2.2s ease-in-out infinite; }
 

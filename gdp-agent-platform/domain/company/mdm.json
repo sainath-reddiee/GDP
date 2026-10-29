@@ -88,7 +88,7 @@
      "content": "DIM_COMPANY includes Immediate Parent, Domestic Parent and Global Ultimate records besides companies. Filter COMPANY_TYPE_DESC = 'Company' for organisation-level counts and facts.",
      "content_json": {"target_table": "DIM_COMPANY"}},
     {"key": "company.mdm.rule.merges", "type": "EXCEPTION", "title": "Company merges reach gold only through the cross-reference",
-     "content": "dbt does not read COMPANY_MERGE. A merge shows up as the cross-reference pointing the source record at the surviving CBRE id; the losing DIM_COMPANY row stays active until all its cross-reference rows are deleted. Facts keep their old skey until a repoint covers them.",
+     "content": "dbt does not read COMPANY_MERGE. A merge shows up as the cross-reference pointing the source record at the surviving mastered id; the losing DIM_COMPANY row stays active until all its cross-reference rows are deleted. Facts keep their old skey until a repoint covers them.",
      "content_json": {"target_table": "DIM_COMPANY"}},
     {"key": "company.mdm.rule.version_dedupe", "type": "EXCEPTION", "title": "MDM tables are versioned",
      "content": "Deduplicate MDM tables to the latest version with ORDER BY MDM_POST_MDM_LUD DESC NULLS LAST, MDM_UPDATED_TS DESC NULLS LAST.",

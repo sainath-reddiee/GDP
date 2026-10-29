@@ -494,8 +494,6 @@ def _share_tables(db: Db, database: str, schema: str) -> list[dict]:
     if not kind:
         raise HTTPException(404, f"{database} is not visible to your role. Mount the share first or ask an admin "
                                  "for IMPORTED PRIVILEGES.")
-    if kind[0]["type"] != "IMPORTED DATABASE":
-        raise HTTPException(400, f"{database} is a regular database, not a mounted share. Use Sources to onboard it.")
     # the kinds discovery lands (services.source.adapters): an external or dynamic table offered here would fail the
     # whole run at access validation
     return db.query(f"""SELECT TABLE_NAME, TABLE_TYPE, ROW_COUNT, BYTES, LAST_ALTERED::VARCHAR AS LAST_ALTERED

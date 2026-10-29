@@ -181,7 +181,7 @@
           "name": "ALIAS_NAME",
           "type": "TEXT",
           "nullable": true,
-          "definition": "CBRE internal alias",
+          "definition": "Internal alias",
           "business_key": false
         },
         {
@@ -1396,11 +1396,11 @@
       "key": "company.glossary.company_core.alias_name",
       "type": "GLOSSARY",
       "title": "COMPANY_CORE.ALIAS_NAME",
-      "content": "CBRE internal alias",
+      "content": "Internal alias",
       "content_json": {
         "target_column": "ALIAS_NAME",
         "target_table": "COMPANY_CORE",
-        "definition": "CBRE internal alias",
+        "definition": "Internal alias",
         "synonyms": []
       }
     },

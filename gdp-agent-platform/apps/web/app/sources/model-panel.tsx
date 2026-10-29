@@ -41,14 +41,29 @@ export function ModelPanel({ database, schema, tables, domains, onClose }: {
       if (!r.ok) { setError(r.error); return; }
       setData(r.data);
       setStandard(r.data.suggested_standard === "GDP" ? "GDP" : "GENERIC");
-      const detected = r.data.domain?.detected;
+      const detected = r.data.domain?.detected ?? r.data.domain?.schema;
       if (detected && domains.some((d) => d.domain_id === detected.domain_id)) setDomainId(detected.domain_id);
+      const domUpper = (detected?.domain_name ?? "").toUpperCase();
+      const inDom = (f: string, d?: string | null) =>
+        !domUpper || (d ?? "").toUpperCase() === domUpper || f.toUpperCase().includes(`.${domUpper}.`);
       const rec0 = r.data.models.recommendation;
-      if (rec0 && (rec0.action === "MAP_EXISTING" || rec0.action === "EXTEND_EXISTING") && rec0.fqn) {
+      if (rec0 && (rec0.action === "MAP_EXISTING" || rec0.action === "EXTEND_EXISTING") && rec0.fqn && inDom(rec0.fqn)) {
         setMode("existing"); setPicked([rec0.fqn]);
       } else {
-        const strongFqns = r.data.models.suggestions.filter((s) => s.kind === "existing" && s.score >= (r.data.bands ?? DEFAULT_BANDS).model_match_strong).map((s) => s.fqn);
-        if (strongFqns.length) { setMode("existing"); setPicked(strongFqns); }
+        const strongFqns = r.data.models.suggestions
+          .filter((s) => s.kind === "existing" && inDom(s.fqn, s.domain_name) && s.score >= (r.data.bands ?? DEFAULT_BANDS).model_match_strong)
+          .map((s) => s.fqn);
+        if (strongFqns.length) {
+          setMode("existing"); setPicked(strongFqns);
+        } else {
+          const domModels = r.data.models.suggestions.filter(
+            (s) => s.kind === "existing" && !/(\.|^)[^.]*bronze/i.test(s.fqn) && inDom(s.fqn, s.domain_name),
+          );
+          if (domModels.length) {
+            setMode("existing");
+            setPicked([domModels[0].fqn]);
+          }
+        }
       }
     });
     const onKey = (e: KeyboardEvent) => {
@@ -62,18 +77,35 @@ export function ModelPanel({ database, schema, tables, domains, onClose }: {
   }, [database, schema, tables, domains, onClose]);
 
   const selectedDomainName = useMemo(
-    () => domains.find((d) => d.domain_id === domainId)?.domain_name?.toUpperCase() ?? data?.domain?.detected?.domain_name?.toUpperCase() ?? "",
+    () => domains.find((d) => d.domain_id === domainId)?.domain_name?.toUpperCase() ?? data?.domain?.detected?.domain_name?.toUpperCase() ?? data?.domain?.schema?.domain_name?.toUpperCase() ?? "",
     [domains, domainId, data],
   );
-  const existing = useMemo(() => {
+  const allExisting = useMemo(() => {
     const raw = (data?.models.suggestions ?? []).filter(
       (s) => s.kind === "existing" && !/(\.|^)[^.]*bronze/i.test(s.fqn),
     );
-    if (!selectedDomainName) return raw;
-    const inDom = raw.filter((s) => (s.domain_name ?? "").toUpperCase() === selectedDomainName || s.fqn.toUpperCase().includes(`.${selectedDomainName}.`));
-    const other = raw.filter((s) => !inDom.includes(s));
-    return [...inDom, ...other];
-  }, [data, selectedDomainName]);
+    const seen = new Set(raw.map((s) => s.fqn.toUpperCase()));
+    for (const t of data?.models.targets ?? []) {
+      if (!t.fqn || seen.has(t.fqn.toUpperCase()) || /(\.|^)[^.]*bronze/i.test(t.fqn)) continue;
+      seen.add(t.fqn.toUpperCase());
+      raw.push({
+        kind: "existing",
+        target_table: t.target_table,
+        fqn: t.fqn,
+        domain_name: t.domain_name ?? null,
+        score: 0.45,
+        overlap_columns: [],
+        reason: t.domain_name ? `${t.domain_name} domain model` : "Registered target model",
+      });
+    }
+    return raw;
+  }, [data]);
+  const existing = useMemo(() => {
+    if (!selectedDomainName) return allExisting;
+    return allExisting.filter(
+      (s) => (s.domain_name ?? "").toUpperCase() === selectedDomainName || s.fqn.toUpperCase().includes(`.${selectedDomainName}.`),
+    );
+  }, [allExisting, selectedDomainName]);
   const proposed = (data?.models.suggestions ?? []).find((s) => s.kind === "proposed");
 
   const graph: ModelGraph | null = useMemo(() => {
@@ -209,7 +241,20 @@ export function ModelPanel({ database, schema, tables, domains, onClose }: {
                   ) : (
                     <p className="rounded-lg border border-dashed p-2.5 text-xs text-muted-foreground">No domain matched with enough confidence; pick a pack below or leave it to inference.</p>
                   )}
-                  <select id="model_domain" value={domainId} onChange={(e) => setDomainId(e.target.value)} aria-label="Domain knowledge pack"
+                  <select id="model_domain" value={domainId} onChange={(e) => {
+                            const nextId = e.target.value;
+                            setDomainId(nextId);
+                            const domName = domains.find((d) => d.domain_id === nextId)?.domain_name?.toUpperCase() ?? "";
+                            if (domName) {
+                              const domFqns = allExisting
+                                .filter((s) => (s.domain_name ?? "").toUpperCase() === domName || s.fqn.toUpperCase().includes(`.${domName}.`))
+                                .map((s) => s.fqn);
+                              if (domFqns.length) {
+                                setMode("existing");
+                                setPicked(domFqns);
+                              }
+                            }
+                          }} aria-label="Domain knowledge pack"
                           className="h-9 w-full rounded-md border bg-card px-2 text-sm">
                     <option value="">Infer from profiles and models</option>
                     {domains.filter((d) => standard === "GDP" || d.standard !== "GDP" || d.domain_id === domainId)

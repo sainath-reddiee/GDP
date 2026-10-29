@@ -170,16 +170,30 @@ function RequestRunDrawer({
     }
     let live = true;
     setAnalyzing(true);
-    analyzeTables(dbSchema.database, dbSchema.schema, checkedTables).then((r) => {
+    analyzeTables(dbSchema.database, dbSchema.schema, checkedTables.slice(0, 500)).then((r) => {
       if (!live) return;
       setAnalyzing(false);
       if (!r.ok) return;
       setAnalysis(r.data);
       setStandard(r.data.suggested_standard === "GDP" ? "GDP" : "GENERIC");
-      const domUpper = (domainName ?? r.data.domain?.detected?.domain_name ?? "").toUpperCase();
+      const domUpper = (domainName ?? r.data.domain?.detected?.domain_name ?? r.data.domain?.schema?.domain_name ?? "").toUpperCase();
       const rawExisting = (r.data.models.suggestions ?? []).filter(
         (s) => s.kind === "existing" && !/(\.|^)[^.]*bronze/i.test(s.fqn),
       );
+      const seen = new Set(rawExisting.map((s) => s.fqn.toUpperCase()));
+      for (const t of r.data.models.targets ?? []) {
+        if (!t.fqn || seen.has(t.fqn.toUpperCase()) || /(\.|^)[^.]*bronze/i.test(t.fqn)) continue;
+        seen.add(t.fqn.toUpperCase());
+        rawExisting.push({
+          kind: "existing",
+          target_table: t.target_table,
+          fqn: t.fqn,
+          domain_name: t.domain_name ?? null,
+          score: domUpper && ((t.domain_name ?? "").toUpperCase() === domUpper || t.fqn.toUpperCase().includes(`.${domUpper}.`)) ? 0.45 : 0.25,
+          overlap_columns: [],
+          reason: t.domain_name ? `${t.domain_name} domain model` : "Registered target model",
+        });
+      }
       const inDom = domUpper
         ? rawExisting.filter(
             (s) => (s.domain_name ?? "").toUpperCase() === domUpper || s.fqn.toUpperCase().includes(`.${domUpper}.`),
@@ -207,17 +221,29 @@ function RequestRunDrawer({
     };
   }, [dbSchema, checkedTables, domainName]);
 
-  const domUpper = (domainName ?? analysis?.domain?.detected?.domain_name ?? "").toUpperCase();
+  const domUpper = (domainName ?? analysis?.domain?.detected?.domain_name ?? analysis?.domain?.schema?.domain_name ?? "").toUpperCase();
   const existingModels = useMemo(() => {
     const raw = (analysis?.models.suggestions ?? []).filter(
       (s) => s.kind === "existing" && !/(\.|^)[^.]*bronze/i.test(s.fqn),
     );
+    const seen = new Set(raw.map((s) => s.fqn.toUpperCase()));
+    for (const t of analysis?.models.targets ?? []) {
+      if (!t.fqn || seen.has(t.fqn.toUpperCase()) || /(\.|^)[^.]*bronze/i.test(t.fqn)) continue;
+      seen.add(t.fqn.toUpperCase());
+      raw.push({
+        kind: "existing",
+        target_table: t.target_table,
+        fqn: t.fqn,
+        domain_name: t.domain_name ?? null,
+        score: domUpper && ((t.domain_name ?? "").toUpperCase() === domUpper || t.fqn.toUpperCase().includes(`.${domUpper}.`)) ? 0.45 : 0.25,
+        overlap_columns: [],
+        reason: t.domain_name ? `${t.domain_name} domain model` : "Registered target model",
+      });
+    }
     if (!domUpper) return raw;
-    const inDom = raw.filter(
+    return raw.filter(
       (s) => (s.domain_name ?? "").toUpperCase() === domUpper || s.fqn.toUpperCase().includes(`.${domUpper}.`),
     );
-    const other = raw.filter((s) => !inDom.includes(s));
-    return [...inDom, ...other];
   }, [analysis, domUpper]);
 
   const shownTables = useMemo(() => {
@@ -290,7 +316,7 @@ function RequestRunDrawer({
   if (typeof document === "undefined") return null;
 
   return createPortal(
-    <div className="fixed inset-0 z-[70] flex justify-end" data-testid="request-run-drawer">
+    <div className="ados fixed inset-0 z-[70] flex justify-end !min-h-0 !bg-transparent" data-testid="request-run-drawer">
       <button type="button" aria-label="Close" className="absolute inset-0 bg-black/40 backdrop-blur-[1px]" onClick={onClose} />
       <aside
         role="dialog"

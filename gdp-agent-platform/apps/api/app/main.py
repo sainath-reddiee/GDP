@@ -1046,7 +1046,7 @@ class ModelDesignSave(BaseModel):
     note: Optional[str] = Field(default=None, max_length=2000)
 
 
-MODEL_APPLY_STATES = {"PROFILING_COMPLETE", "DOMAIN_IDENTIFIED", "MAPPING_PENDING", "MAPPING_REVIEW"}
+MODEL_APPLY_STATES = {"PROFILING_COMPLETE", "DOMAIN_IDENTIFIED", "MAPPING_PENDING", "MAPPING_REVIEW", "FAILED"}
 
 
 def _workbench_enforced(db: Db) -> bool:
@@ -1166,7 +1166,17 @@ def pin_run_model(db: Db, run_id: str, model_id: str, version: int, entity: str,
     result = _source_call(db, "CALL CORE.PIN_RUN_MODEL(%s, %s, %s, %s, %s)", pin_run, run_id, model_id, int(version),
                           entity, int(design_version or 0))
     sent_back = False
-    if state == "MAPPING_REVIEW":
+    if state == "FAILED" and hasattr(db, "execute"):
+        try:
+            db.execute(
+                "UPDATE CORE.WORKFLOW_RUN SET CURRENT_STATE = 'MAPPING_PENDING', STATUS = 'IN_PROGRESS', "
+                "FAILURE_REASON = NULL, UPDATED_AT = CURRENT_TIMESTAMP() WHERE RUN_ID = %s AND CURRENT_STATE = 'FAILED'",
+                (run_id,),
+            )
+            sent_back = True
+        except Exception:
+            pass
+    elif state == "MAPPING_REVIEW":
         try:
             db.call("CALL CORE.REVIEW_TRANSITION(%s, %s, %s, %s, %s)",
                     (run_id, "MAPPING_PENDING", "REQUEST_CHANGES", None, f"Target model changed to domain model v{version}"))
@@ -1639,6 +1649,33 @@ def _catalog_profile(db: Db, database: Optional[str], schema: Optional[str], tab
     profile: list[dict] = []
     if not database or not schema:
         return [{"table_name": table, "column_name": ""} for table in tables]
+    if len(tables) > 1:
+        try:
+            db_name, sch = _ident(database, "database"), _ident(schema, "schema")
+            tbls = [_table_ident(t) for t in tables]
+            placeholders = ", ".join(["%s"] * len(tbls))
+            rows_c = db.query(
+                f"""
+                SELECT TABLE_NAME, COLUMN_NAME FROM {_quote_ident(db_name)}.INFORMATION_SCHEMA.COLUMNS
+                 WHERE TABLE_SCHEMA = %s AND TABLE_NAME IN ({placeholders})
+                """,
+                (sch, *tbls),
+            )
+            if rows_c:
+                by_t: dict[str, list[str]] = {}
+                for r in rows_c:
+                    if r.get("table_name") and r.get("column_name"):
+                        by_t.setdefault(str(r["table_name"]).upper(), []).append(r["column_name"])
+                for table in tables:
+                    cols_t = by_t.get(str(table).upper())
+                    if cols_t:
+                        for c in cols_t:
+                            profile.append({"table_name": table, "column_name": c})
+                    else:
+                        profile.append({"table_name": table, "column_name": ""})
+                return profile
+        except Exception:
+            pass
     for table in tables:
         try:
             db_name, sch, tbl = _ident(database, "database"), _ident(schema, "schema"), _table_ident(table)
@@ -1722,10 +1759,13 @@ def _suggest_for_catalog(db: Db, database: Optional[str], schema: Optional[str],
         str(t.get(k)) for k in ("target_database", "target_schema", "target_table"))} for t in targets],
         knowledge["synonyms"], knowledge["history"], knowledge["lineage"], domain)
     rich = {str(m["fqn"]).upper(): m for m in matches}
-    suggestions = [({**item, **rich[str(item.get("fqn") or "").upper()]} if str(item.get("fqn") or "").upper() in rich else item)
+    suggestions = [({**item, **rich[str(item.get("fqn") or "").upper()],
+                     "score": max(float(item.get("score") or 0),
+                                  float(rich[str(item.get("fqn") or "").upper()].get("score") or 0))}
+                    if str(item.get("fqn") or "").upper() in rich else item)
                    for item in suggestions]
     listed = {str(i.get("fqn") or "").upper() for i in suggestions}
-    suggestions = [m for m in matches if str(m["fqn"]).upper() not in listed and m["score"] >= 0.3] + suggestions
+    suggestions = [m for m in matches if str(m["fqn"]).upper() not in listed and m["score"] >= 0.15] + suggestions
     scoped_fqns = {str(t.get("fqn") or "").upper() for t in scoped}
     existing = []
     for item in suggestions:
@@ -1772,13 +1812,18 @@ def _suggest_for_catalog(db: Db, database: Optional[str], schema: Optional[str],
     related = bool(existing) or bool(scoped)
     proposed_name = proposed[0]["target_table"] if proposed else "DIM_SOURCE"
     bands = _ui_bands(db)
+    all_targets = scoped + [row for row in targets if row not in scoped]
+    dom_u = str(display_domain_name(domain) or domain or "").upper()
+    dom_existing = [i for i in existing if str(i.get("domain_name") or "").upper() in {str(domain or "").upper(), dom_u}
+                    or f".{str(domain or '').upper()}." in str(i.get("fqn") or "").upper()] if domain else existing
+    rec_pool = dom_existing or existing
     return {
-        "recommendation": recommend([i for i in existing if i.get("coverage_target") is not None] or existing,
+        "recommendation": recommend([i for i in rec_pool if i.get("coverage_target") is not None] or rec_pool,
                                     proposed_name, float(bands.get("model_match_strong") or 0.6)),
         "proposed": proposed[0] if proposed else None,
         "related": related,
         "suggestions": existing if related else existing + proposed,
-        "targets": [{**row, "domain_name": display_domain_name(row.get("domain_name"))} for row in scoped],
+        "targets": [{**row, "domain_name": display_domain_name(row.get("domain_name"))} for row in all_targets],
         "tables": tables,
     }
 
@@ -1821,7 +1866,7 @@ def catalog_target_suggestions(database: str = "", schema: str = "", tables: str
 class PreviewGraph(BaseModel):
     database: str
     schema_name: str = Field(alias="schema")
-    tables: list[str] = Field(default_factory=list, max_length=60)
+    tables: list[str] = Field(default_factory=list, max_length=500)
     targets: list[str] = Field(default_factory=list)
 
 
@@ -2673,6 +2718,24 @@ def get_domain(run_id: str, db: Db = Depends(current_db)):
 
 @app.post("/api/runs/{run_id}/mapping")
 def generate_mapping(run_id: str, db: Db = Depends(current_db)):
+    if isinstance(db, Db):
+        try:
+            row = db.query("SELECT DOMAIN_ID, TARGET_MODEL, CURRENT_STATE FROM CORE.WORKFLOW_RUN WHERE RUN_ID = %s", (run_id,))
+            if row:
+                r0 = row[0]
+                if r0.get("current_state") == "FAILED" and hasattr(db, "execute"):
+                    db.execute(
+                        "UPDATE CORE.WORKFLOW_RUN SET CURRENT_STATE = 'MAPPING_PENDING', STATUS = 'IN_PROGRESS', "
+                        "FAILURE_REASON = NULL, UPDATED_AT = CURRENT_TIMESTAMP() WHERE RUN_ID = %s AND CURRENT_STATE = 'FAILED'",
+                        (run_id,),
+                    )
+                if not r0.get("target_model") and r0.get("domain_id"):
+                    try:
+                        use_domain_model(run_id, None, db)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
     if _workbench_enforced(db):
         from services.modeling.run_link import pending_for_run
 
@@ -5686,7 +5749,7 @@ def _value_relationships(db: Db, database: str, schema: str, docs: dict) -> list
 
 
 class CatalogAnalyzeRequest(CatalogTarget):
-    tables: list[str] = Field(min_length=1, max_length=60)
+    tables: list[str] = Field(min_length=1, max_length=500)
 
 
 @app.post("/api/catalog/analyze")
@@ -5746,14 +5809,15 @@ def catalog_analyze(body: CatalogAnalyzeRequest, db: Db = Depends(current_db)):
             best = max(picked, key=lambda d: d["confidence"])
             detected = {**best, "inherited_from_schema": bool(schema_domains) and best["domain_id"] == schema_domains[0]["domain_id"]}
             candidates = [detected] + [c for c in candidates if c["domain_id"] != detected["domain_id"]]
+    effective_domain = detected or (schema_domains[0] if schema_domains else None)
     return {"tables": summary, "relationships": relationships, "graph": graph,
             "domain": {"detected": detected, "candidates": candidates,
                        "schema": schema_domains[0] if schema_domains else None},
             "bands": _ui_bands(db),
             # The panel always asks "GDP or not"; this is only the preselection.
-            "suggested_standard": "GDP" if detected and detected.get("standard") == "GDP" else "GENERIC",
+            "suggested_standard": "GDP" if effective_domain and effective_domain.get("standard") == "GDP" else "GENERIC",
             "models": _suggest_for_catalog(db, database, schema, tables,
-                                           detected["domain_name"] if detected else None)}
+                                           effective_domain["domain_name"] if effective_domain else None)}
 
 
 # ---------------------------------------------------------------- External sources: register, upload, land

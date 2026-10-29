@@ -24,7 +24,7 @@ Spoke tables: `COMPANY_ADDRESS` (55 cols), `COMPANY_INDUSTRY` (14), `COMPANY_SEG
 | 3 | REF_GDP_SOURCE_SYSTEM_SKEY | NUMBER(38,0) | NO | Cross join to ref_gdp_source_system |
 | 4 | DUNS_NUMBER | TEXT | YES | |
 | 5 | COMPANY_NAME | TEXT | YES | DBA/trading name |
-| 6 | ALIAS_NAME | TEXT | YES | CBRE internal alias |
+| 6 | ALIAS_NAME | TEXT | YES | Internal alias |
 | 7 | REF_COMPANY_TYPE_SKEY | NUMBER(38,0) | YES | LEFT JOIN ref_company_type |
 | 8 | REF_COUNTRY_OF_REGISTRATION_SKEY | NUMBER(38,0) | YES | LEFT JOIN ref_country (via country_mapping) |
 | 9 | REF_ADDRESS_SKEY | NUMBER(38,0) | YES | FK to SHARED.ADDRESS |

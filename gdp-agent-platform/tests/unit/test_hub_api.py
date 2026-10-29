@@ -157,9 +157,13 @@ def test_share_onboarding_input_checks(client):
     res = c.post("/api/hub/sources/share/onboard", json={"database": "share_db", "schema": "sales",
                                                          "tables": ["NOPE"], "source_system_name": "P"})
     assert res.status_code == 400 and "NOPE" in res.json()["detail"]
-    holder["db"] = FakeDb({"FROM INFORMATION_SCHEMA.DATABASES WHERE DATABASE_NAME": [{"type": "STANDARD"}]})
+    holder["db"] = FakeDb({"FROM INFORMATION_SCHEMA.DATABASES WHERE DATABASE_NAME": [{"type": "STANDARD"}],
+                           "INFORMATION_SCHEMA.TABLES": [{"table_name": "T1", "table_type": "BASE TABLE", "row_count": 5, "bytes": 10, "last_altered": None}]})
     res = c.post("/api/hub/sources/share/preview", json={"database": "db", "schema": "s"})
-    assert res.status_code == 400 and "not a mounted share" in res.json()["detail"]
+    assert res.status_code == 200 and res.json()["tables"][0]["table_name"] == "T1"
+    holder["db"] = FakeDb({"FROM INFORMATION_SCHEMA.DATABASES WHERE DATABASE_NAME": []})
+    res = c.post("/api/hub/sources/share/preview", json={"database": "db", "schema": "s"})
+    assert res.status_code == 404 and "not visible" in res.json()["detail"]
     with pytest.raises(AssertionError):
         hub_sources.mount_sql("DB", "acct; drop", "SHARE")
     assert hub_sources.mount_sql("DB", "ORG.ACCT", "SALES_SHARE") == \
