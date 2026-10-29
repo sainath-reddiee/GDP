@@ -74,13 +74,57 @@ def final_text(content: Any) -> str:
     return text
 
 
-def run(database: str, schema: str, name: str, message: str, timeout_ms: int = TIMEOUT_MS) -> str:
+def _http_headers(db: Any) -> tuple[str | None, dict[str, str]]:
+    if db is None:
+        return None, {}
+    conn = getattr(db, "conn", None) or getattr(db, "_conn", None)
+    host = getattr(db, "host", None) or getattr(conn, "host", None)
+    if not isinstance(host, str) or not host.strip():
+        return None, {}
+    host = host.strip().replace("_", "-")
+    if hasattr(db, "rest_headers"):
+        headers = db.rest_headers()
+        if isinstance(headers, dict) and headers:
+            return host, dict(headers)
+    token = getattr(db, "token", None)
+    if isinstance(token, str) and token.strip():
+        return host, {
+            "Authorization": f"Bearer {token.strip()}",
+            "X-Snowflake-Authorization-Token-Type": "PROGRAMMATIC_ACCESS_TOKEN",
+        }
+    sess_token = getattr(getattr(conn, "rest", None), "token", None)
+    if isinstance(sess_token, str) and sess_token.strip():
+        return host, {"Authorization": f'Snowflake Token="{sess_token.strip()}"'}
+    return None, {}
+
+
+def run(database: str, schema: str, name: str, message: str, timeout_ms: int = TIMEOUT_MS, db: Any = None) -> str:
+    path = f"/api/v2/databases/{database}/schemas/{schema}/agents/{name}:run"
+    body = {"messages": [{"role": "user", "content": [{"type": "text", "text": message}]}], "stream": False}
     try:
         import _snowflake  # type: ignore  # only inside a Snowflake procedure
     except ImportError as exc:
-        raise AgentUnavailable("Cortex Agents run only inside a Snowflake procedure") from exc
-    path = f"/api/v2/databases/{database}/schemas/{schema}/agents/{name}:run"
-    body = {"messages": [{"role": "user", "content": [{"type": "text", "text": message}]}], "stream": False}
+        host, auth = _http_headers(db)
+        if not host or not auth:
+            raise AgentUnavailable("Cortex Agents run only inside a Snowflake procedure") from exc
+        import urllib.error
+        import urllib.request
+
+        req = urllib.request.Request(
+            f"https://{host}{path}",
+            data=json.dumps(body).encode("utf-8"),
+            headers={**auth, "Content-Type": "application/json", "Accept": "application/json, text/event-stream"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=max(5.0, timeout_ms / 1000.0)) as resp:
+                raw = resp.read().decode("utf-8", "replace")
+                return final_text(raw)
+        except urllib.error.HTTPError as http_exc:
+            detail = http_exc.read().decode("utf-8", "replace")[:300]
+            raise AgentUnavailable(f"agent answered {http_exc.code}: {detail}") from http_exc
+        except Exception as net_exc:
+            raise AgentUnavailable(f"agent call failed: {net_exc}") from net_exc
     try:
         resp = _snowflake.send_snow_api_request("POST", path, {}, {}, body, None, timeout_ms)
     except Exception as exc:

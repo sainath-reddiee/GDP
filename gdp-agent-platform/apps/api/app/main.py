@@ -21,7 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
-from app.agent import AGENT_NAME, stream_agent
+from app.agent import AGENT_NAME, invoke_supervisor_stage, run_supervisor, stream_agent
 from app.source_invoke import USE_CALLER, invoke_source
 from services.common.platform_schema import PLATFORM_SCHEMA
 from app.db import (
@@ -2495,7 +2495,14 @@ def run_profiling(run_id: str, body: Optional[ProfileOptions] = None, db: Db = D
     _prewarm_run_profiles(db, run_id, bool(body and body.force_refresh))
     try:
         if body is None:
-            return db.call("CALL CORE.RUN_PROFILING(%s)", (run_id,))
+            return invoke_supervisor_stage(
+                db,
+                run_id,
+                "run_profiling",
+                lambda: db.call("CALL CORE.RUN_PROFILING(%s)", (run_id,)),
+                expected_states=("PROFILING_COMPLETE", "DOMAIN_IDENTIFIED", "MAPPING_PENDING", "MAPPING_REVIEW"),
+            )
+        run_supervisor(db, run_id, f"Load profiling skills and supervise profiling for run {run_id}.")
         return db.call("CALL CORE.RUN_PROFILING(%s, %s)", (run_id, body.model_dump_json()))
     except Exception as exc:
         raise _snowflake_error(exc) from exc
@@ -2614,7 +2621,13 @@ def get_profile(run_id: str, db: Db = Depends(current_db)):
 @app.post("/api/runs/{run_id}/domain")
 def identify_domain(run_id: str, db: Db = Depends(current_db)):
     try:
-        return db.call("CALL CORE.IDENTIFY_DOMAIN(%s)", (run_id,))
+        return invoke_supervisor_stage(
+            db,
+            run_id,
+            "identify_domain",
+            lambda: db.call("CALL CORE.IDENTIFY_DOMAIN(%s)", (run_id,)),
+            expected_states=("DOMAIN_IDENTIFIED", "MAPPING_PENDING", "MAPPING_REVIEW"),
+        )
     except Exception as exc:
         raise _snowflake_error(exc) from exc
 
@@ -2671,7 +2684,13 @@ def generate_mapping(run_id: str, db: Db = Depends(current_db)):
             raise HTTPException(409, "The run's model change is waiting in the Model Workbench; mapping starts once a model "
                                      "approver approves it (or withdraw the proposal to map to the current target).")
     try:
-        res = db.call("CALL CORE.GENERATE_MAPPING_CANDIDATES(%s)", (run_id,))
+        res = invoke_supervisor_stage(
+            db,
+            run_id,
+            "generate_mapping_candidates",
+            lambda: db.call("CALL CORE.GENERATE_MAPPING_CANDIDATES(%s)", (run_id,)),
+            expected_states=("MAPPING_REVIEW", "MAPPING_APPROVED"),
+        )
     except Exception as exc:
         raise _snowflake_error(exc) from exc
     if isinstance(db, Db):
@@ -3111,7 +3130,13 @@ def _mapping_assist_call(db: Db, run_id: str, model: str, prompt: str) -> tuple:
 @app.post("/api/runs/{run_id}/sttm")
 def generate_sttm(run_id: str, db: Db = Depends(current_db)):
     try:
-        return db.call("CALL CORE.GENERATE_STTM(%s)", (run_id,))
+        return invoke_supervisor_stage(
+            db,
+            run_id,
+            "generate_sttm",
+            lambda: db.call("CALL CORE.GENERATE_STTM(%s)", (run_id,)),
+            expected_states=("STTM_REVIEW", "STTM_APPROVED"),
+        )
     except Exception as exc:
         raise _snowflake_error(exc) from exc
 
@@ -3204,7 +3229,13 @@ def export_sttm_csv(run_id: str, db: Db = Depends(current_db)):
 @app.post("/api/runs/{run_id}/soda")
 def generate_soda(run_id: str, db: Db = Depends(current_db)):
     try:
-        return db.call("CALL CORE.GENERATE_SODA(%s)", (run_id,))
+        return invoke_supervisor_stage(
+            db,
+            run_id,
+            "generate_soda",
+            lambda: db.call("CALL CORE.GENERATE_SODA(%s)", (run_id,)),
+            expected_states=("SODA_REVIEW", "SODA_APPROVED"),
+        )
     except Exception as exc:
         raise _snowflake_error(exc) from exc
 
@@ -3790,6 +3821,11 @@ def _generate_dbt(run_id: str, payload: dict, db: Db):
         _save_dbt_plan(db, run_id, payload)
     except Exception:
         pass
+    run_supervisor(
+        db,
+        run_id,
+        f"For workflow run {run_id}, load skills GDP-DBT-ONBOARD-SOURCE, SILVER-MODEL, and GDP_DOMAIN_SKILL for dbt generation.",
+    )
     try:
         return db.call("CALL CORE.GENERATE_DBT(%s, %s)", (run_id, json.dumps(payload)))
     except Exception as two_arg:
@@ -4408,7 +4444,13 @@ def enhance_dbt(run_id: str, body: DbtEnhance, db: Db = Depends(current_db)):
 @app.post("/api/runs/{run_id}/validation")
 def validate_dbt(run_id: str, db: Db = Depends(current_db)):
     try:
-        return db.call("CALL CORE.VALIDATE_DBT(%s)", (run_id,))
+        return invoke_supervisor_stage(
+            db,
+            run_id,
+            "validate_dbt",
+            lambda: db.call("CALL CORE.VALIDATE_DBT(%s)", (run_id,)),
+            expected_states=("VALIDATION_PASSED", "DBT_REVIEW", "DBT_APPROVED"),
+        )
     except Exception as exc:
         raise _snowflake_error(exc) from exc
 
@@ -4542,6 +4584,9 @@ def copilot_ask(body: CopilotAsk, db: Db = Depends(current_db)):
     from services.common.copilot import ask
 
     started = time.time()
+    run_id = (body.page.get("path") or "").split("/")[2] if str(body.page.get("path") or "").startswith("/runs/") else None
+    clean_run_id = run_id if run_id and len(run_id) == 36 else None
+    supervisor_note = run_supervisor(db, clean_run_id, body.question)
     history = [{"role": str(m.get("role")), "content": str(m.get("content") or "")[:4000]} for m in body.history]
     try:
         result = invoke_source(db, ask, json.dumps(body.page), body.question, json.dumps(history), body.conversation_id)
@@ -4549,9 +4594,11 @@ def copilot_ask(body: CopilotAsk, db: Db = Depends(current_db)):
         raise HTTPException(400, str(exc)) from exc
     except Exception as exc:
         raise _snowflake_error(exc) from exc
-    run_id = (body.page.get("path") or "").split("/")[2] if str(body.page.get("path") or "").startswith("/runs/") else None
-    _record_cost(db, run_id if run_id and len(run_id) == 36 else None, "COPILOT", result.get("model"),
+    _record_cost(db, clean_run_id, "COPILOT", result.get("model"),
                  result.pop("usage", None), started)
+    if supervisor_note and isinstance(result, dict):
+        result["agent"] = AGENT_NAME
+        result["supervisor_note"] = supervisor_note[:1000]
     return result
 
 

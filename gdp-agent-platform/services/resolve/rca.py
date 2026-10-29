@@ -52,7 +52,9 @@ class Analyst:
         if prefs.get("rca_mode", "AGENT") == "AGENT":
             try:
                 propose = bool(prefs.get("agent_proposals_enabled") and prefs.get("agent_fix_scope"))
-                answer = agent.json_answer(agent.run(self.database, "CORE", AGENT_NAME, agent_message(failure, hops, propose)))
+                answer = agent.json_answer(
+                    agent.run(self.database, "CORE", AGENT_NAME, agent_message(failure, hops, propose), db=self.db)
+                )
                 cause = redact(str(answer.get("cause") or "")).strip()[:1000]
                 if cause:
                     return {"mode": "agent", "cause": cause, "evidence": _strings(answer.get("evidence"), 8),
@@ -76,8 +78,11 @@ class Analyst:
             from services.ops.diagnose import diagnose
             from services.ops.sqlio import as_session
 
-            fn = self.diagnose_fn or diagnose
-            ai = (fn(as_session(self.db), failure["incident_id"]) or {}).get("ai") or {}
+            sess = as_session(self.db)
+            res = self.diagnose_fn(sess, failure["incident_id"]) if self.diagnose_fn else diagnose(
+                sess, failure["incident_id"], use_rca_agent=False
+            )
+            ai = (res or {}).get("ai") or {}
         evidence = [f"{e.get('ref')}: {e.get('text')}" for e in (ai.get("evidence") or [])][:8]
         return {"mode": "grounded", "cause": ai.get("probable_cause") or
                 (f"{failure.get('exception_class') or 'Error'} in {failure.get('task_id')}: "

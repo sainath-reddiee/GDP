@@ -96,7 +96,19 @@ class Db:
 
     @property
     def host(self) -> str:
-        return self.conn.host
+        return (self.conn.host or "").replace("_", "-")
+
+    def rest_headers(self) -> dict[str, str]:
+        if self.token:
+            return {
+                "Authorization": f"Bearer {self.token}",
+                "X-Snowflake-Authorization-Token-Type": "PROGRAMMATIC_ACCESS_TOKEN",
+            }
+        rest = getattr(self.conn, "rest", None)
+        sess_token = getattr(rest, "token", None)
+        if sess_token:
+            return {"Authorization": f'Snowflake Token="{sess_token}"'}
+        return {}
 
     def execute(self, sql: str, params: tuple = ()) -> None:
         cur = self.conn.cursor()
@@ -245,7 +257,8 @@ def dev_db() -> Db:
         try:
             conn = _open_dev()
             user, role = _identity(conn)
-            _dev = Db(conn, user, role, shared=True)
+            dev_pat = (os.environ.get("AIP_DEV_PAT") or "").strip() or None
+            _dev = Db(conn, user, role, token=dev_pat, shared=True)
             _last_fail = ""
             return _dev
         except SnowflakeSessionError:

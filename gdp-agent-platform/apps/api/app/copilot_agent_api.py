@@ -410,9 +410,16 @@ async def turn(session_id: str, body: TurnIn, request: Request, db: Db = Depends
 
     state["ctx"] = {"attachments": [{k: a.get(k) for k in ("attachment_id", "file_name", "size_bytes", "chars", "note")}
                                     for a in state["attachments"]], "read_attachment": read_attachment}
+    from app.agent import run_supervisor
+
     asked = body.message or next((str((e.get("content") or {}).get("text") or "") for e in reversed(state["events"])
                                   if e.get("kind") == "USER" and isinstance(e.get("content"), dict)), "")
-    state["code_context"] = await run_in_threadpool(_code_context, db, state["session"].get("domain_id"), asked)
+    code_ctx = await run_in_threadpool(_code_context, db, state["session"].get("domain_id"), asked)
+    sup_reply = await run_in_threadpool(run_supervisor, db, None, asked) if asked else None
+    state["code_context"] = (
+        f"{code_ctx}\n\nSUPERVISOR AGENT GUIDANCE:\n{sup_reply}" if sup_reply and code_ctx
+        else (f"SUPERVISOR AGENT GUIDANCE:\n{sup_reply}" if sup_reply else code_ctx)
+    )
     await run_in_threadpool(_add_event, db, session_id, seq["next"], user_kind, user_content)
     state["events"].append({"kind": user_kind, "content": user_content})
     seq["next"] += 1

@@ -316,6 +316,7 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("POST", r"/api/ops/dq-alerting/run", "OPS.OPERATE", ""),
     # Airflow failure resolution (apps/api/app/resolve_api.py): drafts by operators; publishing, approving and the
     # guardrails by their own privileges. Publishing and approving are approvals themselves (NO_QUEUE_ROUTES).
+    ("POST", r"/api/ops/resolve/run", "OPS.OPERATE", "Run failure resolution now"),
     ("POST", r"/api/ops/resolve/fixes", "OPS.OPERATE", "Write a known fix (draft)"),
     ("PUT", r"/api/ops/resolve/fixes/[^/]+", "OPS.OPERATE", "Change a draft known fix"),
     ("POST", r"/api/ops/resolve/fixes/[^/]+/publish", "OPS.FIX_PUBLISH", "Publish a known fix"),

@@ -318,7 +318,7 @@ def store_ai(db: Any, incident_id: str, ai: Dict[str, Any]) -> None:
 def diagnose(session: Any, incident_id: str, force: bool = False, actor: str = "system", *,
              mwaa_factory: Optional[Callable[[Dict[str, Any]], Any]] = None,
              complete: Optional[Callable[..., Any]] = None, search: Optional[Callable[[str], List[Dict[str, Any]]]] = None,
-             now: Optional[datetime] = None) -> Dict[str, Any]:
+             now: Optional[datetime] = None, use_rca_agent: bool = True) -> Dict[str, Any]:
     """{ai, cached}. `session` is a Db or a Snowpark session. Raises DiagnoseError(404) for an unknown incident."""
     from services.ops.incidents import SqlStore
 
@@ -332,7 +332,39 @@ def diagnose(session: Any, incident_id: str, force: bool = False, actor: str = "
     inputs = {"incident_id": incident_id, "force": bool(force), "fingerprint": incident.get("fingerprint")}
     try:
         ctx = build_context(db, incident, mwaa_factory=mwaa_factory, search=search)
-        output, usage, model = _complete(sess, diagnosis_prompt(ctx), DIAGNOSIS_SCHEMA, 3000, complete)
+        prompt = diagnosis_prompt(ctx)
+        if complete is None and use_rca_agent:
+            try:
+                import os
+                from services.resolve import agent as rca_agent
+
+                database = os.environ.get("AIP_DATABASE", "DEV_AI_PLATFORM")
+                f_rows = db.query(
+                    "SELECT FAILURE_ID FROM CORE.FAILURE_EVENT WHERE INCIDENT_ID = %s ORDER BY CREATED_AT DESC LIMIT 1",
+                    (incident_id,),
+                ) if hasattr(db, "query") else []
+                fid = f_rows[0].get("failure_id") if f_rows else None
+                if fid:
+                    rca_msg = (
+                        f"Find the root cause of Airflow failure {fid} for incident {incident_id} "
+                        f"(DAG {incident.get('dag_id')}, task {incident.get('task_id')}): "
+                        f"{str(incident.get('error_excerpt') or incident.get('title') or '')[:600]}. "
+                        f"Call get_failure_context(FAILURE_ID='{fid}') and walk_graph(FAILURE_ID='{fid}', HOPS=3), "
+                        f"then return your JSON root-cause summary."
+                    )
+                else:
+                    rca_msg = (
+                        f"Analyze incident {incident_id} (DAG {incident.get('dag_id')}, task {incident.get('task_id')}): "
+                        f"{str(incident.get('error_excerpt') or incident.get('title') or '')[:600]}. "
+                        f"Do not call get_failure_context or walk_graph since there is no FAILURE_ID; use search_code "
+                        f"and search_knowledge as needed and return your JSON root-cause summary."
+                    )
+                rca_text = rca_agent.run(database, "CORE", "RCA_AGENT", rca_msg, db=db)
+                if rca_text:
+                    prompt = f"{prompt}\n\nRCA_AGENT ANALYSIS:\n{rca_text[:2000]}"
+            except Exception:
+                pass
+        output, usage, model = _complete(sess, prompt, DIAGNOSIS_SCHEMA, 3000, complete)
     except Exception as exc:
         _audit(sess, "ops_diagnose", inputs, "", exc)
         raise

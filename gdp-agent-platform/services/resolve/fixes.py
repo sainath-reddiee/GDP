@@ -83,14 +83,29 @@ class Executor:
         self.db, self.database, self.use_agent = db, database, use_agent
 
     def call_procedure(self, fqn: str, failure_id: str) -> Any:
-        return call(self.db, fqn, failure_id)
+        agent_note = None
+        if self.use_agent:
+            try:
+                msg = (
+                    f"Do not call run_fix_step because this is a single-procedure fix ({fqn}) for failure_id={failure_id}. "
+                    f"State in one short sentence that procedure fix {fqn} is ready to execute."
+                )
+                agent_note = agent.run(self.database, "CORE", AGENT_NAME, msg, db=self.db)[:1000]
+            except agent.AgentUnavailable:
+                pass
+        res = call(self.db, fqn, failure_id)
+        if isinstance(res, dict) and agent_note:
+            return {**res, "agent": AGENT_NAME, "agent_note": agent_note}
+        return res
 
     def run_skill(self, resolution_id: str, failure: Dict[str, Any], skill: Dict[str, Any]) -> Dict[str, Any]:
         steps = rules.skill_steps(skill.get("steps"), self.database)
         used_agent, agent_note = False, None
         if self.use_agent:
             try:
-                answer = agent.run(self.database, "CORE", AGENT_NAME, agent_message(resolution_id, failure, skill, steps))
+                answer = agent.run(
+                    self.database, "CORE", AGENT_NAME, agent_message(resolution_id, failure, skill, steps), db=self.db
+                )
                 used_agent, agent_note = True, answer[:1000]
             except agent.AgentUnavailable as exc:
                 agent_note = f"agent not used: {exc}"[:500]

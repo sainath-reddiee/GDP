@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 from app.db import Db
 from app.main import current_db
 from app.ops_api import _iso
-from services.resolve import engine, publish, rules
+from services.resolve import bridge, engine, publish, rules
 
 router = APIRouter()
 LIST_LIMIT = 200
@@ -61,8 +61,25 @@ def _http(exc: Exception) -> HTTPException:
 
 # ---------------------------------------------------------------- queue and audit
 
+@router.post("/api/ops/resolve/run")
+def run_resolve_now(db: Db = Depends(current_db)):
+    holder = str(db.user or "api")
+    claimed = bridge.trigger(db, holder)
+    resumed = bridge.resume(db, holder)
+    return {"claimed": claimed, "resumed": resumed}
+
+
 @router.get("/api/ops/resolve/summary")
 def summary(db: Db = Depends(current_db)):
+    try:
+        work = bridge.has_work(db)
+        holder = str(db.user or "api")
+        if work.get("resolve"):
+            bridge.trigger(db, holder)
+        if work.get("resume"):
+            bridge.resume(db, holder)
+    except Exception:
+        pass
     prefs = engine.load_preference(db)
     counts = {r["status"]: int(r["n"]) for r in db.query(
         "SELECT STATUS, COUNT(*) AS N FROM CORE.FAILURE_EVENT WHERE CREATED_AT >= DATEADD(day, -30, CURRENT_TIMESTAMP()) "
@@ -166,7 +183,12 @@ def _decide(db: Db, approval_id: str, approve: bool, note: Optional[str]) -> Dic
 @router.post("/api/ops/resolve/approvals/{approval_id}/approve")
 def approve(approval_id: str, body: DecisionIn, db: Db = Depends(current_db)):
     """The worker runs the approved fix within seconds (SP_RESUME_APPROVED)."""
-    return _decide(db, approval_id, True, body.note)
+    out = _decide(db, approval_id, True, body.note)
+    try:
+        bridge.resume(db, str(db.user or "api"))
+    except Exception:
+        pass
+    return out
 
 
 @router.post("/api/ops/resolve/approvals/{approval_id}/reject")

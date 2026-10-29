@@ -250,6 +250,40 @@ def test_agent_is_unavailable_outside_snowflake():
         agent.run("AIP", "CORE", "RCA_AGENT", "hi")
 
 
+def test_agent_calls_rest_with_db_outside_snowflake(monkeypatch):
+    import urllib.request
+
+    seen = {}
+
+    class Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return json.dumps([{"event": "response", "data": {"content": [{"type": "text", "text": '{"cause": "ok"}'}]}}]).encode("utf-8")
+
+    def fake_urlopen(req, timeout=0):
+        seen["url"] = req.full_url
+        seen["auth"] = req.headers.get("Authorization")
+        return Resp()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+    class FakeDb:
+        host = "acct.snowflakecomputing.com"
+
+        def rest_headers(self):
+            return {"Authorization": 'Snowflake Token="tok123"'}
+
+    out = agent.run("AIP", "CORE", "RCA_AGENT", "hi", db=FakeDb())
+    assert agent.json_answer(out) == {"cause": "ok"}
+    assert seen["url"] == "https://acct.snowflakecomputing.com/api/v2/databases/AIP/schemas/CORE/agents/RCA_AGENT:run"
+    assert seen["auth"] == 'Snowflake Token="tok123"'
+
+
 # ---------------------------------------------------------------- the Jira note
 
 def test_resolution_note_raises_the_ticket_and_stores_the_key(monkeypatch):
