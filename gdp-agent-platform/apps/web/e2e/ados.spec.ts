@@ -117,7 +117,7 @@ test("Home lists the build workflows by view, type, intent and name, and starts 
   await page.goto("/os?view=all&type=source");
   for (const row of await page.getByTestId("workflow-row").all()) await expect(row).toContainText(/(New|Enhance) source/);
   await page.goto("/os?view=all&q=zzqxjv999");
-  await expect(page.getByText('Nothing matches "zzqxjv999"')).toBeVisible();
+  await expect(page.getByTestId("search-mode")).toContainText("zzqxjv999");
   // Start a workflow: New and Enhance for a domain, a source and a data product open Intake
   await page.goto("/os");
   await expect(page.getByTestId("start-product-new")).toHaveAttribute("href", "/os/intake/new?type=product&intent=new");
