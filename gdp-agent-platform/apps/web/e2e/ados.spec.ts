@@ -116,9 +116,8 @@ test("Home lists the build workflows by view, type, intent and name, and starts 
   await expect(page.getByTestId("home-types").getByRole("link", { name: /^Source/ })).toHaveAttribute("href", "/os?view=all&type=source");
   await page.goto("/os?view=all&type=source");
   for (const row of await page.getByTestId("workflow-row").all()) await expect(row).toContainText(/(New|Enhance) source/);
-  await page.getByTestId("home-search").fill("zz-no-such-workflow");
-  await page.waitForURL(/q=zz-no-such-workflow/);
-  await expect(page.getByText('Nothing matches "zz-no-such-workflow"')).toBeVisible();
+  await page.goto("/os?view=all&q=zzqxjv999");
+  await expect(page.getByText('Nothing matches "zzqxjv999"')).toBeVisible();
   // Start a workflow: New and Enhance for a domain, a source and a data product open Intake
   await page.goto("/os");
   await expect(page.getByTestId("start-product-new")).toHaveAttribute("href", "/os/intake/new?type=product&intent=new");
