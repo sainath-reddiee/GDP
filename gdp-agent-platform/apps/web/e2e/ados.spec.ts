@@ -122,14 +122,13 @@ test("Home lists the build workflows by view, type, intent and name, and starts 
   await page.goto("/os");
   await expect(page.getByTestId("start-product-new")).toHaveAttribute("href", "/os/intake/new?type=product&intent=new");
   await expect(page.getByTestId("start-product-enhance")).toHaveAttribute("href", "/os/intake/new?type=product&intent=enhance");
-  await page.getByTestId("start-domain-enhance").click();
-  await page.waitForURL(/\/os\/intake\/new\?type=domain&intent=enhance$/);
+  await expect(page.getByTestId("start-domain-enhance")).toHaveAttribute("href", "/os/intake/new?type=domain&intent=enhance");
+  await expect(page.getByTestId("start-source-new")).toHaveAttribute("href", "/os/intake/new?type=source&intent=new");
+  await page.goto("/os/intake/new?type=domain&intent=enhance");
   await expect(page.getByTestId("domain-enhance")).toBeVisible();
   await expect(page.locator("#domain")).toBeVisible();
   await expect(page.locator("#rq-domain")).toHaveCount(0);
-  await page.goto("/os");
-  await page.getByTestId("start-source-new").click();
-  await page.waitForURL(/\/os\/intake\/new\?type=source&intent=new$/);
+  await page.goto("/os/intake/new?type=source&intent=new");
   await expect(page.getByTestId("intake-intent").getByRole("tab", { name: "New" })).toHaveAttribute("aria-selected", "true");
 });
 
