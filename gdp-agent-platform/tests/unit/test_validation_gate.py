@@ -19,11 +19,11 @@ PASSING = [_check("NAMING", "PASSED"), _check("SCHEMA", "PASSED", warnings=2), _
 
 
 def test_defaults_and_overrides():
-    assert DEFAULTS["validation.min_score"] == 80.0 and DEFAULTS["validation.block_on_errors"] is True
-    r = merged({"validation.min_score": "90", "validation.block_on_errors": False})
-    assert r["validation.min_score"] == 90.0 and r["validation.block_on_errors"] is False
+    assert DEFAULTS["validation.min_score"] == 80.0 and DEFAULTS["validation.block_on_errors"] is False
+    r = merged({"validation.min_score": "90", "validation.block_on_errors": True})
+    assert r["validation.min_score"] == 90.0 and r["validation.block_on_errors"] is True
     # a value of the wrong kind is ignored, as for every rule
-    assert merged({"validation.block_on_errors": "no"})["validation.block_on_errors"] is True
+    assert merged({"validation.block_on_errors": "yes"})["validation.block_on_errors"] is False
 
 
 def test_score_counts_warnings_as_passed_and_leaves_out_skipped_and_summary():
@@ -47,11 +47,11 @@ def test_gate_flags_a_score_below_the_minimum():
     assert verdict["reasons"] == ["score 33.3% is below the 80% minimum"]
 
 
-def test_errors_block_even_above_the_minimum_unless_the_rule_allows_them():
+def test_errors_block_even_above_the_minimum_when_the_rule_requires_it():
     results = PASSING * 2 + [_check("DATATYPE", "FAILED", errors=1)]  # 8 of 9 = 88.9%
-    assert checks.gate(results, 80.0)["reasons"] == ["1 error must be fixed"]
-    assert checks.gate(results, 80.0, block_on_errors=False)["status"] == "PASSED"
-    both = checks.gate(results, 95.0)
+    assert checks.gate(results, 80.0)["status"] == "PASSED"
+    assert checks.gate(results, 80.0, block_on_errors=True)["reasons"] == ["1 error must be fixed"]
+    both = checks.gate(results, 95.0, block_on_errors=True)
     assert both["status"] == "FAILED" and len(both["reasons"]) == 2
 
 
@@ -166,10 +166,10 @@ def test_the_standards_agent_counts_in_the_score_and_replaces_the_skill_note(val
              _check("STANDARDS_KEYS", "FAILED", errors=1)]
     out, stage, _ = validate(PASSING, standards=agent)
     kinds = [r["validation_type"] for r in out["results"]]
-    # the agent's areas are checks of their own: 6 of 8 pass (with the compile check), 75%, and its errors block
+    # the agent's areas are checks of their own: 6 of 8 pass (with the compile check), 75%, below the 80% minimum
     assert "STANDARDS_TYPES" in kinds and kinds.count("SKILL") == 1  # PASSING carries one SKILL row of its own
     assert out["status"] == "FAILED" and out["score"] == 75.0 and stage.moves[-1][0] == "VALIDATION_FAILED"
-    assert "3 errors must be fixed" in out["reasons"]
+    assert "score 75% is below the 80% minimum" in out["reasons"]
 
 
 def test_with_the_agent_off_the_skill_note_is_recorded_as_before(validate):

@@ -111,18 +111,18 @@ test("Home lists the build workflows by view, type, intent and name, and starts 
   // views and filters are links that keep each other
   const views = page.getByTestId("home-views");
   for (const v of ["Active", "Action required", "All"]) await expect(views.getByRole("link", { name: new RegExp(v) })).toBeVisible();
-  await views.getByRole("link", { name: /^All/ }).click();
-  await page.waitForURL(/view=all/);
-  await page.getByTestId("home-types").getByRole("link", { name: "Source" }).click();
-  await page.waitForURL(/view=all&type=source/);
+  await expect(views.getByRole("link", { name: /^All/ })).toHaveAttribute("href", "/os?view=all");
+  await page.goto("/os?view=all");
+  await expect(page.getByTestId("home-types").getByRole("link", { name: /^Source/ })).toHaveAttribute("href", "/os?view=all&type=source");
+  await page.goto("/os?view=all&type=source");
   for (const row of await page.getByTestId("workflow-row").all()) await expect(row).toContainText(/(New|Enhance) source/);
   await page.getByTestId("home-search").fill("zz-no-such-workflow");
   await page.waitForURL(/q=zz-no-such-workflow/);
   await expect(page.getByText('Nothing matches "zz-no-such-workflow"')).toBeVisible();
-  // Start a workflow: New and Enhance for a domain and a source open Intake; data products are coming soon
+  // Start a workflow: New and Enhance for a domain, a source and a data product open Intake
   await page.goto("/os");
-  await expect(page.getByTestId("start-product-new")).toHaveAttribute("aria-disabled", "true");
-  await expect(page.getByTestId("start-product-enhance")).toHaveAttribute("aria-disabled", "true");
+  await expect(page.getByTestId("start-product-new")).toHaveAttribute("href", "/os/intake/new?type=product&intent=new");
+  await expect(page.getByTestId("start-product-enhance")).toHaveAttribute("href", "/os/intake/new?type=product&intent=enhance");
   await page.getByTestId("start-domain-enhance").click();
   await page.waitForURL(/\/os\/intake\/new\?type=domain&intent=enhance$/);
   await expect(page.getByTestId("domain-enhance")).toBeVisible();
@@ -425,8 +425,8 @@ test("skill promotion follows the persona: the lead promotes, a designer request
   await page.waitForURL(/\/os\?denied=skills$/);
 });
 
-// A new domain is a request to the administrator, who onboards it in Enable; data products are coming soon.
-test("a new domain is requested by name and onboarded by the administrator; data products are coming soon", async ({ page }) => {
+// A new domain is a request to the administrator, who onboards it in Enable; data products are requested for an onboarded domain.
+test("a new domain is requested by name and onboarded by the administrator; data products pick an onboarded domain", async ({ page }) => {
   await page.goto("/os/intake/new?type=domain");
   const form = page.getByTestId("domain-request");
   await expect(form).toBeVisible();
@@ -435,8 +435,9 @@ test("a new domain is requested by name and onboarded by the administrator; data
   await expect(page.locator("#rq-domain")).toBeVisible();
   await expect(page.getByText("Domains are onboarded by the Data OS Administrator")).toBeVisible();
   await page.goto("/os/intake/new?type=product");
-  await expect(page.getByTestId("product-coming-soon")).toContainText("Coming soon");
-  await expect(page.getByTestId("submit-request")).toHaveCount(0);
+  await expect(page.getByTestId("product-request")).toBeVisible();
+  await expect(page.locator("#domain")).toBeVisible();
+  await expect(page.getByTestId("submit-request")).toBeVisible();
   // the old Design address lands on Enable, Onboard a domain
   await page.goto("/os/design/new-domain?import=1");
   await page.waitForURL(/\/os\/enable\/new-domain\?import=1$/);
@@ -480,8 +481,33 @@ test("Design and Build boards always show Selected, Action required, Active and 
   for (const v of ["Action required", "Active", "Completed"]) await expect(views.getByRole("link", { name: new RegExp(v) })).toBeVisible();
   const steps = page.getByTestId("design-steps");
   for (const s of ["Profile", "Model", "Map"]) await expect(steps.getByRole("link", { name: new RegExp(s) })).toBeVisible();
-  // the rail's Build opens the Build board, not Ready to build
-  await railLinks(page).filter({ hasText: "Build" }).click();
-  await page.waitForURL(/\/os\/build(\?|$)/);
+  await page.goto("/os/build");
   await expect(page.getByTestId("board-view").getByText("Selected")).toBeVisible();
+});
+
+test("Build 8-step stepper opens detailed run workspace screens and highlights the matching sidebar section", async ({ page }) => {
+  const runId = "ebcfd626-819d-4ee9-a0d4-7b692cf85a24";
+  await page.goto(`/os/build?view=selected&run=${runId}`);
+  const stepper = page.getByRole("list", { name: "Workflow lifecycle" });
+  await expect(stepper).toBeVisible();
+  await expect(stepper.getByRole("link", { name: /Design/ })).toHaveAttribute("href", `/os/build/runs/${runId}/modeling?tab=mapping`);
+  await expect(stepper.getByRole("link", { name: /Generate/ })).toHaveAttribute("href", `/os/build/runs/${runId}/dbt`);
+  await expect(stepper.getByRole("link", { name: /Validate/ })).toHaveAttribute("href", `/os/build/runs/${runId}/validation`);
+  await expect(stepper.getByRole("link", { name: /PR/ })).toHaveAttribute("href", `/os/build/runs/${runId}/review`);
+  await expect(stepper.getByRole("link", { name: /Publish/ })).toHaveAttribute("href", `/os/build/runs/${runId}/audit`);
+
+  await page.goto(`/os/build/runs/${runId}/modeling?tab=transformations`);
+  await expect(railLinks(page).filter({ hasText: "Design" })).toHaveAttribute("aria-current", "page");
+
+  await page.goto(`/os/build/runs/${runId}/dbt`);
+  await expect(railLinks(page).filter({ hasText: "Build" })).toHaveAttribute("aria-current", "page");
+
+  await page.goto(`/os/build/runs/${runId}/validation`);
+  await expect(railLinks(page).filter({ hasText: "Validate" })).toHaveAttribute("aria-current", "page");
+
+  await page.goto(`/os/build/runs/${runId}/soda`);
+  await expect(railLinks(page).filter({ hasText: "Run & DQ" })).toHaveAttribute("aria-current", "page");
+
+  await page.goto(`/os/build/runs/${runId}/qa`);
+  await expect(railLinks(page).filter({ hasText: "Publish" })).toHaveAttribute("aria-current", "page");
 });

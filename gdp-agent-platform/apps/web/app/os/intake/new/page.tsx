@@ -1,10 +1,10 @@
 import Link from "next/link";
-import { Boxes, Clock, Crown, Database } from "lucide-react";
+import { Boxes, Crown, Database } from "lucide-react";
 import type { RunSummary, SourceOverviewItem } from "@/lib/types";
 import { stateLabel } from "@/lib/run-labels";
 import { loadDomainModel, loadDomains, loadRuns, loadSources } from "@/lib/os/data";
 import { guard } from "@/lib/os/session";
-import { Card, Empty, PageHeader, SourceError, Tag, ago, pretty } from "@/components/os/ui";
+import { Card, PageHeader, SourceError, Tag, ago, pretty } from "@/components/os/ui";
 import { AutoForm } from "@/components/os/client";
 import { SubmitRequest } from "@/components/os/request-ui";
 import { SourceIntakeForm } from "@/components/os/source-intake";
@@ -18,7 +18,7 @@ const TYPES = [
     enhance: "More from a source already onboarded: say what to add; the Data Designer maps only the delta" },
   { key: "domain", label: "Domain", icon: Boxes, soon: false, hint: "Ask for a business domain that is not on the platform yet: the Data OS Administrator onboards its model, contract and memory",
     enhance: "Extend a domain already on the platform: the Data Designer adds what you name to its model and a model approver approves the new version" },
-  { key: "product", label: "Data product", icon: Crown, soon: true, hint: "Governed Gold products from mastered Silver domains", enhance: "Change a data product already published" },
+  { key: "product", label: "Data product", icon: Crown, soon: false, hint: "Governed Gold products from mastered Silver domains", enhance: "Change a data product already published" },
 ] as const;
 
 const INTENTS = [{ key: "new", label: "New" }, { key: "enhance", label: "Enhance" }] as const;
@@ -55,7 +55,7 @@ export default async function Intake({ searchParams }: { searchParams: { type?: 
   const picked = new Set(([] as string[]).concat(searchParams.source ?? []));
   const domain = domains.data.find((d) => d.domain_id === searchParams.domain) ?? null;
   // the domain's model today, for an Enhance domain request
-  const model = domain && type.key === "domain" && enhance ? await loadDomainModel(domain.domain_id) : null;
+  const model = domain && ((type.key === "domain" && enhance) || type.key === "product") ? await loadDomainModel(domain.domain_id) : null;
   const entities = model?.data.diagram?.entities ?? [];
 
   const head = (
@@ -84,11 +84,37 @@ export default async function Intake({ searchParams }: { searchParams: { type?: 
     return (
       <>
         {head}
-        <Card title="Data product requests" subtitle="Coming soon">
-          <div data-testid="product-coming-soon"><Empty icon={Clock} title="Coming soon">
-            Requesting a governed Gold data product from mastered Silver domains will open here. Until then, ask for the domains and sources it needs with a domain or source request.
-          </Empty></div>
-        </Card>
+        <SourceError what="Domains" error={domains.error} />
+        <div className="max-w-3xl">
+          <Card title={enhance ? "Enhance a data product" : "New data product"} subtitle={enhance ? type.enhance : type.hint}>
+            <div data-testid="product-request" className="grid gap-4">
+              <AutoForm action="/os/intake/new">
+                <input type="hidden" name="type" value="product" />
+                <input type="hidden" name="intent" value={intent} />
+                <label className="os-label" htmlFor="domain">Business domain</label>
+                <select id="domain" name="domain" defaultValue={domain?.domain_id ?? ""} className="os-input">
+                  <option value="">Choose an onboarded domain...</option>
+                  {domains.data.map((d) => <option key={d.domain_id} value={d.domain_id}>{d.domain_name}</option>)}
+                </select>
+              </AutoForm>
+              {domain && entities.length > 0 && (
+                <div className="flex flex-wrap items-center gap-1.5 text-[11px]"><span className="os-faint">Its model today:</span>
+                  {entities.map((e) => <Tag key={e.entity_name} tone={e.kind === "HUB" ? "green" : "neutral"}>{e.entity_name}</Tag>)}</div>
+              )}
+              <SubmitRequest
+                type="PRODUCT"
+                intent={INTENT}
+                domainId={domain?.domain_id ?? null}
+                domainName={domain?.domain_name ?? null}
+                picked={[]}
+                previewing={!!access.preview}
+              />
+            </div>
+            <p className="os-faint mt-4 border-t border-[var(--os-line)] pt-3 text-[11.5px]">
+              Data products are built by the Forward Engineering Lead in the <Link href="/os/build/gold" className="underline">Gold pipeline</Link> from the domain&apos;s mastered Silver tables.
+            </p>
+          </Card>
+        </div>
       </>
     );
   }

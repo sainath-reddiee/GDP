@@ -149,6 +149,23 @@ function matchLength(pattern: string, path: string): number {
   return path === pattern || path.startsWith(`${pattern}/`) ? pattern.length : -1;
 }
 
+const RUN_STEP_SECTION: Record<string, { section: SectionKey; under: ScreenKey }> = {
+  source: { section: "intake", under: "enable" },
+  access: { section: "intake", under: "enable" },
+  landing: { section: "intake", under: "enable" },
+  profile: { section: "design", under: "design" },
+  domain: { section: "design", under: "design" },
+  modeling: { section: "design", under: "design" },
+  mapping: { section: "design", under: "design" },
+  sttm: { section: "design", under: "design" },
+  dbt: { section: "build", under: "build" },
+  validation: { section: "review", under: "review" },
+  review: { section: "review", under: "review" },
+  soda: { section: "run", under: "quality" },
+  qa: { section: "release", under: "qa" },
+  audit: { section: "release", under: "release" },
+};
+
 /** The screen a path belongs to (its own href or one of its covered pages), most specific first; null for pages no
  *  screen owns (sign-in, the BFF), which governance does not gate. */
 export function screenOfPath(path: string): Screen | null {
@@ -160,6 +177,11 @@ export function screenOfPath(path: string): Screen | null {
       const n = matchLength(p, path);
       if (n > len) { best = s; len = n; }
     }
+  }
+  if (best?.key === "runs") {
+    const m = path.split("?")[0].match(/^\/(?:os\/build\/)?runs\/[^/]+\/([^/]+)/);
+    const step = m ? RUN_STEP_SECTION[m[1]] : undefined;
+    if (step) return { ...best, section: step.section, under: step.under };
   }
   return best;
 }

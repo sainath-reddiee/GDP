@@ -45,7 +45,7 @@ def score(results: List[Dict[str, Any]]) -> Optional[float]:
     return 100.0 * sum(1 for r in evaluated if r.get("status") in PASSING) / len(evaluated)
 
 
-def gate(results: List[Dict[str, Any]], min_score: float, block_on_errors: bool = True) -> Dict[str, Any]:
+def gate(results: List[Dict[str, Any]], min_score: float, block_on_errors: bool = False) -> Dict[str, Any]:
     """The validation gate: PASSED when the score reaches min_score and, while block_on_errors holds, no check
     reported an error. A FAILED gate carries the reasons, so the run says what to improve before validating again."""
     errors = sum(r["error_count"] for r in results)

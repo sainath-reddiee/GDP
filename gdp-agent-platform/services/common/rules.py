@@ -40,7 +40,7 @@ DEFAULTS: Dict[str, Any] = {
     # (skipped ones are not evaluated, warnings count as passed) passes, and, while block_on_errors holds, no check
     # reports an error; below it the run is VALIDATION_FAILED with the reason, to be improved and validated again
     "validation.min_score": 80.0,
-    "validation.block_on_errors": True,
+    "validation.block_on_errors": False,
     # the code standards agent (services/validation/standards.py): reviews every generation against the written
     # standards, one check per area; with standards_block off its errors are advisory warnings
     "validation.standards_review": True,

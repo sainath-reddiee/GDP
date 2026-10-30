@@ -14,7 +14,7 @@ import { BuildAllReady, BuildEndToEnd } from "@/components/os/build-run";
 import { DeleteRunButton } from "@/components/os/request-ui";
 import { actMode } from "@/lib/os/access";
 import { Action } from "@/components/os/action";
-import { currentStep, gateHref, lifecycleOfRun, osHref } from "@/lib/os/lifecycle";
+import { classicHref, currentStep, gateHref, lifecycleOfRun, osHref } from "@/lib/os/lifecycle";
 import { ActivityRow, Banner, Bar, Btn, Card, Empty, Field, PageHeader, SourceError, Stepper, Tag, ago, pretty, type Tone } from "@/components/os/ui";
 import { cn } from "@/lib/utils";
 
@@ -171,13 +171,13 @@ async function Workbench({ runId, access }: { runId: string; access: OsAccess })
   const standardsRan = standardsAreas.filter((c) => c.status !== "SKIPPED");
   // a card's status comes from what its agent produced; the rail's stage status is only the fallback before that
   const canvas = [
-    { n: "01", title: "Profile", actor: "Deterministic tool", stage: "PROFILING", what: "Snowflake profiling and sampling" },
-    { n: "02", title: "Design agent", actor: "Agent + approval", stage: "MAPPING", what: "Domain model and field mapping" },
-    { n: "03", title: "Build agent", actor: "Agent", stage: "DBT", what: b.generation ? `dbt v${b.generation.generation_version}: ${b.generation.files_generated} files` : "dbt models, tests and config",
+    { n: "01", title: "Profile", actor: "Deterministic tool", stage: "PROFILING", href: `/os/build/runs/${runId}/profile`, what: "Snowflake profiling and sampling" },
+    { n: "02", title: "Design agent", actor: "Agent + approval", stage: "MAPPING", href: `/os/build/runs/${runId}/modeling?tab=mapping`, what: "Domain model and field mapping" },
+    { n: "03", title: "Build agent", actor: "Agent", stage: "DBT", href: `/os/build/runs/${runId}/dbt`, what: b.generation ? `dbt v${b.generation.generation_version}: ${b.generation.files_generated} files` : "dbt models, tests and config",
       evidence: run.current_state === "DBT_GENERATING" ? null : b.generation ? DONE : null },
-    { n: "04", title: "Review agent", actor: "Independent agent", stage: "VALIDATION", what: score.total ? `${score.passed}/${score.total} checks · gate ${b.gate.min_score}%` : `Policy threshold ${b.gate.min_score}%`,
+    { n: "04", title: "Review agent", actor: "Independent agent", stage: "VALIDATION", href: `/os/build/runs/${runId}/validation`, what: score.total ? `${score.passed}/${score.total} checks · gate ${b.gate.min_score}%` : `Policy threshold ${b.gate.min_score}%`,
       evidence: score.total ? (passed ? DONE : FAIL) : null },
-    { n: "05", title: "Standards agent", actor: "Independent agent", stage: "VALIDATION",
+    { n: "05", title: "Standards agent", actor: "Independent agent", stage: "VALIDATION", href: `/os/build/runs/${runId}/validation`,
       what: standardsAreas.length
         ? `${standardsAreas.filter((c) => c.status === "PASSED").length}/${standardsRan.length} standard areas pass`
         : b.gate.standards_review === false ? "Off for this domain" : "Reviews the code against the written standards at validation",
@@ -287,7 +287,7 @@ async function Workbench({ runId, access }: { runId: string; access: OsAccess })
         <b className="os-ink">{steps.filter((x) => x.status === "done").length} of {steps.length} steps done</b>
         {steps.some((x) => x.status !== "done") && <> · {steps.filter((x) => x.status !== "done").length} pending · now at {now.label.toLowerCase()} ({now.owner})</>}
       </p>
-      <div className="mb-4"><Stepper steps={steps} hrefOf={(s) => s.status === "pending" ? null : osHref(runId, s, domainId)} /></div>
+      <div className="mb-4"><Stepper steps={steps} hrefOf={(s) => s.status === "pending" ? null : classicHref(runId, s)} /></div>
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)]">
         <Card title="Live workflow canvas" subtitle="Hybrid orchestration: deterministic tools plus agent decisions"
@@ -296,12 +296,12 @@ async function Workbench({ runId, access }: { runId: string; access: OsAccess })
             {canvas.map((c) => {
               const st = cardStatus(c);
               return (
-                <div key={c.n} className="rounded-xl border border-[var(--os-line)] p-3.5">
+                <Link key={c.n} href={c.href} className="block rounded-xl border border-[var(--os-line)] p-3.5 transition hover:border-[var(--os-forest)] hover:shadow-sm">
                   <div className="os-faint text-[10.5px] font-bold tracking-wide">{c.n} · {c.actor.toUpperCase()}</div>
                   <div className="mt-1 text-[14px] font-extrabold">{c.title}</div>
                   <Tag tone={st.tone} className="mt-2">{st.label}</Tag>
                   <div className="os-muted mt-2 text-[11.5px] leading-snug">{c.what}</div>
-                </div>
+                </Link>
               );
             })}
           </div>

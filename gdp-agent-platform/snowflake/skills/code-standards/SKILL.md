@@ -16,6 +16,10 @@ reports a preference the standards do not state.
 
 - Give every area a verdict: PASS (no violation), WARN (only deviations the standards discourage) or FAIL (at least
   one violation the standards require).
+- **CRITICAL**: `findings` must ONLY contain actual violations or deviations. **NEVER** include compliant, passing, or
+  satisfied checks in `findings`. If you inspect a column, cast, key, macro, or test and conclude that it is compliant
+  (e.g., "explicit cast is present, so this is compliant", "satisfies Rule 2", "this is compliant and recommended"),
+  OMIT it from `findings` completely and set `verdict: "PASS"` with `findings: []`.
 - Every finding cites the standard it breaks (skill name and rule), the file and a short excerpt.
 - An **error** breaks a rule written as a requirement ("must", "always", "never", a rule numbered in a playbook).
   A **warning** is a deviation from guidance ("prefer", "should", "avoid").
@@ -42,6 +46,14 @@ reports a preference the standards do not state.
   type equals its target type may be passed through without a cast, or explicitly cast to the target type (`::timestamp_ntz`,
   `::varchar`, etc.) when the STTM transformation or domain contract specifies it; neither is an error. A mismatch is a
   different type family (DATE to TIMESTAMP_NTZ, NUMBER to FLOAT, TEXT to NUMBER or DATE).
+- Any cross-family mapping (such as `TIMESTAMP_NTZ` -> `TEXT`/`VARCHAR`) that is explicitly cast in the model SQL
+  (for example `o.col::varchar as col` in the `base` CTE, even when the earlier `sp_<model>` source-projection CTE
+  aliases the raw source column without a cast like `o.CREATED_TS as street_type`) is **100% compliant** with Rule 2.
+  In Snowflake SQL, `::varchar` is a valid explicit conversion from `TIMESTAMP_NTZ`, `DATE`, or `NUMBER` to `TEXT`/`VARCHAR`.
+  Never question the semantic meaning of an approved column mapping (such as a timestamp column mapped to a text target
+  column) — mapping decisions were already approved at the Mapping gate. Whenever `release/generation-report.json`
+  records a cast (such as `TIMESTAMP -> VARCHAR`) and `::varchar` is present in the `base` CTE, `TYPES` MUST be `PASS`
+  with `findings: []`.
 - `TIMESTAMP_NTZ`, `TIMESTAMP_NTZ(6)`, and `TIMESTAMP_NTZ(9)` are the same Snowflake timestamp family: passing a
   `TIMESTAMP_NTZ` column into a `TIMESTAMP_NTZ(6)` target (such as `gdp_inserted_ts` or `gdp_updated_ts`) without an
   explicit cast, or casting with `::timestamp_ntz`, is always valid and never an error.
@@ -57,8 +69,11 @@ reports a preference the standards do not state.
 - Dates, timestamps and numbers use the playbook's safe conversion (`TRY_TO_*`) where source values can be invalid.
 
 ### KEYS: keys, joins and dedup
-- The business key and the hash key are built from the columns the playbook lists, never from audit or surrogate
-  key columns.
+- The business key and the hash key are built from the columns the playbook lists, never from audit columns
+  (`gdp_inserted_ts`, `gdp_updated_ts`, `gdp_is_active`) or the table's own primary surrogate key (`<table_name>_skey`)
+  or `ref_gdp_source_system_skey`. Reference lookup foreign keys (`ref_*_skey` such as `ref_address_type_skey`,
+  `ref_country_skey`, etc.) ARE business attributes of the entity in GDP Silver models and belong in the `m_<model>_hkey()`
+  hash key macro — never flag `ref_*_skey` columns in `m_<model>_hkey()` as an error or warning.
 - Joins to reference data are LEFT joins unless the playbook says otherwise; join conditions use keys, not names.
 - Deduplication keeps the latest record by the playbook's ordering; SCD1 and HIST handling follow the playbook.
 
@@ -68,18 +83,20 @@ reports a preference the standards do not state.
   column the mapping leaves nullable needs none; the Soda missing checks watch it.
 - Columns with accepted values in the mapping carry `accepted_values`.
 - A Soda duplicate check on the business key, on top of the dbt `unique` test, is recommended: its absence is a
-  warning, not an error.
+  warning, not an error. When `duplicate_count(SOURCE_UNIQUE_ID, REF_GDP_SOURCE_SYSTEM_SKEY) = 0` is present in
+  `soda/checks.yml`, it is valid and compliant — emit no finding.
 
 ### DOCS: documentation and sources
 - Every model is documented in YAML; column descriptions are recommended when the approved mapping provides a business
   definition (a column with an empty or minimal description in YAML is a warning, never an error).
 - Sources are declared once in a sources file and read through `source()`; models read each other through `ref()`.
-- No hardcoded database or schema names in model SQL.
+- No hardcoded database or schema names in model SQL. Dynamic dbt Jinja context variables like `{{ this.schema }}` and
+  `{{ this.database }}` (for example `{{ this.schema }}.seq_<model>_skey.nextval`) are NOT hardcoded names and are always compliant.
 
 ### SQL: SQL style and safety
 - No DDL or DML (`DROP`, `DELETE`, `TRUNCATE`, `ALTER`, `GRANT`, `INSERT`, `MERGE`) in models.
 - No `SELECT *` in a final model; CTEs named for what they hold.
-- Jinja delimiters balance and only use the project's macros.
+- Jinja delimiters balance and only use the project's macros and standard dbt context (`{{ this.schema }}`, `{{ source(...) }}`, `{{ ref(...) }}`).
 
 ## Reading the result
 

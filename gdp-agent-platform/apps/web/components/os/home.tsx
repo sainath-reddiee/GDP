@@ -118,7 +118,7 @@ const START: { type: "domain" | "source" | "product"; label: string; short: stri
     new: "A business domain not on the platform yet", enhance: "Extend an existing domain's model: entities, attributes, rules" },
   { type: "source", label: "Data source", short: "Source", what: "A system that feeds a domain", icon: Database, tint: TYPE_TINT.SOURCE,
     new: "Onboard a system that is not on the platform yet", enhance: "More tables or scope from a source already registered" },
-  { type: "product", label: "Data product", short: "Product", what: "Governed Gold products from mastered Silver domains", icon: Crown, tint: TYPE_TINT.PRODUCT, soon: true,
+  { type: "product", label: "Data product", short: "Product", what: "Governed Gold products from mastered Silver domains", icon: Crown, tint: TYPE_TINT.PRODUCT,
     new: "A new governed data product", enhance: "Change a data product already published" },
 ];
 

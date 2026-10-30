@@ -9,7 +9,7 @@ import { guard } from "@/lib/os/session";
 import { ACTIONS, actMode, has } from "@/lib/os/access";
 import { Action } from "@/components/os/action";
 import { BuildEndToEnd } from "@/components/os/build-run";
-import { gateHref, lifecycleOfRun, osHref } from "@/lib/os/lifecycle";
+import { classicHref, gateHref, lifecycleOfRun } from "@/lib/os/lifecycle";
 import { leafRuns, resolveBoardRun, runNeedsMe, type BoardView } from "@/lib/os/work";
 import { ActivityRow, Banner, Bar, Btn, Card, Empty, Field, Kpi, PageHeader, SourceError, Stepper, Tag, ago, pretty } from "@/components/os/ui";
 import { BoardList, BoardTabs, StageFilterBar, WorkflowGroupCard, WorkflowJourneyBar, groupRunsByWorkflow } from "@/components/os/stage-board";
@@ -292,7 +292,7 @@ export default async function ReviewGate({ searchParams }: { searchParams: Param
       )}
       {b.errors.length > 0 && <SourceError what="Part of this run" error={b.errors.join(" · ")} />}
 
-      <div className="mb-4"><Stepper steps={steps} hrefOf={(s) => s.status === "pending" ? null : osHref(run.run_id, s, run.run.domain_id)} /></div>
+      <div className="mb-4"><Stepper steps={steps} hrefOf={(s) => s.status === "pending" ? null : classicHref(run.run_id, s)} /></div>
 
       <div className="mb-4 grid grid-cols-2 gap-3 xl:grid-cols-4">
         <Kpi label="Validation score" value={score.score === null ? "–" : `${score.score}%`} hint={`Gate ${gateText(b.gate)}`} icon={passed ? ShieldCheck : ShieldAlert} tone={score.score === null ? "neutral" : passed ? "green" : "red"} />

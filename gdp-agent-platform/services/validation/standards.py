@@ -104,6 +104,7 @@ def prompt(picked: List[Tuple[str, str]], skill: str, standards: str, context: s
         "generation playbooks the run is held to. For every area give a verdict (PASS, WARN or FAIL) and the concrete "
         "violations, each citing the standard it breaks, the file and a short excerpt. An error is a violation the "
         "standards require; a warning is a deviation they discourage. Do not report what the standards do not say, "
+        "never include compliant or passing checks in findings (keep findings: [] when compliant), "
         "and do not invent files, tables or columns.\n\n"
         f"AREAS:\n{areas}\n\n"
         f"=== REVIEW SKILL ({SKILL}) ===\n{skill}\n\n"
@@ -111,6 +112,21 @@ def prompt(picked: List[Tuple[str, str]], skill: str, standards: str, context: s
         f"=== APPROVED MAPPING (target columns) ===\n{context}\n\n"
         f"=== GENERATED PROJECT ===\n{project}\n"
     )
+
+
+_COMPLIANT_PHRASES = (
+    "so this is compliant",
+    "code is compliant",
+    "this is compliant",
+    "is present and compliant",
+    "is compliant and recommended",
+    "satisfies rule",
+)
+
+
+def _is_compliant_note(message: str) -> bool:
+    low = (message or "").lower()
+    return any(p in low for p in _COMPLIANT_PHRASES) and "non-compliant" not in low and "not compliant" not in low
 
 
 def mapping_context(lines: List[Dict[str, Any]], limit: int = 4000) -> str:
@@ -136,17 +152,21 @@ def to_checks(output: Dict[str, Any], block: bool = True) -> List[Dict[str, Any]
             out.append({"validation_type": f"STANDARDS_{key}", "status": "SKIPPED", "error_count": 0, "warning_count": 0,
                         "findings": [{"severity": "INFO", "message": f"The standards agent did not judge {label.lower()}"}]})
             continue
+        raw_findings = [f for f in (area.get("findings") or [])[:MAX_FINDINGS_PER_AREA] if isinstance(f, dict)]
+        dropped_compliant = False
         findings = []
-        for f in (area.get("findings") or [])[:MAX_FINDINGS_PER_AREA]:
-            if not isinstance(f, dict):
+        for f in raw_findings:
+            msg = str(f.get("message") or "")[:1000]
+            if _is_compliant_note(msg):
+                dropped_compliant = True
                 continue
             error = str(f.get("severity") or "").lower() == "error"
             findings.append({"severity": "ERROR" if error and block else "WARN",
-                             "message": str(f.get("message") or "")[:1000], "rule": str(f.get("rule") or "")[:200],
+                             "message": msg, "rule": str(f.get("rule") or "")[:200],
                              "file": str(f.get("file") or "")[:300], "line_hint": str(f.get("line_hint") or "")[:300]})
         errors = sum(1 for f in findings if f["severity"] == "ERROR")
-        # a FAIL verdict with no error finding still fails the area (when errors block)
-        if block and errors == 0 and str(area.get("verdict") or "").upper() == "FAIL":
+        # a FAIL verdict with no error finding still fails the area (when errors block), unless all findings were self-contradictory compliant notes
+        if block and errors == 0 and str(area.get("verdict") or "").upper() == "FAIL" and not dropped_compliant:
             findings.append({"severity": "ERROR", "message": f"The standards agent failed {label.lower()} without a finding",
                              "rule": SKILL, "file": "", "line_hint": ""})
             errors = 1
