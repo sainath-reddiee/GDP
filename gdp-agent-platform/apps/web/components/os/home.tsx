@@ -91,19 +91,19 @@ export function WorkflowRow({ r, access, href }: { r: OnboardingRequest; access:
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          {mine ? (
-            <Btn href={next ?? detailsHref} variant="primary" title={mine.label}>{next ? waitCta(mine) : "Open workflow"} <ArrowRight className="h-3.5 w-3.5" /></Btn>
-          ) : open ? (
+          {open && !mine ? (
             // whose step it is, by persona (the step's own wait names it)
             <Tag tone={r.attention ? "red" : "neutral"} title={phaseOf(r).label}>
               {r.attention ? "Needs attention" : `Waiting on ${(r.waits[0] && waitRole(r.waits[0])) || phaseOf(r).label}`}
             </Tag>
-          ) : (
+          ) : !open ? (
             <Tag tone={r.status === "DONE" ? "green" : "neutral"}>{r.status === "DONE" ? "Published" : pretty(r.status)}</Tag>
-          )}
-          <Link href={detailsHref} className={cn("os-btn", mine && "max-sm:!hidden")} aria-label={`Open ${title}`} title="View request summary, sources, and history">
-            Details
-          </Link>
+          ) : null}
+          {/* one entry point: straight to the viewer's next step when it is theirs, else the workflow's summary */}
+          <Btn href={next ?? detailsHref} variant={mine ? "primary" : "default"}
+               title={mine ? mine.label : "Open the workflow: summary, sources and history"}>
+            Open <ArrowRight className="h-3.5 w-3.5" />
+          </Btn>
           <DeleteRequestButton requestId={r.request_id} iconOnly previewing={!!access.preview} />
         </div>
       </div>

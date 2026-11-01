@@ -36,8 +36,8 @@ type Params = { view?: string; run?: string; q?: string; domain?: string; status
 /** Build: the runs being generated and validated, by Selected, Action required, Active and Completed. A selected run
  *  opens the workbench: its eight steps, the agents, the artifacts and the gates. */
 export default async function BuildBoard({ searchParams }: { searchParams: Params }) {
-  const access = await guard("build");
-  const runs = await loadBoardRuns();
+  // the runs do not depend on the access check: read them while it resolves
+  const [access, runs] = await Promise.all([guard("build"), loadBoardRuns()]);
   const q = (searchParams.q ?? "").trim().toLowerCase();
   const domainFilter = searchParams.domain ?? "all";
   const statusFilter = searchParams.status ?? "all";

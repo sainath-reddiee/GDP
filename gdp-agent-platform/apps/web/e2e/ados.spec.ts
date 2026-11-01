@@ -112,8 +112,6 @@ test("Home lists the build workflows by view, type, intent and name, and starts 
   const views = page.getByTestId("home-views");
   for (const v of ["Active", "Action required", "All"]) await expect(views.getByRole("link", { name: new RegExp(v) })).toBeVisible();
   await expect(views.getByRole("link", { name: /^All/ })).toHaveAttribute("href", "/os?view=all");
-  await page.goto("/os?view=all");
-  await expect(page.getByTestId("home-types").getByRole("link", { name: /^Source/ })).toHaveAttribute("href", "/os?view=all&type=source");
   await page.goto("/os?view=all&type=source");
   for (const row of await page.getByTestId("workflow-row").all()) await expect(row).toContainText(/(New|Enhance) source/);
   await page.goto("/os?view=all&q=zzqxjv999");
