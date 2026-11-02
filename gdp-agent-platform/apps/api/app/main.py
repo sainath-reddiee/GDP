@@ -2842,20 +2842,23 @@ def _mapping_profile(db: Db, run_id: str) -> dict[str, dict]:
         """
         SELECT SOURCE_COLUMN_ID, TABLE_NAME, COLUMN_NAME, DATA_TYPE, SEMANTIC_TYPE, NULL_PERCENTAGE,
                DISTINCT_PERCENTAGE, CARDINALITY, GENERATED_DESCRIPTION, PII_CLASSIFICATION,
-               STATISTICS_JSON:enum_values AS ENUM_VALUES, STATISTICS_JSON:frequency_distribution AS TOP_VALUES
+               STATISTICS_JSON:enum_values AS ENUM_VALUES, STATISTICS_JSON:frequency_distribution AS TOP_VALUES,
+               SAMPLE_VALUES
           FROM CORE.PROFILE_REGISTRY WHERE RUN_ID = %s AND IS_CURRENT
         """,
         (run_id,),
     ):
         values = None
-        for key in ("enum_values", "top_values"):
+        for key in ("enum_values", "top_values", "sample_values"):
             raw = p.get(key)
             if isinstance(raw, str):
                 try:
                     raw = json.loads(raw)
                 except ValueError:
                     raw = None
-            if raw:
+            if isinstance(raw, dict):
+                raw = raw.get("values") or list(raw.values())
+            if isinstance(raw, list) and raw:
                 values = [v.get("value", next(iter(v.values()), None)) if isinstance(v, dict) else v for v in raw][:8]
                 break
         out[p["source_column_id"]] = {
@@ -3060,42 +3063,72 @@ def _target_sample_values(db: Db, table: dict, targets: list[dict]) -> dict[str,
 
 
 def _apply_default_ai_mapping(run_id: str, db: Db) -> dict:
-    """Pre-fill mapping decisions from the scored & LLM-adjudicated candidates without redundant per-table LLM loops."""
+    """Run Cortex AI mapping copilot (with source + target samples and domain context) and apply its suggestions as default."""
     if not isinstance(db, Db):
         return {}
     from services.workflow import autopilot as ap
 
-    candidates = db.query(
-        """SELECT C.CANDIDATE_ID, C.SOURCE_COLUMN_ID, C.TARGET_COLUMN_ID, C.RANK, C.FINAL_SCORE,
-                  C.RECOMMENDATION, COALESCE(C.TARGET_TABLE_ID, T.TARGET_TABLE_ID) AS TARGET_TABLE_ID
-             FROM CORE.MAPPING_CANDIDATE C
-             LEFT JOIN CORE.TARGET_COLUMN_REGISTRY T ON T.TARGET_COLUMN_ID = C.TARGET_COLUMN_ID
-            WHERE C.RUN_ID = %s AND C.IS_CURRENT""",
-        (run_id,),
-    )
-    if not candidates:
-        return {}
-    current = db.query(
-        """SELECT D.SOURCE_COLUMN_ID, D.TARGET_COLUMN_ID, D.DECISION,
-                  COALESCE(D.TARGET_TABLE_ID, T.TARGET_TABLE_ID) AS TARGET_TABLE_ID
-             FROM CORE.MAPPING_DECISION D
-             LEFT JOIN CORE.TARGET_COLUMN_REGISTRY T ON T.TARGET_COLUMN_ID = D.TARGET_COLUMN_ID
-            WHERE D.RUN_ID = %s AND D.IS_CURRENT""",
-        (run_id,),
-    )
-    decisions = ap.auto_mapping_decisions(
-        candidates,
-        [(d["source_column_id"], d.get("target_table_id")) for d in current],
-        [(d["target_column_id"], d.get("target_table_id")) for d in current
-         if d["decision"] != "REJECTED" and d.get("target_column_id")],
-    )
+    ai = mapping_assist(run_id, MappingAssist(), db)
+    suggestions = ai.get("suggestions") or []
+    decisions = []
+    for s in suggestions:
+        cid = s.get("candidate_id")
+        conf = float(s.get("confidence") or 0.85)
+        reason = f"AI copilot: {s.get('reason') or ''}".strip()
+        trans = s.get("transformation")
+        if cid:
+            try:
+                db.execute(
+                    """
+                    UPDATE CORE.MAPPING_CANDIDATE
+                       SET FINAL_SCORE = GREATEST(FINAL_SCORE, %s),
+                           CONFIDENCE = GREATEST(CONFIDENCE, %s),
+                           RECOMMENDATION = IFF(%s >= 0.6, 'AUTO_SUGGEST', RECOMMENDATION),
+                           TRANSFORMATION = COALESCE(NULLIF(%s, ''), TRANSFORMATION),
+                           GENERATED_REASON = %s
+                     WHERE CANDIDATE_ID = %s AND RUN_ID = %s
+                    """,
+                    (conf, conf, conf, trans or "", reason[:1000], cid, run_id),
+                )
+            except Exception:
+                pass
+        if s.get("decision"):
+            decisions.append(s["decision"])
     if decisions:
         try:
             save_mapping(run_id, MappingDecisions(decisions=decisions), db)
         except Exception:
             pass
+    try:
+        candidates = db.query(
+            """SELECT C.CANDIDATE_ID, C.SOURCE_COLUMN_ID, C.TARGET_COLUMN_ID, C.RANK, C.FINAL_SCORE,
+                      C.RECOMMENDATION, COALESCE(C.TARGET_TABLE_ID, T.TARGET_TABLE_ID) AS TARGET_TABLE_ID
+                 FROM CORE.MAPPING_CANDIDATE C
+                 LEFT JOIN CORE.TARGET_COLUMN_REGISTRY T ON T.TARGET_COLUMN_ID = C.TARGET_COLUMN_ID
+                WHERE C.RUN_ID = %s AND C.IS_CURRENT""",
+            (run_id,),
+        )
+        current = db.query(
+            """SELECT D.SOURCE_COLUMN_ID, D.TARGET_COLUMN_ID, D.DECISION,
+                      COALESCE(D.TARGET_TABLE_ID, T.TARGET_TABLE_ID) AS TARGET_TABLE_ID
+                 FROM CORE.MAPPING_DECISION D
+                 LEFT JOIN CORE.TARGET_COLUMN_REGISTRY T ON T.TARGET_COLUMN_ID = D.TARGET_COLUMN_ID
+                WHERE D.RUN_ID = %s AND D.IS_CURRENT""",
+            (run_id,),
+        )
+        fallback = ap.auto_mapping_decisions(
+            candidates,
+            [(d["source_column_id"], d.get("target_table_id")) for d in current],
+            [(d["target_column_id"], d.get("target_table_id")) for d in current
+             if d["decision"] != "REJECTED" and d.get("target_column_id")],
+        )
+        if fallback:
+            save_mapping(run_id, MappingDecisions(decisions=fallback), db)
+            decisions.extend(fallback)
+    except Exception:
+        pass
     _drop_run(run_id)
-    return {"applied": len(decisions)}
+    return {"applied": len(decisions), "model": ai.get("model")}
 
 
 @app.post("/api/runs/{run_id}/mapping/assist")
@@ -3135,6 +3168,14 @@ def mapping_assist(run_id: str, body: MappingAssist, db: Db = Depends(current_db
         for c in data["candidates"]:
             if table_of(c) == tid:
                 by_source.setdefault(c["source_column_id"], []).append(c)
+        if len(tables) > 1 and tid != first and not body.pairs and not body.source_column_ids:
+            has_non_key = any(
+                not (by_source.get(sid, [{}])[0].get("is_business_key"))
+                and str(by_source.get(sid, [{}])[0].get("target_column") or "").upper() != "SOURCE_UNIQUE_ID"
+                for sid in ids if sid in by_source
+            )
+            if not has_non_key:
+                continue
         sources = []
         for sid in sorted(ids, key=lambda s: (by_source.get(s, [{}])[0].get("source_table") or "",
                                               by_source.get(s, [{}])[0].get("source_column") or "")):

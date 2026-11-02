@@ -94,6 +94,21 @@ def _prefill_and_gate_mapping(db: Db, run_id: str) -> Dict[str, Any]:
                             FROM CORE.MAPPING_DECISION D
                             LEFT JOIN CORE.TARGET_COLUMN_REGISTRY T ON T.TARGET_COLUMN_ID = D.TARGET_COLUMN_ID
                            WHERE D.RUN_ID = %s AND D.IS_CURRENT""", (run_id,))
+    if not current and candidates:
+        try:
+            m._apply_default_ai_mapping(run_id, db)
+            candidates = db.query("""SELECT C.CANDIDATE_ID, C.SOURCE_COLUMN_ID, C.TARGET_COLUMN_ID, C.RANK, C.FINAL_SCORE,
+                                            C.RECOMMENDATION, COALESCE(C.TARGET_TABLE_ID, T.TARGET_TABLE_ID) AS TARGET_TABLE_ID
+                                       FROM CORE.MAPPING_CANDIDATE C
+                                       LEFT JOIN CORE.TARGET_COLUMN_REGISTRY T ON T.TARGET_COLUMN_ID = C.TARGET_COLUMN_ID
+                                      WHERE C.RUN_ID = %s AND C.IS_CURRENT""", (run_id,))
+            current = db.query("""SELECT D.SOURCE_COLUMN_ID, D.TARGET_COLUMN_ID, D.DECISION,
+                                         COALESCE(D.TARGET_TABLE_ID, T.TARGET_TABLE_ID) AS TARGET_TABLE_ID
+                                    FROM CORE.MAPPING_DECISION D
+                                    LEFT JOIN CORE.TARGET_COLUMN_REGISTRY T ON T.TARGET_COLUMN_ID = D.TARGET_COLUMN_ID
+                                   WHERE D.RUN_ID = %s AND D.IS_CURRENT""", (run_id,))
+        except Exception:
+            pass
     decisions = ap.auto_mapping_decisions(
         candidates, [(d["source_column_id"], d.get("target_table_id")) for d in current],
         [(d["target_column_id"], d.get("target_table_id")) for d in current

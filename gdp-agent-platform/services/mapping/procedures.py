@@ -104,11 +104,23 @@ def source_columns(session, run_id: str) -> List[Dict[str, Any]]:
                               ORDER BY TABLE_NAME, COLUMN_NAME""", [run_id]):
         stats = variant(p["STATISTICS_JSON"]) or {}
         patterns = variant(p["PATTERN_JSON"]) or []
+        raw_samples = variant(p.get("SAMPLE_VALUES")) or []
+        if isinstance(raw_samples, dict):
+            raw_samples = raw_samples.get("values") or list(raw_samples.values())
+        samples: List[Any] = []
+        for candidate_list in (stats.get("enum_values"), stats.get("frequency_distribution"), raw_samples):
+            if isinstance(candidate_list, list) and candidate_list:
+                samples = [
+                    v.get("value", next(iter(v.values()), None)) if isinstance(v, dict) else v
+                    for v in candidate_list
+                ][:8]
+                break
         out.append({"source_column_id": p["SOURCE_COLUMN_ID"], "column_name": p["COLUMN_NAME"],
                     "table_name": p["TABLE_NAME"], "data_type": p["DATA_TYPE"], "semantic_type": p["SEMANTIC_TYPE"],
                     "null_percentage": p["NULL_PERCENTAGE"], "distinct_percentage": p["DISTINCT_PERCENTAGE"],
                     "cardinality": p["CARDINALITY"], "max_length": stats.get("max_length"),
-                    "date_format": stats.get("date_format"), "values": stats.get("enum_values"),
+                    "date_format": stats.get("date_format"), "values": stats.get("enum_values") or samples,
+                    "samples": samples,
                     "pattern": patterns[0]["pattern"] if patterns else None,
                     "description": p["GENERATED_DESCRIPTION"], "pii": p["PII_CLASSIFICATION"]})
     return out
@@ -303,8 +315,10 @@ def _adjudicate(session, run_id: str, ambiguous: List[Tuple[Dict[str, Any], List
                            + (f" [{extra}]" if extra else "") + ")")
         related = [f"{h.get('TITLE')}: {str(h.get('CONTENT') or '')[:200]}"
                    for h in (hits or {}).get(str(source["column_name"]).upper(), [])[:3] if h.get("TITLE")]
+        samples = source.get("samples") or source.get("values") or []
+        sample_str = f", samples: {', '.join(map(str, samples[:5]))}" if samples else ""
         blocks.append(f"- {source_label(source)} ({source['data_type']}, {source['semantic_type']}, null "
-                      f"{source['null_percentage']}%, distinct {source['distinct_percentage']}%): "
+                      f"{source['null_percentage']}%, distinct {source['distinct_percentage']}%{sample_str}): "
                       f"{source.get('description') or ''}\n  candidates: {'; '.join(options)}"
                       + (f"\n  related domain knowledge: {' | '.join(related)}" if related else ""))
     prior = ""
