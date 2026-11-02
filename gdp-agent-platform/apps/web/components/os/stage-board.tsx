@@ -12,30 +12,8 @@ import { cn } from "@/lib/utils";
 // The stage boards (Intake, Design, Build): one tab strip (Selected, Action required, Active, Completed), workflow cards
 // with their steps and where each waits, and the selected workflow below. Server-safe, like ./ui.
 
-/** A segmented control of links: Home's views and filters live in the URL. */
-export function Segmented({ label, options, testId }: {
-  label: string; testId?: string;
-  options: { key: string; label: string; href: string; active: boolean; count?: number; dot?: boolean; disabled?: boolean; title?: string }[];
-}) {
-  return (
-    <nav aria-label={label} data-testid={testId} className="inline-flex max-w-full overflow-x-auto rounded-lg border border-[var(--os-line)] bg-[var(--os-subtle)] p-0.5">
-      {options.map((o) => o.disabled ? (
-        <span key={o.key} aria-disabled="true" title={o.title} data-testid={`${testId ?? "seg"}-${o.key}`}
-              className="os-faint inline-flex cursor-not-allowed items-center gap-1.5 whitespace-nowrap rounded-md px-3 py-1.5 text-[12px] font-bold opacity-60">{o.label}</span>
-      ) : (
-        <Link key={o.key} href={o.href} scroll={false} aria-current={o.active ? "page" : undefined} title={o.title} data-testid={testId ? `${testId}-${o.key}` : undefined}
-              className={cn("relative inline-flex items-center gap-1.5 whitespace-nowrap rounded-md px-3 py-1.5 text-[12px] font-bold transition",
-                            o.active ? "bg-[var(--os-surface)] text-[var(--os-ink)] shadow-[var(--os-shadow)]" : "os-muted hover:text-[var(--os-ink)]")}>
-          {o.dot && <span className="h-1.5 w-1.5 rounded-full bg-[#d85b52]" aria-hidden />}
-          {o.label}
-          {o.count !== undefined && (
-            <span className={cn("rounded-full px-1.5 text-[10.5px] tabular-nums", o.active ? "bg-[var(--os-green-bg)] text-[var(--os-green-ink)]" : "bg-[var(--os-neutral-bg)]")}>{o.count}</span>
-          )}
-        </Link>
-      ))}
-    </nav>
-  );
-}
+import { Segmented } from "./segmented";
+export { Segmented };
 
 export type TrackStep = { key: string; label: string; owner?: string; state: "done" | "current" | "attention" | "pending" | "closed"; href?: string };
 

@@ -131,11 +131,6 @@ export default async function Home({ searchParams }: { searchParams: Params }) {
                 key: v.key, label: v.label, href: href({ view: v.key }), active: v.key === view, count: counts[v.key],
                 dot: v.key === "action" && counts.action > 0,
               }))} />
-              <span className="mx-1 hidden h-5 w-px bg-[var(--os-line)] sm:block" aria-hidden />
-              <Segmented label="Type" testId="home-types" options={TYPES.map((t) => ({ key: t.key, label: t.label, href: href({ type: t.key }), active: t.key === type.key,
-                count: ofType(t).length }))} />
-              <Segmented label="New or enhance" testId="home-intents" options={INTENTS.map((i) => ({ key: i.key, label: i.label, href: href({ intent: i.key }), active: i.key === intent.key,
-                ...(i.key === "all" ? {} : { count: views[view].filter((r) => intentOf(r) === i.key.toUpperCase() && matches(r) && (!type.type || r.request_type === type.type)).length }) }))} />
               {q && (
                 <span className="os-faint text-[11px]" data-testid="search-mode">
                   {rank ? `${queue.length} matching "${query}" by meaning` : `${queue.length} with "${query}" in the name`}

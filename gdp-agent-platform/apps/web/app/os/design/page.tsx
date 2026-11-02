@@ -31,8 +31,9 @@ const tabOf = (state: string): Tab => (state.startsWith("PROFILING") || state.st
 type Params = { view?: string; run?: string; domain?: string; tab?: string; q?: string };
 
 export default async function DesignBoard({ searchParams }: { searchParams: Params }) {
-  const access = await guard("design");
-  const [domains, runs, sources] = await Promise.all([loadDomains(), loadBoardRuns(), loadSources()]);
+  // the platform reads do not depend on the access check (which waits on sign-in and role lookups): start them together
+  const data = Promise.all([loadDomains(), loadBoardRuns(), loadSources()]);
+  const [access, [domains, runs, sources]] = await Promise.all([guard("design"), data]);
   const q = (searchParams.q ?? "").trim().toLowerCase();
   const live = runs.data.runs.filter((r) => !r.is_archived && r.current_state !== "CANCELLED");
   const leaves = leafRuns(live);

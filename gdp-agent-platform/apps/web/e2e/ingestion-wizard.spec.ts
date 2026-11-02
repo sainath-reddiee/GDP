@@ -19,7 +19,6 @@ test("other sources ask which kind of source first, then that kind's questions",
   // a relational database is never asked a file type, an Excel sheet or an API
   await expect(page.getByLabel("File type")).toHaveCount(0);
   await expect(page.getByLabel("Sheet name")).toHaveCount(0);
-  await page.getByTestId("onboard-kind-of-source-change").click();
   await page.getByTestId("onboard-kind-of-source-file").click();
   await expect(page.getByLabel("File type")).toBeVisible();
   await expect(page.getByLabel("Source path")).toBeVisible();

@@ -4,7 +4,7 @@ import type { CatalogDatabase, LandingDefaults, ShareList } from "@/lib/hub-type
 import { PageHeader } from "@/components/page-header";
 import { OnboardWizard } from "../sources/new/wizard";
 import { RequestHandoff, sourceNameFor } from "./request-handoff";
-import { OnboardingShell, RailStep } from "./rail";
+import { OnboardingShell } from "./rail";
 
 type DomainRow = { domain_id: string; domain_name: string; active_flag?: boolean };
 
@@ -40,11 +40,6 @@ export default async function Onboarding({ searchParams }: { searchParams: { typ
         {searchParams.request && <RequestHandoff requestId={searchParams.request} itemId={searchParams.item} />}
 
         <div>
-          <RailStep n={1} title="Onboarding a source" done>
-            <p className="max-w-3xl text-sm text-muted-foreground">
-              Register the source, land its tables and start its run in the domain. The Data Designer profiles and models it from there.
-            </p>
-          </RailStep>
           <OnboardWizard key="source" initialBranch={branch} initialKind={sourceKind} shares={shares} databases={databases} landing={landing} user={me?.user ?? null}
                          initialName={searchParams.name ? sourceNameFor(searchParams.name) : ""}
                          domains={active.map((d) => ({ domain_id: d.domain_id, domain_name: d.domain_name }))} />

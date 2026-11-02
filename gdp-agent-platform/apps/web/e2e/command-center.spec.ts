@@ -83,7 +83,7 @@ test("source onboarding is the administrator's wizard, one choice per step; doma
   await expect(page.getByRole("heading", { name: "Onboard source" })).toBeVisible();
   // sources only: no kind picker, and a deep link arrives with its choice made
   await expect(page.getByTestId("onboard-kind-domain")).toHaveCount(0);
-  await expect(page.getByTestId("onboard-source-chosen")).toContainText("Other sources");
+  await expect(page.getByTestId("onboard-source-chosen")).toContainText("Other");
   // other sources then ask which kind of source it is, before the wizard
   await expect(page.getByTestId("onboard-kind-of-source-database")).toBeVisible();
   await expect(page.getByTestId("onboard-kind-of-source-file")).toBeVisible();
