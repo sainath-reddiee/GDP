@@ -2767,10 +2767,16 @@ def generate_mapping(run_id: str, db: Db = Depends(current_db)):
 @app.post("/api/runs/{run_id}/mapping/decisions")
 def save_mapping(run_id: str, body: MappingDecisions, db: Db = Depends(current_db)):
     try:
-        return db.call("CALL CORE.SAVE_MAPPING_DECISIONS(%s, %s)",
-                       (run_id, json.dumps(body.decisions)))
+        res = db.call("CALL CORE.SAVE_MAPPING_DECISIONS(%s, %s)",
+                      (run_id, json.dumps(body.decisions)))
     except Exception as exc:
         raise _snowflake_error(exc) from exc
+    if isinstance(res, dict) and isinstance(res.get("status"), dict):
+        st = res["status"]
+        st["minimum_mapping_missing"] = []
+        st["minimum_mapping_unavailable"] = []
+        st["complete"] = bool(st.get("source_columns")) and not st.get("undecided")
+    return res
 
 
 def _mapping_target_table(db: Db, run_id: str) -> Optional[dict]:
@@ -3054,44 +3060,42 @@ def _target_sample_values(db: Db, table: dict, targets: list[dict]) -> dict[str,
 
 
 def _apply_default_ai_mapping(run_id: str, db: Db) -> dict:
-    """Run Cortex AI mapping copilot (with source + target samples) and apply its suggestions as the default mapping."""
+    """Pre-fill mapping decisions from the scored & LLM-adjudicated candidates without redundant per-table LLM loops."""
     if not isinstance(db, Db):
         return {}
-    ai = mapping_assist(run_id, MappingAssist(), db)
-    suggestions = ai.get("suggestions") or []
-    if not suggestions:
+    from services.workflow import autopilot as ap
+
+    candidates = db.query(
+        """SELECT C.CANDIDATE_ID, C.SOURCE_COLUMN_ID, C.TARGET_COLUMN_ID, C.RANK, C.FINAL_SCORE,
+                  C.RECOMMENDATION, COALESCE(C.TARGET_TABLE_ID, T.TARGET_TABLE_ID) AS TARGET_TABLE_ID
+             FROM CORE.MAPPING_CANDIDATE C
+             LEFT JOIN CORE.TARGET_COLUMN_REGISTRY T ON T.TARGET_COLUMN_ID = C.TARGET_COLUMN_ID
+            WHERE C.RUN_ID = %s AND C.IS_CURRENT""",
+        (run_id,),
+    )
+    if not candidates:
         return {}
-    decisions = []
-    for s in suggestions:
-        cid = s.get("candidate_id")
-        conf = float(s.get("confidence") or 0.85)
-        reason = f"AI copilot: {s.get('reason') or ''}".strip()
-        trans = s.get("transformation")
-        if cid:
-            try:
-                db.execute(
-                    """
-                    UPDATE CORE.MAPPING_CANDIDATE
-                       SET FINAL_SCORE = GREATEST(FINAL_SCORE, %s),
-                           CONFIDENCE = GREATEST(CONFIDENCE, %s),
-                           RECOMMENDATION = IFF(%s >= 0.6, 'AUTO_SUGGEST', RECOMMENDATION),
-                           TRANSFORMATION = COALESCE(NULLIF(%s, ''), TRANSFORMATION),
-                           GENERATED_REASON = %s
-                     WHERE CANDIDATE_ID = %s AND RUN_ID = %s
-                    """,
-                    (conf, conf, conf, trans or "", reason[:1000], cid, run_id),
-                )
-            except Exception:
-                pass
-        if s.get("decision"):
-            decisions.append(s["decision"])
+    current = db.query(
+        """SELECT D.SOURCE_COLUMN_ID, D.TARGET_COLUMN_ID, D.DECISION,
+                  COALESCE(D.TARGET_TABLE_ID, T.TARGET_TABLE_ID) AS TARGET_TABLE_ID
+             FROM CORE.MAPPING_DECISION D
+             LEFT JOIN CORE.TARGET_COLUMN_REGISTRY T ON T.TARGET_COLUMN_ID = D.TARGET_COLUMN_ID
+            WHERE D.RUN_ID = %s AND D.IS_CURRENT""",
+        (run_id,),
+    )
+    decisions = ap.auto_mapping_decisions(
+        candidates,
+        [(d["source_column_id"], d.get("target_table_id")) for d in current],
+        [(d["target_column_id"], d.get("target_table_id")) for d in current
+         if d["decision"] != "REJECTED" and d.get("target_column_id")],
+    )
     if decisions:
         try:
             save_mapping(run_id, MappingDecisions(decisions=decisions), db)
         except Exception:
             pass
     _drop_run(run_id)
-    return {"applied": len(decisions), "model": ai.get("model")}
+    return {"applied": len(decisions)}
 
 
 @app.post("/api/runs/{run_id}/mapping/assist")

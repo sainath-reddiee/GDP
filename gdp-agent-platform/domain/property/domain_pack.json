@@ -131,9 +131,7 @@
             "condition": "upper(trim({{ map_property_status('o.status_desc') }})) = upper(trim(ps.property_status_value))"
           }
         ],
-        "minimum_mapping": [
-          "`source_unique_id`"
-        ],
+        "minimum_mapping": [],
         "casts": [
           {
             "target_column": "SOURCE_UNIQUE_ID",
@@ -456,9 +454,7 @@
             "condition": "upper(trim(o.usage_type_desc)) = upper(trim(ut.usage_type_value))"
           }
         ],
-        "minimum_mapping": [
-          "`source_unique_id`"
-        ],
+        "minimum_mapping": [],
         "casts": [
           {
             "target_column": "SOURCE_UNIQUE_ID",
@@ -680,9 +676,7 @@
             "condition": "upper(trim(o.address_type)) = upper(trim(adt.address_type_value))"
           }
         ],
-        "minimum_mapping": [
-          "`source_unique_id`"
-        ],
+        "minimum_mapping": [],
         "casts": [
           {
             "target_column": "SOURCE_UNIQUE_ID",

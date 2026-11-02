@@ -111,16 +111,61 @@ def load_inputs(query: Query, run_id: str, plan: Dict[str, Any], sttm: Dict[str,
               for s in sources}
     system = str(run.get("SOURCE_SYSTEM_NAME") or "SOURCE")
     key_candidates: Optional[Dict[str, List[str]]] = None
+    parent_id = run.get("PARENT_RUN_ID") or run_id
     try:
         measured = query("""SELECT TABLE_NAME, COLUMN_NAME FROM CORE.PROFILE_REGISTRY
-                             WHERE RUN_ID = ? AND IS_CURRENT AND POTENTIAL_KEY_FLAG""", [run_id])
-        profiled = query("SELECT COUNT(*) AS N FROM CORE.PROFILE_REGISTRY WHERE RUN_ID = ? AND IS_CURRENT", [run_id])
+                             WHERE RUN_ID IN (?, ?) AND IS_CURRENT AND POTENTIAL_KEY_FLAG""", [run_id, parent_id])
+        profiled = query("SELECT COUNT(*) AS N FROM CORE.PROFILE_REGISTRY WHERE RUN_ID IN (?, ?) AND IS_CURRENT", [run_id, parent_id])
         if profiled and int(profiled[0].get("N") or 0):
             key_candidates = {}
             for r in measured:
-                key_candidates.setdefault(str(r["TABLE_NAME"]).upper(), []).append(str(r["COLUMN_NAME"]).upper())
+                col_u = str(r["COLUMN_NAME"]).upper()
+                bucket = key_candidates.setdefault(str(r["TABLE_NAME"]).upper(), [])
+                if col_u not in bucket:
+                    bucket.append(col_u)
     except Exception:
         key_candidates = None
+    if run.get("PARENT_RUN_ID") and not any(
+        (str(l.get("target_column") or "").upper() == "SOURCE_UNIQUE_ID")
+        and (l.get("source_column") or str(l.get("transformation") or "").strip())
+        for l in lines
+    ):
+        try:
+            pk_rows = query("""
+                SELECT L.COLUMN_NAME AS SOURCE_COLUMN, L.DATA_TYPE AS SOURCE_DATATYPE,
+                       T.SOURCE_TABLE, D.TRANSFORMATION
+                  FROM CORE.MAPPING_DECISION D
+                  JOIN CORE.TARGET_COLUMN_REGISTRY TC ON TC.TARGET_COLUMN_ID = D.TARGET_COLUMN_ID
+                  JOIN CORE.LANDING_COLUMN_REGISTRY L ON L.LANDING_COLUMN_ID = D.SOURCE_COLUMN_ID
+                  JOIN CORE.LANDING_TABLE_REGISTRY T ON T.LANDING_ID = L.LANDING_ID
+                 WHERE D.RUN_ID = ? AND D.IS_CURRENT AND D.DECISION <> 'REJECTED'
+                   AND (UPPER(TC.COLUMN_NAME) = 'SOURCE_UNIQUE_ID' OR TC.IS_BUSINESS_KEY)
+                 ORDER BY IFF(UPPER(TC.COLUMN_NAME) = 'SOURCE_UNIQUE_ID', 0, 1), D.VERSION DESC LIMIT 1
+            """, [run["PARENT_RUN_ID"]])
+            if pk_rows:
+                pk = pk_rows[0]
+                matched_line = False
+                for l in lines:
+                    if str(l.get("target_column") or "").upper() == "SOURCE_UNIQUE_ID":
+                        l["source_table"] = pk.get("SOURCE_TABLE")
+                        l["source_column"] = pk.get("SOURCE_COLUMN")
+                        l["source_datatype"] = pk.get("SOURCE_DATATYPE")
+                        l["transformation"] = pk.get("TRANSFORMATION")
+                        l["mapping_type"] = "DERIVED" if pk.get("TRANSFORMATION") else "DIRECT"
+                        matched_line = True
+                        break
+                if not matched_line:
+                    lines = [{
+                        "target_column": "SOURCE_UNIQUE_ID",
+                        "target_datatype": "TEXT",
+                        "source_table": pk.get("SOURCE_TABLE"),
+                        "source_column": pk.get("SOURCE_COLUMN"),
+                        "source_datatype": pk.get("SOURCE_DATATYPE"),
+                        "transformation": pk.get("TRANSFORMATION"),
+                        "mapping_type": "DERIVED" if pk.get("TRANSFORMATION") else "DIRECT",
+                    }, *lines]
+        except Exception:
+            pass
     return {
         "domain": plan.get("domain_folder") or run.get("DOMAIN_NAME") or conv["default_domain"],
         "target": target,

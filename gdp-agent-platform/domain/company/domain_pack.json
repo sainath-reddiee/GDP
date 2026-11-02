@@ -134,11 +134,7 @@
             "condition": "upper(trim(o.company_type)) = upper(trim(ct.company_type_desc))"
           }
         ],
-        "minimum_mapping": [
-          "`source_unique_id` (often compound, e.g., `Name1 || '||' || Country`)",
-          "`company_name`",
-          "One of: `duns_number`, `legal_entity_name`, `trade_name`, or `alias_name` (for HKEY uniqueness)"
-        ],
+        "minimum_mapping": [],
         "casts": []
       },
       "columns": [
@@ -297,9 +293,7 @@
         ],
         "reference_ctes": {},
         "reference_joins": [],
-        "minimum_mapping": [
-          "source_unique_id"
-        ],
+        "minimum_mapping": [],
         "casts": [
           {
             "target_column": "LATITUDE",
@@ -726,9 +720,7 @@
         ],
         "reference_ctes": {},
         "reference_joins": [],
-        "minimum_mapping": [
-          "source_unique_id"
-        ],
+        "minimum_mapping": [],
         "casts": []
       },
       "columns": [
@@ -857,9 +849,7 @@
         ],
         "reference_ctes": {},
         "reference_joins": [],
-        "minimum_mapping": [
-          "source_unique_id"
-        ],
+        "minimum_mapping": [],
         "casts": [
           {
             "target_column": "VALID_FROM",
@@ -1016,9 +1006,7 @@
         ],
         "reference_ctes": {},
         "reference_joins": [],
-        "minimum_mapping": [
-          "source_unique_id"
-        ],
+        "minimum_mapping": [],
         "casts": [
           {
             "target_column": "ACCOUNT_NUMBER",
@@ -1185,9 +1173,7 @@
         ],
         "reference_ctes": {},
         "reference_joins": [],
-        "minimum_mapping": [
-          "source_unique_id"
-        ],
+        "minimum_mapping": [],
         "casts": [
           {
             "target_column": "VALID_FROM",

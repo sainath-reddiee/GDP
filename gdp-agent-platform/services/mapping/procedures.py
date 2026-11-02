@@ -204,23 +204,46 @@ def _embed_text_target(t: Dict[str, Any]) -> str:
 
 
 def embeddings(session, kind: str, items: List[Tuple[str, str]], model: str) -> Dict[str, str]:
-    """(object_id, text) -> embedding id, computing AI_EMBED only for texts not seen before (reuses the modeler's approach)."""
-    out = {}
+    """(object_id, text) -> embedding id, computing AI_EMBED only for texts not seen before (batched)."""
+    if not items:
+        return {}
+    assert model in EMBED_MODELS, f"unsupported embed model {model}"
+    out: Dict[str, str] = {}
+    computed: List[Tuple[str, str, str]] = []
     for object_id, text in items:
         sha = hashlib.sha256(f"{model}|{text}".encode("utf-8")).hexdigest()
-        existing = rows(session, "SELECT EMBEDDING_ID FROM CORE.COLUMN_EMBEDDING WHERE OBJECT_KIND = ? AND OBJECT_ID = ? "
-                                 "AND TEXT_SHA256 = ? LIMIT 1", [kind, object_id, sha])
-        if existing:
-            out[object_id] = existing[0]["EMBEDDING_ID"]
-            continue
-        embedding_id = str(uuid.uuid4())
-        assert model in EMBED_MODELS, f"unsupported embed model {model}"
+        computed.append((object_id, clip(text), sha))
+    try:
+        obj_ids = list({oid for oid, _, _ in computed})
+        cached = rows(
+            session,
+            "SELECT OBJECT_ID, TEXT_SHA256, EMBEDDING_ID FROM CORE.COLUMN_EMBEDDING "
+            "WHERE OBJECT_KIND = ? AND ARRAY_CONTAINS(OBJECT_ID::VARIANT, PARSE_JSON(?)::ARRAY)",
+            [kind, json.dumps(obj_ids)],
+        )
+        by_key = {(r["OBJECT_ID"], r["TEXT_SHA256"]): r["EMBEDDING_ID"] for r in cached}
+    except Exception:
+        by_key = {}
+    missing: List[Tuple[str, str, str, str]] = []
+    for object_id, text_clipped, sha in computed:
+        eid = by_key.get((object_id, sha))
+        if eid:
+            out[object_id] = eid
+        else:
+            eid = str(uuid.uuid4())
+            out[object_id] = eid
+            missing.append((eid, object_id, text_clipped, sha))
+    if missing:
+        placeholders = ", ".join(["(?, ?, ?, ?, ?, ?)"] * len(missing))
+        params: List[Any] = []
+        for eid, object_id, text_clipped, sha in missing:
+            params.extend([eid, kind, object_id, model, text_clipped, sha])
         session.sql(
             "INSERT INTO CORE.COLUMN_EMBEDDING (EMBEDDING_ID, OBJECT_KIND, OBJECT_ID, EMBED_MODEL, EMBED_TEXT, "
-            f"EMBEDDING, TEXT_SHA256) SELECT ?, ?, ?, ?, ?, AI_EMBED('{model}', ?), ?",
-            params=[embedding_id, kind, object_id, model, clip(text), clip(text), sha],
+            f"EMBEDDING, TEXT_SHA256) SELECT column1, column2, column3, column4, column5, AI_EMBED('{model}', column5), column6 "
+            f"FROM VALUES {placeholders}",
+            params=params,
         ).collect()
-        out[object_id] = embedding_id
     return out
 
 

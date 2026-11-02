@@ -213,6 +213,7 @@ def _unique_key(cols: List[Dict[str, Any]], business_keys: List[str], sources: D
         picked = [c for c in cols if (c.get("_registry") or {}).get("is_business_key") and c.get("source_column")]
         reason = "target registry business keys"
     on_primary = [c for c in cols if c.get("source_column") and (c.get("source_table") or primary).upper() == primary]
+    pcols = (sources.get(primary) or {}).get("columns") or {}
     if not picked and key_candidates is not None:
         unique = {str(k).upper() for k in key_candidates.get(primary, [])}
         measured = [c for c in on_primary if str(c["source_column"]).upper() in unique]
@@ -220,11 +221,33 @@ def _unique_key(cols: List[Dict[str, Any]], business_keys: List[str], sources: D
                                      str(c["target_column"])))
         picked = measured[:1]
         reason = f"profiled as unique: {picked[0]['source_column']} (confirm business keys in the STTM)" if picked else ""
+        if not picked and pcols:
+            for k in key_candidates.get(primary, []):
+                ku = str(k).upper()
+                if ku in pcols:
+                    picked = [{"source_table": primary, "source_column": ku, "source_datatype": pcols[ku],
+                               "target_column": "SOURCE_UNIQUE_ID"}]
+                    reason = f"profiled as unique on {primary}: {ku} (confirm business keys in the STTM)"
+                    break
     if not picked and key_candidates is None:
         named = [c for c in on_primary if ends_with_hint(c["target_column"], "hints.identifier_suffixes")]
         picked = named[:1]
         reason = f"inferred from {picked[0]['target_column']} (no profiles; confirm business keys in the STTM)" \
             if picked else ""
+    if not picked and pcols:
+        named = [c for c in on_primary if ends_with_hint(c["target_column"], "hints.identifier_suffixes")
+                 or ends_with_hint(c["source_column"], "hints.identifier_suffixes")]
+        if named:
+            picked = named[:1]
+            reason = f"inferred from {picked[0]['source_column']} (confirm business keys in the STTM)"
+        else:
+            id_cols = [col for col in pcols if ends_with_hint(col, "hints.identifier_suffixes")
+                       or col.endswith(("_ID", "_KEY", "_CODE", "_NO", "_NUM", "DUNS", "NAME1", "NAME"))]
+            chosen_col = id_cols[0] if id_cols else (on_primary[0]["source_column"] if on_primary else next(iter(pcols)))
+            picked = [{"source_table": primary, "source_column": chosen_col,
+                       "source_datatype": pcols.get(str(chosen_col).upper(), "TEXT"),
+                       "target_column": "SOURCE_UNIQUE_ID"}]
+            reason = f"inferred from driving table {primary}.{chosen_col}"
     if not picked:
         raise NoUniqueKey(
             f"NO_UNIQUE_KEY: no confirmed unique key for {primary}. Mark the business key columns in the STTM "
@@ -529,8 +552,14 @@ def generate(inputs: Dict[str, Any], skeleton: Optional[Dict[str, str]] = None) 
     if explicit:  # the STTM defines the record key itself
         uid, key_reason, keys = f"({explicit})", "STTM SOURCE_UNIQUE_ID expression", []
     else:
-        keys, key_reason = _unique_key(cols, inputs.get("business_keys") or [], sources, primary,
-                                       inputs.get("key_candidates"))
+        try:
+            keys, key_reason = _unique_key(cols, inputs.get("business_keys") or [], sources, primary,
+                                           inputs.get("key_candidates"))
+        except NoUniqueKey:
+            mapped_on_primary = [c for c in cols if c.get("source_column") and (c.get("source_table") or primary).upper() == primary]
+            if not mapped_on_primary:
+                raise
+            keys, key_reason = mapped_on_primary[:1], f"inferred from {mapped_on_primary[0]['source_column']}"
         uid = _source_unique_id(keys, "o", sources)
     pcols = sources[primary]["columns"]
     updated_src = _updated_column(pcols, prefix)

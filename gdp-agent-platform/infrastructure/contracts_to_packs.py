@@ -108,7 +108,7 @@ def _target(spec: Dict[str, Any], schema: str, hub: str, required: List[str], ca
             "hkey_columns": spec.get("hkey_columns") or [],
             "reference_ctes": spec.get("reference_ctes") or {},
             "reference_joins": spec.get("reference_joins") or [],
-            "minimum_mapping": required if is_hub else ["source_unique_id"],
+            "minimum_mapping": [],
             "casts": [c for c in casts if c["target_column"] in names] if names else casts,
         },
         "columns": [{

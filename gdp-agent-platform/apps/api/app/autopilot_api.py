@@ -79,15 +79,11 @@ def _mapping_hard_gate(db: Db) -> bool:
 
 
 def _prefill_and_gate_mapping(db: Db, run_id: str) -> Dict[str, Any]:
-    """Refine AI candidates, pre-fill high-confidence rank-1 decisions (>= threshold), and evaluate the Mapping Gate."""
+    """Pre-fill high-confidence rank-1 decisions (>= threshold) and evaluate the Mapping Gate."""
     from app import main as m
 
     threshold = _mapping_confidence_threshold(db)
     hard_gate = _mapping_hard_gate(db)
-    try:
-        m._apply_default_ai_mapping(run_id, db)
-    except Exception:
-        pass
     candidates = db.query("""SELECT C.CANDIDATE_ID, C.SOURCE_COLUMN_ID, C.TARGET_COLUMN_ID, C.RANK, C.FINAL_SCORE,
                                     C.RECOMMENDATION, COALESCE(C.TARGET_TABLE_ID, T.TARGET_TABLE_ID) AS TARGET_TABLE_ID
                                FROM CORE.MAPPING_CANDIDATE C
@@ -135,11 +131,6 @@ def _approve_mapping(db: Db, run_id: str):
     """Decide every open mapping pair with its best candidate, then approve the mapping."""
     from app import main as m
 
-    if isinstance(db, Db):
-        try:
-            m._apply_default_ai_mapping(run_id, db)
-        except Exception:
-            pass
     candidates = db.query("""SELECT C.CANDIDATE_ID, C.SOURCE_COLUMN_ID, C.TARGET_COLUMN_ID, C.RANK, C.FINAL_SCORE,
                                     C.RECOMMENDATION, COALESCE(C.TARGET_TABLE_ID, T.TARGET_TABLE_ID) AS TARGET_TABLE_ID
                                FROM CORE.MAPPING_CANDIDATE C

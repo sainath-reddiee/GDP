@@ -77,6 +77,35 @@ def generate_sttm(session, run_id: str) -> Dict[str, Any]:
                     "source_database": d["SOURCE_DATABASE"], "source_schema": d["SOURCE_SCHEMA"],
                     "source_system": source_name,
                 }
+            uid_targets = [c for c in columns if str(c["column_name"]).upper() == "SOURCE_UNIQUE_ID" or c.get("is_business_key")]
+            if run.get("PARENT_RUN_ID") and uid_targets and not any(c["target_column_id"] in decisions for c in uid_targets):
+                try:
+                    parent_key = rows(session, """
+                        SELECT D.DECISION_ID, D.TRANSFORMATION, D.BUSINESS_JUSTIFICATION, D.REVIEWER,
+                               C.FINAL_SCORE, L.COLUMN_NAME AS SOURCE_COLUMN, L.DATA_TYPE AS SOURCE_DATATYPE,
+                               T.SOURCE_TABLE, T.SOURCE_DATABASE, T.SOURCE_SCHEMA
+                          FROM CORE.MAPPING_DECISION D
+                          JOIN CORE.TARGET_COLUMN_REGISTRY TC ON TC.TARGET_COLUMN_ID = D.TARGET_COLUMN_ID
+                          JOIN CORE.LANDING_COLUMN_REGISTRY L ON L.LANDING_COLUMN_ID = D.SOURCE_COLUMN_ID
+                          JOIN CORE.LANDING_TABLE_REGISTRY T ON T.LANDING_ID = L.LANDING_ID
+                          LEFT JOIN CORE.MAPPING_CANDIDATE C ON C.CANDIDATE_ID = D.CANDIDATE_ID
+                         WHERE D.RUN_ID = ? AND D.IS_CURRENT AND D.DECISION <> 'REJECTED'
+                           AND (UPPER(TC.COLUMN_NAME) = 'SOURCE_UNIQUE_ID' OR TC.IS_BUSINESS_KEY)
+                         ORDER BY IFF(UPPER(TC.COLUMN_NAME) = 'SOURCE_UNIQUE_ID', 0, 1), D.VERSION DESC LIMIT 1
+                    """, [run["PARENT_RUN_ID"]])
+                    if parent_key:
+                        pk = parent_key[0]
+                        target_uid = next((c for c in uid_targets if str(c["column_name"]).upper() == "SOURCE_UNIQUE_ID"), uid_targets[0])
+                        decisions[target_uid["target_column_id"]] = {
+                            "decision_id": pk["DECISION_ID"], "transformation": pk["TRANSFORMATION"],
+                            "business_justification": pk["BUSINESS_JUSTIFICATION"] or "Inherited hub business key",
+                            "reviewer": pk["REVIEWER"], "confidence": pk["FINAL_SCORE"],
+                            "source_column": pk["SOURCE_COLUMN"], "source_datatype": pk["SOURCE_DATATYPE"],
+                            "source_table": pk["SOURCE_TABLE"], "source_database": pk["SOURCE_DATABASE"],
+                            "source_schema": pk["SOURCE_SCHEMA"], "source_system": source_name,
+                        }
+                except Exception:
+                    pass
             contract = assemble(
                 {"grain": target["GRAIN"], "scd_type": target["SCD_TYPE"], "business_keys": variant(target["BUSINESS_KEYS"]),
                  "target_database": target["TARGET_DATABASE"], "target_schema": target["TARGET_SCHEMA"],

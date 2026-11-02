@@ -71,10 +71,32 @@ def test_spoke_resolves_hub_fk_and_contract_casts():
 
 
 def test_minimum_mapping_is_enforced():
+    # Partial-attribute sources on COMPANY_CORE do not fail when pack minimum_mapping is empty
+    out = generate(inputs("COMPANY_CORE", [l for l in core_lines() if l["target_column"] != "COMPANY_NAME"]))
+    assert any(k.endswith("mta_company_core.sql") for k in out["files"])
+    required = [
+        "`source_unique_id` (often compound, e.g., `Name1 || '||' || Country`)",
+        "`company_name`",
+        "One of: `duns_number`, `legal_entity_name`, `trade_name`, or `alias_name` (for HKEY uniqueness)",
+    ]
     with pytest.raises(ValueError, match="MINIMUM_MAPPING.*company_name"):
-        generate(inputs("COMPANY_CORE", [l for l in core_lines() if l["target_column"] != "COMPANY_NAME"]))
-    required = TARGETS["COMPANY_CORE"]["model_spec"]["minimum_mapping"]
+        spec_in = inputs("COMPANY_CORE", [l for l in core_lines() if l["target_column"] != "COMPANY_NAME"])
+        spec_in["model_spec"] = {**spec_in["model_spec"], "minimum_mapping": required}
+        generate(spec_in)
     assert missing_minimum_mapping(required, ["source_unique_id", "company_name", "alias_name"]) == []
     assert missing_minimum_mapping(required, ["source_unique_id", "company_name"]) == [
         "duns_number or legal_entity_name or trade_name or alias_name"]
     assert contract_cast("try_to_number(o.col)", "account_number") == "try_to_number(o.account_number)"
+
+
+def test_spoke_without_explicit_source_unique_id_infers_key_from_driving_table():
+    lines = [
+        line("SOURCE_ADDRESS_LINE_1", "TEXT", "ADDRESS1"),
+        line("SOURCE_CITY", "TEXT", "CITY"),
+    ]
+    spec_in = inputs("COMPANY_ADDRESS", lines)
+    spec_in["key_candidates"] = {"PS_CUSTOMER": []}
+    out = generate(spec_in)
+    model = next(v for k, v in out["files"].items() if k.endswith("mta_company_address.sql"))
+    assert "upper(trim(o.CUST_ID)) as source_unique_id" in model
+

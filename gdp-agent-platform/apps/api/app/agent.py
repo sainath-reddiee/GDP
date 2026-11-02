@@ -112,13 +112,15 @@ def invoke_supervisor_stage(
     fallback_fn: Callable[[], Any],
     expected_states: tuple[str, ...] = (),
 ) -> Any:
-    """Consult DATA_ENGINEERING_SUPERVISOR for a workflow stage, then execute the stage procedure once."""
-    prompt = (
-        f"For workflow run {run_id}, call get_workflow_state with RUN_ID='{run_id}' and load the required stage skill(s) "
-        f"for {stage_tool}, then give one short sentence of supervisory guidance. Do not call {stage_tool} directly "
-        f"because the platform will execute the stage procedure next."
-    )
-    agent_reply = run_supervisor(db, run_id, prompt)
+    """Execute the stage procedure directly; only run synchronous pre-stage supervisor narration when explicitly enabled."""
+    agent_reply = None
+    if os.environ.get("AIP_SUPERVISOR_PRE_STAGE") == "1":
+        prompt = (
+            f"For workflow run {run_id}, call get_workflow_state with RUN_ID='{run_id}' and load the required stage skill(s) "
+            f"for {stage_tool}, then give one short sentence of supervisory guidance. Do not call {stage_tool} directly "
+            f"because the platform will execute the stage procedure next."
+        )
+        agent_reply = run_supervisor(db, run_id, prompt)
     res = fallback_fn()
     if isinstance(res, dict) and agent_reply:
         return {**res, "agent": AGENT_NAME, "supervisor_note": agent_reply[:1000]}

@@ -75,12 +75,14 @@ def pack_rows(pack: Dict[str, Any], database: str, live: Optional[LiveColumns] =
         cols, report = merge_columns(table.get("columns") or [], live.get((table["schema"], table["table"])))
         if not is_gdp:
             drift.append({"domain": name, "table": table["table"], "columns": len(cols), **report})
+        raw_spec = table.get("model_spec")
+        clean_spec = {k: v for k, v in raw_spec.items() if k != "minimum_mapping"} if isinstance(raw_spec, dict) else raw_spec
         tables.append((
             tid, did, target_db, table["schema"], table["table"], table.get("table_type"), table.get("grain"),
             # A target with no live silver table and no contract columns stays as knowledge only: mapping
             # cannot use it, so it is registered inactive until the silver table exists.
             table.get("business_keys") or [], str(table.get("scd_type") or "1"), table.get("description"), 1,
-            bool(cols), table.get("model_spec"),
+            bool(cols), clean_spec,
         ))
         for n, col in enumerate(cols, start=1):
             cid = (_stable_id("col", table["table"], col["name"]) if is_gdp

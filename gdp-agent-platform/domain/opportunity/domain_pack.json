@@ -242,11 +242,7 @@
             "condition": "upper(trim(o.region)) = upper(trim(gr.global_region_name))"
           }
         ],
-        "minimum_mapping": [
-          "`source_unique_id`",
-          "`opportunity_name`",
-          "`stage_name` (drives `ref_opportunity_status`, `ref_opportunity_segment`)"
-        ],
+        "minimum_mapping": [],
         "casts": [
           {
             "target_column": "SQFT_SIZE",

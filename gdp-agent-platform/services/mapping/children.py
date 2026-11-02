@@ -42,12 +42,49 @@ def children(session, run_id: str) -> List[Dict[str, Any]]:
                              WHERE PARENT_RUN_ID = ? AND DELETED_AT IS NULL ORDER BY CREATED_AT""", [run_id])
 
 
+def _active_tables(session, parent_id: str, tables: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Keep the hub (or first table) plus any target table that has at least one non-key column mapped.
+    Spokes with zero mapped business attributes are marked INCLUDED = FALSE in CORE.RUN_TARGET."""
+    try:
+        decided = rows(session, """
+            SELECT COALESCE(D.TARGET_TABLE_ID, T.TARGET_TABLE_ID) AS TARGET_TABLE_ID,
+                   UPPER(T.COLUMN_NAME) AS COLUMN_NAME,
+                   COALESCE(T.IS_BUSINESS_KEY, FALSE) AS IS_BUSINESS_KEY
+              FROM CORE.MAPPING_DECISION D
+              JOIN CORE.TARGET_COLUMN_REGISTRY T ON T.TARGET_COLUMN_ID = D.TARGET_COLUMN_ID
+             WHERE D.RUN_ID = ? AND D.IS_CURRENT AND D.DECISION <> 'REJECTED' AND D.TARGET_COLUMN_ID IS NOT NULL
+        """, [parent_id])
+    except Exception:
+        return tables
+    if not decided:
+        return tables
+    with_attrs = {
+        r["TARGET_TABLE_ID"] for r in decided
+        if r.get("TARGET_TABLE_ID")
+        and not r.get("IS_BUSINESS_KEY")
+        and str(r.get("COLUMN_NAME") or "").upper() != "SOURCE_UNIQUE_ID"
+    }
+    keep_ids = {tables[0]["TARGET_TABLE_ID"]} | with_attrs
+    kept = [t for t in tables if t["TARGET_TABLE_ID"] in keep_ids or str(t.get("ROLE") or "").upper() == "HUB"]
+    for t in tables:
+        if t not in kept and t.get("TARGET_TABLE_ID"):
+            try:
+                session.sql(
+                    "UPDATE CORE.RUN_TARGET SET INCLUDED = FALSE, EXCLUDED_REASON = 'no source columns mapped to this table' "
+                    "WHERE RUN_ID = ? AND TARGET_TABLE_ID = ? AND IS_CURRENT",
+                    params=[parent_id, t["TARGET_TABLE_ID"]],
+                ).collect()
+            except Exception:
+                pass
+    return kept
+
+
 def fan_out(session, parent: Dict[str, Any], state_stage: str, state_status: str, graph_version: str) -> Dict[str, Any]:
     """One table run per included target table of an approved multi-target parent (see the module notes). Returns
     {"created": [...], "refreshed": [...], "kept": [...]} with each child's run id and entity."""
-    tables = table_runs_needed(session, parent["RUN_ID"])
+    tables = _active_tables(session, parent["RUN_ID"], table_runs_needed(session, parent["RUN_ID"]))
     out: Dict[str, List[Dict[str, Any]]] = {"created": [], "refreshed": [], "kept": []}
-    if not tables:
+    if len(tables) <= 1:
         return out
     existing = {str(c["MODEL_ENTITY"] or "").upper(): c for c in children(session, parent["RUN_ID"])}
     for t in tables:
